@@ -187,12 +187,15 @@ class ArchiveSoundingFetcher(QObject):
 
     def _do_fetch_nssl(self, t: datetime) -> None:
         """Fetch all NSSL radiosonde soundings from the same UTC day as t,
-        up to and including t. Falls back to a CLAMPS TROPoe thermodynamic
-        retrieval for the day if no radiosonde launches are found -- a
+        up to and including t. Tries the live API's rolling sonde index
+        first, then the same launch files discovered directly from
+        THREDDS (permanent, verified per-date coverage rather than the
+        live index's undocumented historical depth), then falls back to
+        a CLAMPS TROPoe thermodynamic retrieval for the day -- a
         genuinely different measurement technique (remote-sensing
         retrieval vs. in-situ launch, see SoundingSet.is_clamps_tropoe),
-        not a substitute, but a reasonable fallback when the preferred
-        source has nothing for this date."""
+        not a substitute, but a reasonable fallback when no launch is
+        found by either path."""
         try:
             from data.fetchers.clamps_sounding_fetcher import (
                 _api_sonde_entries,
@@ -225,6 +228,14 @@ class ArchiveSoundingFetcher(QObject):
                 sset = _soundings_to_set(soundings, t)
                 self.sounding_ready.emit(sset)
                 return
+
+            from archive.fetchers.clamps_sonde_archive_fetcher import fetch_clamps_sonde_soundings
+            thredds_sset = fetch_clamps_sonde_soundings(t)
+            if thredds_sset is not None:
+                thredds_sset.soundings = [s for s in thredds_sset.soundings if s.valid_time <= t]
+                if thredds_sset.soundings:
+                    self.sounding_ready.emit(thredds_sset)
+                    return
 
             from archive.fetchers.clamps_tropoe_archive_fetcher import fetch_clamps_tropoe_soundings
             tropoe_sset = fetch_clamps_tropoe_soundings(t)

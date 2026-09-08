@@ -402,6 +402,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_mqtt.scan_sectors_cleared.connect(self._clear_archive_scan_sectors)
         self._archive_vehicle_obs = None
         self._archive_vehicle_obs_started = False
+        self._archive_vehicle_obs_from_catalog = False
+        self._archive_vehicle_obs_roster_size = 0
 
         # hazard fetcher.
         self._archive_hazard = ArchiveHazardFetcher(
@@ -551,9 +553,19 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_vehicle_obs_started = True
 
         vehicles = self._archive_mqtt.vehicle_metadata()
+        used_catalog_roster = False
         if not vehicles:
-            self._archive_controls.set_obs_status("OBS: MQTT fallback")
-            return
+            # No recorded MQTT history for this date (expected for dates
+            # STORM wasn't deployed/connected for -- confirmed common for
+            # older campaigns). Fall back to probing the full known FOFS
+            # platform roster directly; ArchiveVehicleObsFetcher already
+            # drops platforms with no file for this day, so this is safe
+            # even though not every platform was active on every date.
+            from archive.vehicle_aliases import KNOWN_FOFS_PLATFORMS
+            vehicles = {platform: None for platform in KNOWN_FOFS_PLATFORMS}
+            used_catalog_roster = True
+        self._archive_vehicle_obs_from_catalog = used_catalog_roster
+        self._archive_vehicle_obs_roster_size = len(vehicles)
 
         from archive.fetchers.vehicle_obs_archive_fetcher import ArchiveVehicleObsFetcher
 
@@ -578,16 +590,22 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_vehicle_obs.load(vehicles)
 
     def _on_archive_vehicle_obs_loaded(self, vehicle_ids: set[str]) -> None:
-        total = len(self._archive_mqtt.vehicle_metadata())
+        total = self._archive_vehicle_obs_roster_size
         if not vehicle_ids:
-            self._archive_controls.set_obs_status("OBS: MQTT fallback")
+            status = (
+                "OBS: no catalog data for this date"
+                if self._archive_vehicle_obs_from_catalog
+                else "OBS: MQTT fallback"
+            )
+            self._archive_controls.set_obs_status(status)
             return
 
         self._archive_controls.set_precision_mode(True)
+        source_label = "catalog" if self._archive_vehicle_obs_from_catalog else "1-second"
         if len(vehicle_ids) == total:
-            status = f"OBS: 1-second ({len(vehicle_ids)})"
+            status = f"OBS: {source_label} ({len(vehicle_ids)})"
         else:
-            status = f"OBS: partial {len(vehicle_ids)}/{total}"
+            status = f"OBS: {source_label} partial {len(vehicle_ids)}/{total}"
         self._archive_controls.set_obs_status(status, active=True)
         self._archive_vehicle_obs.on_time_changed(self._time_ctrl.current_time)
         self._layout_overlays()

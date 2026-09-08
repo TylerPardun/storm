@@ -42,6 +42,36 @@ def test_parse_vehicle_csv_maps_observation_fields():
     assert observations[0].pressure_mb == 977.29
 
 
+def test_parse_vehicle_csv_accepts_mmddyy_when_matching_expected_date():
+    # Some FOFS vehicle files log gps_date as MMDDYY instead of the usual
+    # DDMMYY (observed for a TORUS 2019 probe on 2019-05-28: "052819").
+    # Interpreted as DDMMYY that's an invalid month (28); the row should
+    # be recovered by trying MMDDYY once an expected date is supplied.
+    csv_text = (
+        "sfc_wspd,sfc_wdir,t_fast,dewpoint,pressure,gps_date,gps_time,lat,lon\n"
+        "3.01,173.09,14.68,,895.06,052819,154739,39.3647,-101.043\n"
+    )
+    observations = parse_vehicle_csv(csv_text, "probe1", expected_date="20190528")
+
+    assert len(observations) == 1
+    assert observations[0].timestamp == datetime(2019, 5, 28, 15, 47, 39, tzinfo=timezone.utc)
+
+
+def test_parse_vehicle_csv_rejects_rows_that_dont_match_expected_date():
+    # A daily file's name doesn't guarantee its logged rows are actually
+    # from that day (observed for a LIFT 2024 probe file named for
+    # 2024-04-27 whose gps_date values were actually in February 2024).
+    # With an expected date, a row that parses cleanly but lands on a
+    # different day must be dropped rather than silently kept.
+    csv_text = (
+        "sfc_wspd,sfc_wdir,t_fast,dewpoint,pressure,gps_date,gps_time,lat,lon\n"
+        "0.59,99.3,24.15,19.95,967.97,020724,143848,35.1814,-97.4388\n"
+    )
+    observations = parse_vehicle_csv(csv_text, "probe1", expected_date="20240427")
+
+    assert observations == []
+
+
 def test_fetcher_looks_up_and_emits_latest_observation():
     fetcher = ArchiveVehicleObsFetcher(_utc(0))
     observations = parse_vehicle_csv(_CSV, "hailcam")

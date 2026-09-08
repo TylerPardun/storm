@@ -51,19 +51,51 @@ def _float_or_none(value: str | None) -> float | None:
         return None
 
 
+def _parse_gps_timestamp(
+    date_field: str,
+    time_field: str,
+    expected_date: str | None,
+) -> datetime | None:
+    """Parse a FOFS gps_date/gps_time pair, tolerating the DDMMYY/MMDDYY
+    format inconsistency seen across vehicles and campaign eras (e.g. one
+    vehicle's file uses DDMMYY while another vehicle's file for the same
+    day uses MMDDYY). When `expected_date` (YYYYMMDD) is given, only a
+    parse that actually lands on that day is accepted — a format that
+    parses without error but produces a different day (seen in real FOFS
+    files, where a daily file's name and its logged dates disagreed) is
+    rejected rather than silently kept.
+    """
+    stamp = f"{date_field.strip()}{time_field.strip().zfill(6)}"
+    for fmt in ("%d%m%y%H%M%S", "%m%d%y%H%M%S"):
+        try:
+            candidate = datetime.strptime(stamp, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if expected_date is None:
+            return candidate
+        if candidate.strftime("%Y%m%d") == expected_date:
+            return candidate
+    return None
+
+
 def parse_vehicle_csv(
     text: str,
     vehicle_id: str,
     icon_type: str | None = None,
+    expected_date: str | None = None,
 ) -> list[Observation]:
-    """Parse a FOFS daily CSV file into timestamp-sorted observations."""
+    """Parse a FOFS daily CSV file into timestamp-sorted observations.
+
+    `expected_date` (YYYYMMDD) is optional for backward compatibility, but
+    should be passed whenever the caller knows which day it requested —
+    see `_parse_gps_timestamp` for why.
+    """
     observations: list[Observation] = []
     for row in csv.DictReader(io.StringIO(text)):
         try:
-            timestamp = datetime.strptime(
-                f"{row['gps_date'].strip()}{row['gps_time'].strip().zfill(6)}",
-                "%d%m%y%H%M%S",
-            ).replace(tzinfo=timezone.utc)
+            timestamp = _parse_gps_timestamp(row["gps_date"], row["gps_time"], expected_date)
+            if timestamp is None:
+                continue
             lat = float(row["lat"])
             lon = float(row["lon"])
         except (KeyError, TypeError, ValueError):
@@ -209,7 +241,7 @@ class ArchiveVehicleObsFetcher(QObject):
             if exc.code in (404, 410):
                 return []
             raise
-        observations = parse_vehicle_csv(text, vehicle_id, icon_type)
+        observations = parse_vehicle_csv(text, vehicle_id, icon_type, expected_date=self._date_str)
         log.info(
             "One-second archive: loaded %d observations for %s from %s",
             len(observations),

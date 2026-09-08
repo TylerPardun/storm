@@ -15,7 +15,8 @@ from archive.fetchers.clamps_surface_archive_fetcher import (
 
 def _write_clamps_mwr_netcdf(path, base_time, time_offset, sfc_temp, sfc_rh, sfc_pres,
                               sfc_wspd, sfc_wdir, lat=29.4, lon=-95.0):
-    """Build a minimal file matching the real FRDD/CLAMPS MWR ingested schema."""
+    """Build a minimal file matching the real FRDD/CLAMPS MWR ingested schema
+    (scalar per-file lat/lon -- a stationary trailer for that file)."""
     data_vars = {
         "base_time": ((), np.int64(base_time)),
         "time_offset": ("time", np.array(time_offset, dtype="float64")),
@@ -26,6 +27,25 @@ def _write_clamps_mwr_netcdf(path, base_time, time_offset, sfc_temp, sfc_rh, sfc
         "sfc_wdir": ("time", np.array(sfc_wdir, dtype="float32")),
         "lat": ((), np.float32(lat)),
         "lon": ((), np.float32(lon)),
+    }
+    xr.Dataset(data_vars).to_netcdf(path, engine="h5netcdf")
+
+
+def _write_clamps_met_tower_netcdf(path, base_time, time_offset, sfc_temp, sfc_rh, sfc_pres,
+                                    sfc_wspd, sfc_wdir, lat, lon):
+    """Build a minimal file matching the real met tower schema: per-record
+    lat/lon arrays, confirmed varying within a single file on a real
+    sample rather than a fixed per-file scalar."""
+    data_vars = {
+        "base_time": ((), np.int64(base_time)),
+        "time_offset": ("time", np.array(time_offset, dtype="float64")),
+        "sfc_temp": ("time", np.array(sfc_temp, dtype="float32")),
+        "sfc_rh": ("time", np.array(sfc_rh, dtype="float32")),
+        "sfc_pres": ("time", np.array(sfc_pres, dtype="float32")),
+        "sfc_wspd": ("time", np.array(sfc_wspd, dtype="float32")),
+        "sfc_wdir": ("time", np.array(sfc_wdir, dtype="float32")),
+        "lat": ("time", np.array(lat, dtype="float32")),
+        "lon": ("time", np.array(lon, dtype="float32")),
     }
     xr.Dataset(data_vars).to_netcdf(path, engine="h5netcdf")
 
@@ -94,3 +114,87 @@ def test_parse_clamps_surface_netcdf_drops_rows_missing_temperature(tmp_path):
 def test_known_clamps_surface_sources_cover_both_clamps_trailers_only():
     platform_dirs = {s.platform_dir for s in KNOWN_CLAMPS_SURFACE_SOURCES}
     assert platform_dirs == {"clamps/clamps1", "clamps/clamps2"}
+
+
+def test_known_clamps_surface_sources_prefer_met_tower_over_mwr_for_clamps2():
+    clamps2_sources = [s for s in KNOWN_CLAMPS_SURFACE_SOURCES if s.platform_dir == "clamps/clamps2"]
+    assert [s.kind for s in clamps2_sources] == ["met_tower", "mwr"]
+
+
+def test_parse_clamps_surface_netcdf_filters_fill_sentinel(tmp_path):
+    # Confirmed on a real met tower file: missing values are a repeated
+    # -999.0 with no declared _FillValue attribute, not NaN.
+    base_time = int(datetime(2016, 5, 26, tzinfo=timezone.utc).timestamp())
+    path = tmp_path / "clampsmetC2.a1.20160526.000003.cdf"
+    _write_clamps_met_tower_netcdf(
+        path,
+        base_time=base_time,
+        time_offset=[0.0, 600.0],
+        sfc_temp=[20.0, -999.0],
+        sfc_rh=[-999.0, 60.0],
+        sfc_pres=[960.0, -999.0],
+        sfc_wspd=[-999.0, 4.0],
+        sfc_wdir=[-999.0, 180.0],
+        lat=[36.5, 36.6],
+        lon=[-97.4, -97.3],
+    )
+
+    observations = parse_clamps_surface_netcdf(path.read_bytes(), "CLAMPS2")
+
+    # second record has sfc_temp == -999.0 -> dropped entirely (mirrors
+    # the "missing temperature" gate used for the MWR source)
+    assert len(observations) == 1
+    o = observations[0]
+    assert o.temperature_c == 20.0
+    assert o.dewpoint_c is None       # sfc_rh was the fill sentinel
+    assert o.wind_speed_ms is None    # sfc_wspd was the fill sentinel
+    assert o.pressure_mb == 960.0
+
+
+def test_parse_clamps_surface_netcdf_uses_per_record_location(tmp_path):
+    base_time = int(datetime(2016, 5, 26, tzinfo=timezone.utc).timestamp())
+    path = tmp_path / "clampsmetC2.a1.20160526.000003.cdf"
+    _write_clamps_met_tower_netcdf(
+        path,
+        base_time=base_time,
+        time_offset=[0.0, 600.0],
+        sfc_temp=[20.0, 21.0],
+        sfc_rh=[60.0, 60.0],
+        sfc_pres=[960.0, 960.0],
+        sfc_wspd=[3.0, 3.0],
+        sfc_wdir=[180.0, 190.0],
+        lat=[36.5, 36.6],
+        lon=[-97.4, -97.3],
+    )
+
+    observations = parse_clamps_surface_netcdf(path.read_bytes(), "CLAMPS2")
+
+    assert [o.lat for o in observations] == pytest.approx([36.5, 36.6], abs=1e-4)
+    assert [o.lon for o in observations] == pytest.approx([-97.4, -97.3], abs=1e-4)
+
+
+def test_parse_clamps_surface_netcdf_suppresses_wind_direction_when_not_trusted(tmp_path):
+    # The met tower's own file attributes say heading correction "has not
+    # been applied" to sfc_wdir -- must not be trusted without it.
+    base_time = int(datetime(2016, 5, 26, tzinfo=timezone.utc).timestamp())
+    path = tmp_path / "clampsmetC2.a1.20160526.000003.cdf"
+    _write_clamps_met_tower_netcdf(
+        path,
+        base_time=base_time,
+        time_offset=[0.0],
+        sfc_temp=[20.0],
+        sfc_rh=[60.0],
+        sfc_pres=[960.0],
+        sfc_wspd=[3.0],
+        sfc_wdir=[180.0],
+        lat=[36.5],
+        lon=[-97.4],
+    )
+
+    trusted = parse_clamps_surface_netcdf(path.read_bytes(), "CLAMPS2", trust_wind_direction=True)
+    untrusted = parse_clamps_surface_netcdf(path.read_bytes(), "CLAMPS2", trust_wind_direction=False)
+
+    assert trusted[0].wind_dir_deg == 180.0
+    assert untrusted[0].wind_dir_deg is None
+    # wind speed doesn't depend on heading and stays populated either way
+    assert untrusted[0].wind_speed_ms == 3.0

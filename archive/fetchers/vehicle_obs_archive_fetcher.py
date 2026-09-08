@@ -8,9 +8,10 @@ import io
 import logging
 import ssl
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -35,6 +36,33 @@ def _ssl_context() -> ssl.SSLContext:
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     return context
+
+
+# data.nssl.noaa.gov sits behind a reverse proxy/WAF (duplicate security
+# headers, a session cookie, and a 410 for requests without a plausible
+# User-Agent -- confirmed by hand; see planning/source-and-pilot-register.md
+# "Source access findings"). Under a burst of requests it has been observed
+# to soft-throttle with connection timeouts rather than a clean 429, then
+# recover on its own within minutes once traffic quiets down. 404/410 are
+# real answers (no data / blocked) and must never be retried -- only
+# timeouts, connection errors, and 5xx/429 origin responses are.
+_RETRYABLE_HTTP_CODES = frozenset({429, 500, 502, 503, 504})
+_RETRY_BACKOFF_S = (1.5, 4.0)  # sleep before each retry attempt
+
+
+def _urlopen_with_retry(request: Request, *, timeout: int):
+    attempts = len(_RETRY_BACKOFF_S) + 1
+    for attempt in range(attempts):
+        try:
+            return urlopen(request, timeout=timeout, context=_ssl_context())
+        except HTTPError as exc:
+            if exc.code not in _RETRYABLE_HTTP_CODES or attempt == attempts - 1:
+                raise
+        except URLError as exc:
+            if attempt == attempts - 1:
+                raise
+        time.sleep(_RETRY_BACKOFF_S[attempt])
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _daily_url(vehicle_id: str, date_str: str) -> str:
@@ -319,7 +347,7 @@ class ArchiveVehicleObsFetcher(QObject):
         url = _processed_netcdf_url(vehicle_id, self._date_str)
         request = Request(url, headers={"User-Agent": _USER_AGENT})
         try:
-            with urlopen(request, timeout=30, context=_ssl_context()) as response:
+            with _urlopen_with_retry(request, timeout=30) as response:
                 data = response.read()
         except HTTPError as exc:
             if exc.code in (404, 410):
@@ -350,7 +378,7 @@ class ArchiveVehicleObsFetcher(QObject):
         url = _daily_url(vehicle_id, self._date_str)
         request = Request(url, headers={"User-Agent": _USER_AGENT})
         try:
-            with urlopen(request, timeout=30, context=_ssl_context()) as response:
+            with _urlopen_with_retry(request, timeout=30) as response:
                 text = response.read().decode("utf-8", errors="replace")
         except HTTPError as exc:
             if exc.code in (404, 410):

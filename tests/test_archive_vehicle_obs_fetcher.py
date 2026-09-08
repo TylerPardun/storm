@@ -1,12 +1,16 @@
 """Tests for one-second FOFS archive observations."""
 
 from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
 
 import numpy as np
+import pytest
 
+from archive.fetchers import vehicle_obs_archive_fetcher as vof
 from archive.fetchers.vehicle_obs_archive_fetcher import (
     ArchiveVehicleObsFetcher,
     _daily_url,
+    _urlopen_with_retry,
     parse_vehicle_csv,
     parse_vehicle_netcdf,
 )
@@ -44,6 +48,59 @@ def test_daily_url_uses_vehicle_alias():
     assert _daily_url("p1", "20260416").endswith(
         "/probe1/raw/20260416.txt"
     )
+
+
+def test_urlopen_with_retry_retries_transient_errors_then_succeeds(monkeypatch):
+    # data.nssl.noaa.gov's WAF has been observed to soft-throttle bursts of
+    # requests with connection timeouts that clear up within seconds -- a
+    # timeout on the first attempt should not be treated as "no data."
+    sleeps: list[float] = []
+    monkeypatch.setattr(vof.time, "sleep", lambda s: sleeps.append(s))
+
+    calls = {"n": 0}
+
+    def fake_urlopen(request, timeout, context):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise URLError("timed out")
+        return "response"
+
+    monkeypatch.setattr(vof, "urlopen", fake_urlopen)
+
+    result = _urlopen_with_retry(vof.Request("https://example.invalid"), timeout=30)
+
+    assert result == "response"
+    assert calls["n"] == 3
+    assert len(sleeps) == 2
+
+
+def test_urlopen_with_retry_does_not_retry_404():
+    def fake_urlopen(request, timeout, context):
+        raise HTTPError("https://example.invalid", 404, "Not Found", {}, None)
+
+    original = vof.urlopen
+    vof.urlopen = fake_urlopen
+    try:
+        with pytest.raises(HTTPError) as exc_info:
+            _urlopen_with_retry(vof.Request("https://example.invalid"), timeout=30)
+        assert exc_info.value.code == 404
+    finally:
+        vof.urlopen = original
+
+
+def test_urlopen_with_retry_gives_up_after_exhausting_retries(monkeypatch):
+    monkeypatch.setattr(vof.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def fake_urlopen(request, timeout, context):
+        calls["n"] += 1
+        raise URLError("timed out")
+
+    monkeypatch.setattr(vof, "urlopen", fake_urlopen)
+
+    with pytest.raises(URLError):
+        _urlopen_with_retry(vof.Request("https://example.invalid"), timeout=30)
+    assert calls["n"] == len(vof._RETRY_BACKOFF_S) + 1
 
 
 def test_parse_vehicle_csv_maps_observation_fields():

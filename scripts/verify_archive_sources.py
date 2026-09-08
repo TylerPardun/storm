@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,8 @@ from archive.fetchers.vehicle_obs_archive_fetcher import (  # noqa: E402
 from archive.fetchers.mqtt_reader import _fetch_text as _fetch_annotations_text  # noqa: E402
 from archive.vehicle_aliases import KNOWN_FOFS_PLATFORMS as FOFS_PLATFORMS  # noqa: E402
 from data.fetchers.clamps_sounding_fetcher import _api_sonde_entries  # noqa: E402
+
+_REQUEST_PACING_S = 0.3
 
 ANNOTATION_TOPICS = ("vehicles", "scan_sectors", "cones", "drawings", "annotations")
 
@@ -136,6 +139,15 @@ def main() -> None:
     # synchronously in a foreground shell, but hang indefinitely (no
     # exception, no timeout firing) when run from a background/detached
     # shell or from worker threads. Run this script in the foreground.
+    #
+    # A ~150-request unpaced sweep of this script in one session was
+    # followed by data.nssl.noaa.gov connection timeouts (not clean error
+    # responses) for several minutes, consistent with the WAF in front of
+    # it soft-throttling a bursty client rather than a real outage -- see
+    # planning/source-and-pilot-register.md. _REQUEST_PACING_S plus the
+    # fetcher's own retry/backoff (vehicle_obs_archive_fetcher.py) make
+    # this script, and the app, less likely to trigger or get tripped up
+    # by that.
     candidates = CANDIDATES
     if args.campaign:
         wanted = {c.strip().upper() for c in args.campaign.split(",")}
@@ -151,12 +163,14 @@ def main() -> None:
             rows = r.get("rows")
             detail = f"rows={rows}" if rows is not None else r["status"]
             print(f"  fofs/{platform}: {r['status']} ({detail})")
+            time.sleep(_REQUEST_PACING_S)
 
         annot_results = {}
         for topic in ANNOTATION_TOPICS:
             r = _probe_annotation_topic(topic, cd.date)
             annot_results[topic] = r
             print(f"  annotations/{topic}: {r['status']}")
+            time.sleep(_REQUEST_PACING_S)
 
         clamps_on_date = clamps.get("by_date", {}).get(cd.date, [])
         print(f"  clamps: {len(clamps_on_date)} sonde entries on this date")

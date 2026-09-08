@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Probe real NSSL/NOAA archive sources for candidate campaign dates.
 
-Reuses STORM's actual archive-fetcher code (URL construction, CSV parsing,
-SSL context, headers) instead of reimplementing HTTP logic, so what this
-reports is exactly what the running app would see for the same request.
+Reuses STORM's actual archive-fetcher code (ArchiveVehicleObsFetcher's
+processed-netCDF/raw-CSV fetch path, annotation JSONL fetch, CLAMPS sonde
+index) instead of reimplementing HTTP logic, so what this reports is
+exactly what the running app would see for the same request.
 
 Checks, per campaign date:
-  - FOFS mobile-mesonet daily CSVs for the full known platform roster
-    (not just the 7 currently aliased in archive/vehicle_aliases.py)
+  - FOFS mobile-mesonet observations for the full known platform roster
+    (not just the 7 currently aliased in archive/vehicle_aliases.py),
+    via the same processed-netCDF-first/raw-CSV-fallback path the app uses
   - STORM's own recorded MQTT archive (storm.<topic>.<date> JSONL) —
     this is NOT a general NSSL archive, it only has content for dates
     STORM itself was deployed and connected
@@ -20,7 +22,7 @@ Output goes to case_data/evidence/<campaign>-<date>.json (sibling of the
 storm/ checkout, outside git).
 
 Usage:
-    python scripts/verify_archive_sources.py [--out DIR] [--workers N]
+    python scripts/verify_archive_sources.py [--out DIR] [--campaign CODES]
 """
 from __future__ import annotations
 
@@ -30,24 +32,17 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 _STORM_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_STORM_ROOT))
 
 import config  # noqa: E402
 from archive.fetchers.vehicle_obs_archive_fetcher import (  # noqa: E402
-    _daily_url,
-    _ssl_context,
-    _USER_AGENT,
-    parse_vehicle_csv,
+    ArchiveVehicleObsFetcher,
 )
 from archive.fetchers.mqtt_reader import _fetch_text as _fetch_annotations_text  # noqa: E402
 from archive.vehicle_aliases import KNOWN_FOFS_PLATFORMS as FOFS_PLATFORMS  # noqa: E402
 from data.fetchers.clamps_sounding_fetcher import _api_sonde_entries  # noqa: E402
-
-_REQUEST_TIMEOUT_S = 10
 
 ANNOTATION_TOPICS = ("vehicles", "scan_sectors", "cones", "drawings", "annotations")
 
@@ -71,30 +66,22 @@ CANDIDATES = [
 
 
 def _probe_fofs_platform(platform: str, date_str: str) -> dict:
-    url = _daily_url(platform, date_str)
+    """Probe via the real ArchiveVehicleObsFetcher._fetch_vehicle path
+    (processed netCDF first, raw CSV fallback) so this script stays a
+    faithful mirror of what the app actually does, not a separate copy
+    of the fetch logic that can drift out of sync with it."""
+    session_date = datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
+    fetcher = ArchiveVehicleObsFetcher(session_date)
     try:
-        req = Request(url, headers={"User-Agent": _USER_AGENT})
-        with urlopen(req, timeout=_REQUEST_TIMEOUT_S, context=_ssl_context()) as resp:
-            text = resp.read().decode("utf-8", errors="replace")
-    except HTTPError as e:
-        return {"status": f"http_{e.code}", "url": url}
-    except (URLError, TimeoutError) as e:
-        return {"status": f"error:{e}", "url": url}
+        obs = fetcher._fetch_vehicle(platform, None)
     except Exception as e:  # noqa: BLE001 - this is a diagnostic probe
-        return {"status": f"unexpected:{e}", "url": url}
-
-    try:
-        obs = parse_vehicle_csv(text, platform, expected_date=date_str)
-    except Exception as e:  # noqa: BLE001
-        return {"status": "fetched_unparsed", "parse_error": str(e), "bytes": len(text), "url": url}
+        return {"status": f"unexpected:{e}"}
 
     return {
         "status": "ok",
         "rows": len(obs),
         "first_time": obs[0].timestamp.isoformat() if obs else None,
         "last_time": obs[-1].timestamp.isoformat() if obs else None,
-        "bytes": len(text),
-        "url": url,
     }
 
 

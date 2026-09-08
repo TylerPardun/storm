@@ -4,9 +4,10 @@
 from datetime import date, datetime, timezone
 
 from PyQt6.QtCore import QDate, QDateTime, QTime, Qt
-from PyQt6.QtWidgets import QApplication, QListWidgetItem
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QListWidgetItem, QSpinBox, QLineEdit
 
-from ui.launch.dialog import LaunchDialog, _CatalogQueryWorker
+from ui.launch.dialog import LaunchDialog, _CatalogQueryWorker, _YearGridPopup
 
 
 def _dialog():
@@ -249,3 +250,97 @@ def test_on_coverage_failed_reenables_button_and_reports_in_coverage_label_not_s
     assert dlg._browse_coverage_btn.isEnabled() is True
     assert dlg._browse_coverage_lbl.text() == "Query failed: boom"
     assert dlg._browse_status_lbl.text() == "unrelated"  # regression check: each worker's failure goes to its own label
+
+
+# ---------------------------------------------------------------------------
+# Year-grid popup (click the calendar's year field to jump to a year)
+# ---------------------------------------------------------------------------
+
+
+def test_year_grid_popup_shows_a_dozen_years_centered_on_current_and_marks_it_selected():
+    _, dlg = _dialog()
+    popup = _YearGridPopup(2022, parent=dlg)
+
+    assert popup._range_lbl.text() == "2017 – 2028"
+    assert [b.text() for b in popup._buttons] == [str(y) for y in range(2017, 2029)]
+    selected = [b for b in popup._buttons if b.property("selected")]
+    assert [b.text() for b in selected] == ["2022"]
+
+
+def test_year_grid_popup_shift_pages_the_range_by_a_full_grid():
+    _, dlg = _dialog()
+    popup = _YearGridPopup(2022, parent=dlg)
+
+    popup._shift(_YearGridPopup._COUNT)
+    assert popup._range_lbl.text() == "2029 – 2040"
+
+    popup._shift(-_YearGridPopup._COUNT)
+    assert popup._range_lbl.text() == "2017 – 2028"
+
+
+def test_year_grid_popup_pick_emits_the_picked_year_and_closes():
+    _, dlg = _dialog()
+    popup = _YearGridPopup(2022, parent=dlg)
+    picked = []
+    popup.yearPicked.connect(picked.append)
+    popup.show()
+
+    popup._pick(3)  # start_year (2017) + index 3 -> 2020
+
+    assert picked == [2020]
+    assert popup.isVisible() is False
+
+
+def test_calendar_year_field_is_read_only_with_a_click_forwarder_installed():
+    # read-only + NoButtons means no typing and no dead/invisible step
+    # buttons (see _style_calendar_nav_icons) -- a click always opens the
+    # grid instead of placing a cursor or hitting an inert button area.
+    _, dlg = _dialog()
+    dlg._cal_btn.click()  # builds the popup calendar and wires its year field
+
+    spin = dlg._calendar_popup.findChild(QSpinBox, "qt_calendar_yearedit")
+
+    assert spin is not None
+    assert spin.isReadOnly() is True
+    assert spin.buttonSymbols() == QSpinBox.ButtonSymbols.NoButtons
+    assert len(dlg._year_click_filters) >= 1
+
+
+def test_open_year_grid_seeds_the_popup_with_the_spins_current_value():
+    _, dlg = _dialog()
+    dlg._cal_btn.click()
+    spin = dlg._calendar_popup.findChild(QSpinBox, "qt_calendar_yearedit")
+    spin.setValue(2019)
+
+    dlg._open_year_grid(dlg._calendar_popup, spin)
+
+    assert dlg._year_grid_popup is not None
+    assert dlg._year_grid_popup._current_year == 2019
+
+
+def test_on_year_picked_moves_the_calendar_to_that_year_keeping_the_month():
+    _, dlg = _dialog()
+    dlg._cal_btn.click()
+    calendar = dlg._calendar_popup
+    calendar.setCurrentPage(2023, 6)
+
+    dlg._on_year_picked(calendar, 2019)
+
+    assert calendar.yearShown() == 2019
+    assert calendar.monthShown() == 6
+
+
+def test_a_real_click_on_the_year_field_opens_the_grid_end_to_end():
+    # exercises the actual _ClickForwarder/eventFilter wiring with a real
+    # Qt mouse event, rather than calling _open_year_grid directly.
+    _, dlg = _dialog()
+    dlg._cal_btn.click()
+    spin = dlg._calendar_popup.findChild(QSpinBox, "qt_calendar_yearedit")
+    line_edit = spin.findChild(QLineEdit)
+
+    assert dlg._year_grid_popup is None
+    QTest.mouseClick(line_edit, Qt.MouseButton.LeftButton)
+
+    assert dlg._year_grid_popup is not None
+    assert dlg._year_grid_popup.isVisible() is True
+    assert dlg._year_grid_popup._current_year == spin.value()

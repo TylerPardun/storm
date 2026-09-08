@@ -184,12 +184,16 @@ def _list_coptersonde_dates(_unused=None) -> list[date]:
 
 
 def _build_registry() -> list[KnownPlatform]:
+    """display_name deliberately omits the family name (already shown
+    alongside it wherever this is rendered, e.g. "CLAMPS Winds —
+    CLAMPS1-VAD") -- repeating it in both halves just pushed every UI
+    that shows "family — display_name" past a normal dialog's width."""
     platforms: list[KnownPlatform] = []
 
     for vehicle in KNOWN_FOFS_PLATFORMS:
         platforms.append(KnownPlatform(
             platform_id=f"FOFS-{vehicle}",
-            display_name=f"FOFS {vehicle}",
+            display_name=vehicle,
             family="FOFS Mobile Mesonet",
             key=vehicle,
         ))
@@ -197,7 +201,7 @@ def _build_registry() -> list[KnownPlatform]:
     for source in KNOWN_CLAMPS_WIND_SOURCES:
         platforms.append(KnownPlatform(
             platform_id=f"WIND-{source.platform_id}",
-            display_name=f"CLAMPS wind: {source.platform_id}",
+            display_name=source.platform_id,
             family="CLAMPS Winds",
             key=source,
         ))
@@ -205,7 +209,7 @@ def _build_registry() -> list[KnownPlatform]:
     for platform in KNOWN_CLAMPS_TROPOE_PLATFORMS:
         platforms.append(KnownPlatform(
             platform_id=f"TROPOE-{platform.platform_id}",
-            display_name=f"CLAMPS TROPoe: {platform.platform_id}",
+            display_name=platform.platform_id,
             family="CLAMPS TROPoe",
             key=platform,
         ))
@@ -213,21 +217,21 @@ def _build_registry() -> list[KnownPlatform]:
     for source in KNOWN_CLAMPS_SURFACE_SOURCES:
         platforms.append(KnownPlatform(
             platform_id=f"SFC-{source.platform_id}-{source.kind}",
-            display_name=f"CLAMPS surface ({source.kind}): {source.platform_id}",
+            display_name=f"{source.platform_id} ({source.kind})",
             family="CLAMPS Surface",
             key=source,
         ))
 
     platforms.append(KnownPlatform(
         platform_id="SONDE-DLTRUCK1",
-        display_name="CLAMPS mobile sonde (dltruck1)",
+        display_name="dltruck1",
         family="CLAMPS Sondes",
         key=None,
     ))
 
     platforms.append(KnownPlatform(
         platform_id="COPTERSONDE-PERILS",
-        display_name="PERiLS CopterSonde",
+        display_name="CopterSonde",
         family="PERiLS UAS",
         key=None,
     ))

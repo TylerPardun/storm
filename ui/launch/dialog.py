@@ -8,23 +8,23 @@ import threading
 from pathlib import Path
 from datetime import date, datetime, timezone
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QToolButton, QFileDialog, QFrame,
     QApplication, QMessageBox, QSizePolicy, QWidget,
-    QDateTimeEdit, QAbstractButton, QSpinBox, QComboBox, QCheckBox,
+    QDateTimeEdit, QSpinBox, QComboBox, QCheckBox,
     QCalendarWidget, QListWidget, QListWidgetItem,
 )
 from PyQt6.QtCore import (
-    Qt, QSettings, QTimer, QSize, QDate, QDateTime, QPointF, QRectF, QObject, pyqtSignal,
+    Qt, QSettings, QTimer, QSize, QDate, QDateTime, QPointF, QRectF, QObject, QEvent, pyqtSignal,
 )
 from PyQt6.QtGui import QPixmap, QPainter, QIcon, QColor, QPolygonF, QPen
 
 import config as _config
 from ui.launch.icons import combo_down_arrow_qss, _svg_pixmap
 from ui.launch.styles import (
-    _DIALOG_STYLE, _ICON_SELECTED_STYLE, _LOG_BTN_STYLE, _MODE_BTN_SELECTED_STYLE,
-    _MODE_BTN_STYLE, _UPD_AVAILABLE, _UPD_CHECKING, _UPD_CURRENT, _UPD_ERROR,
-    _UPD_SUCCESS, _UPD_WARNING,
+    _BROWSE_ACTION_BTN_STYLE, _DIALOG_STYLE, _ICON_SELECTED_STYLE, _LOG_BTN_STYLE,
+    _MODE_BTN_SELECTED_STYLE, _MODE_BTN_STYLE, _UPD_AVAILABLE, _UPD_CHECKING,
+    _UPD_CURRENT, _UPD_ERROR, _UPD_SUCCESS, _UPD_WARNING, _YEAR_GRID_STYLE,
 )
 from ui.launch.update_dialogs import _CondaUpdateDialog, _LogViewerDialog, UpdateWorker
 
@@ -106,6 +106,108 @@ class _CatalogQueryWorker(QObject):
         self.finished.emit(result)
 
 
+class _ClickForwarder(QObject):
+    """Forwards a left-click on a widget to a callback instead of that
+    widget's default click handling -- used to make the calendar's
+    read-only year field open a year-grid picker on click while its own
+    spin arrows keep stepping the year by one."""
+
+    def __init__(self, on_click, parent=None):
+        super().__init__(parent)
+        self._on_click = on_click
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.MouseButtonPress:
+            self._on_click()
+            return True
+        return False
+
+
+class _YearGridPopup(QWidget):
+    """A small popup grid of years so the calendar's year field can jump
+    straight to a year instead of stepping it one click at a time --
+    the same idea QCalendarWidget already applies to months (a grid you
+    pick from), just for years, since Qt doesn't ship one itself."""
+
+    yearPicked = pyqtSignal(int)
+
+    _COLUMNS = 4
+    _ROWS = 3
+    _COUNT = _COLUMNS * _ROWS
+
+    def __init__(self, current_year: int, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.setObjectName("yearGridPopup")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(_YEAR_GRID_STYLE)
+        self._current_year = current_year
+        self._start_year = current_year - 5
+        self._buttons: list[QPushButton] = []
+        self._build_ui()
+        self._refresh()
+
+    def _build_ui(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.setSpacing(8)
+
+        nav = QHBoxLayout()
+        nav.setSpacing(4)
+        prev_btn = QToolButton()
+        prev_btn.setObjectName("yearNavBtn")
+        prev_btn.setIcon(_triangle_icon([(0.85, 0.1), (0.85, 0.9), (0.15, 0.5)], "#8E97AB"))
+        prev_btn.setIconSize(QSize(9, 9))
+        prev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        prev_btn.setToolTip("Previous years")
+        prev_btn.clicked.connect(lambda: self._shift(-self._COUNT))
+        nav.addWidget(prev_btn)
+
+        self._range_lbl = QLabel()
+        self._range_lbl.setObjectName("yearRangeLbl")
+        self._range_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nav.addWidget(self._range_lbl, 1)
+
+        next_btn = QToolButton()
+        next_btn.setObjectName("yearNavBtn")
+        next_btn.setIcon(_triangle_icon([(0.15, 0.1), (0.15, 0.9), (0.85, 0.5)], "#8E97AB"))
+        next_btn.setIconSize(QSize(9, 9))
+        next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        next_btn.setToolTip("Next years")
+        next_btn.clicked.connect(lambda: self._shift(self._COUNT))
+        nav.addWidget(next_btn)
+        outer.addLayout(nav)
+
+        grid = QGridLayout()
+        grid.setSpacing(5)
+        for i in range(self._COUNT):
+            btn = QPushButton()
+            btn.setObjectName("yearCell")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _checked, idx=i: self._pick(idx))
+            grid.addWidget(btn, i // self._COLUMNS, i % self._COLUMNS)
+            self._buttons.append(btn)
+        outer.addLayout(grid)
+
+    def _shift(self, delta: int):
+        self._start_year += delta
+        self._refresh()
+
+    def _pick(self, idx: int):
+        self.yearPicked.emit(self._start_year + idx)
+        self.hide()
+
+    def _refresh(self):
+        self._range_lbl.setText(f"{self._start_year} – {self._start_year + self._COUNT - 1}")
+        for i, btn in enumerate(self._buttons):
+            year = self._start_year + i
+            btn.setText(str(year))
+            selected = year == self._current_year
+            if btn.property("selected") != selected:
+                btn.setProperty("selected", selected)
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+
+
 class LaunchDialog(QDialog):
     """
     Pre-launch configuration dialog.  Reads previous settings from
@@ -141,6 +243,8 @@ class LaunchDialog(QDialog):
             "radar_resolution":  s.value("launch/radar_resolution",  -1,    type=int),
         }
         self._project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self._year_click_filters: list = []  # keep _ClickForwarder instances alive
+        self._year_grid_popup: "_YearGridPopup | None" = None
         self._build_ui(saved)
         self._start_update_check()
 
@@ -615,12 +719,46 @@ class LaunchDialog(QDialog):
             _next.setIconSize(QSize(10, 10))
         _spin = calendar.findChild(QSpinBox, "qt_calendar_yearedit")
         if _spin:
-            _btns = _spin.findChildren(QAbstractButton)
-            if len(_btns) >= 2:
-                _btns[0].setIcon(_triangle_icon([(0.1, 0.85), (0.9, 0.85), (0.5, 0.15)], "#8E97AB", 10, 8))
-                _btns[0].setIconSize(QSize(10, 8))
-                _btns[1].setIcon(_triangle_icon([(0.1, 0.15), (0.9, 0.15), (0.5, 0.85)], "#8E97AB", 10, 8))
-                _btns[1].setIconSize(QSize(10, 8))
+            # The year field's +/-1 step buttons are native QStyle-painted
+            # sub-controls on this platform/style, not real child widgets --
+            # findChildren(QAbstractButton) finds nothing to re-icon, which
+            # left them rendering as ~20px of blank, same-color dead space
+            # next to the year (no icon ever actually applied). Since a
+            # click now opens a full year-grid instead -- a strictly more
+            # useful way to jump years than one step at a time -- drop the
+            # reserved button space entirely rather than leave it inert;
+            # NoButtons makes the year field one clean pill, matching the
+            # month button beside it.
+            _spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+            # Read-only blocks direct keyboard/typed editing so a click
+            # always means "open the grid," never "place a text cursor."
+            _spin.setReadOnly(True)
+            _spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            _spin.setCursor(Qt.CursorShape.PointingHandCursor)
+            # findChild rather than spin.lineEdit(): PyQt6 refuses direct
+            # access to some accessors on internal children QCalendarWidget
+            # created in C++ ("no access to protected functions ... for
+            # objects not created from Python"), but generic QObject
+            # reflection via findChild is unaffected.
+            _line_edit = _spin.findChild(QLineEdit)
+            if _line_edit is not None:
+                _line_edit.setCursor(Qt.CursorShape.PointingHandCursor)
+                _forwarder = _ClickForwarder(lambda c=calendar, s=_spin: self._open_year_grid(c, s))
+                _line_edit.installEventFilter(_forwarder)
+                self._year_click_filters.append(_forwarder)
+
+    def _open_year_grid(self, calendar: "QCalendarWidget", spin: QSpinBox):
+        """Show the year-grid popup anchored under the year field,
+        centered on the year currently shown."""
+        popup = _YearGridPopup(spin.value(), parent=self)
+        popup.yearPicked.connect(lambda year, c=calendar: self._on_year_picked(c, year))
+        pos = spin.mapToGlobal(spin.rect().bottomLeft())
+        popup.move(pos)
+        popup.show()
+        self._year_grid_popup = popup  # keep a reference so it isn't gc'd while open
+
+    def _on_year_picked(self, calendar: "QCalendarWidget", year: int):
+        calendar.setCurrentPage(year, calendar.monthShown())
 
     def _init_calendar_icons(self):
         """Style the archive date field's own built-in calendar popup
@@ -673,12 +811,18 @@ class LaunchDialog(QDialog):
         platform_row = QHBoxLayout()
         platform_row.setSpacing(6)
         self._browse_platform_combo = QComboBox()
+        self._browse_platform_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         for family, platforms in platforms_by_family().items():
             for p in sorted(platforms, key=lambda x: x.display_name):
                 self._browse_platform_combo.addItem(f"{family} — {p.display_name}", p)
+        self._browse_platform_combo.currentIndexChanged.connect(self._on_browse_platform_changed)
+        self._on_browse_platform_changed()  # seed the tooltip for the initial selection
         platform_row.addWidget(self._browse_platform_combo, 1)
 
         self._browse_find_btn = QPushButton("Find dates")
+        self._browse_find_btn.setStyleSheet(_BROWSE_ACTION_BTN_STYLE)
+        self._browse_find_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._browse_find_btn.setMinimumWidth(88)
         self._browse_find_btn.clicked.connect(self._on_find_dates_clicked)
         platform_row.addWidget(self._browse_find_btn)
         bs.addLayout(platform_row)
@@ -689,18 +833,23 @@ class LaunchDialog(QDialog):
         bs.addWidget(self._browse_status_lbl)
 
         self._browse_dates_list = QListWidget()
-        self._browse_dates_list.setFixedHeight(90)
+        self._browse_dates_list.setObjectName("browseDatesList")
+        self._browse_dates_list.setFixedHeight(120)
         self._browse_dates_list.setVisible(False)
         self._browse_dates_list.itemDoubleClicked.connect(self._on_browse_date_chosen)
         bs.addWidget(self._browse_dates_list)
 
+        bs.addSpacing(2)
         cov_div = QFrame()
         cov_div.setFrameShape(QFrame.Shape.HLine)
         cov_div.setStyleSheet("background-color: #1E1E2E;")
         cov_div.setFixedHeight(1)
         bs.addWidget(cov_div)
+        bs.addSpacing(2)
 
         self._browse_coverage_btn = QPushButton("Check coverage for the date above")
+        self._browse_coverage_btn.setStyleSheet(_BROWSE_ACTION_BTN_STYLE)
+        self._browse_coverage_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._browse_coverage_btn.clicked.connect(self._on_check_coverage_clicked)
         bs.addWidget(self._browse_coverage_btn)
 
@@ -716,6 +865,8 @@ class LaunchDialog(QDialog):
         visible = not self._browse_section.isVisible()
         self._browse_section.setVisible(visible)
         self._browse_toggle_btn.setText("▾  BROWSE AVAILABLE CASES" if visible else "▸  BROWSE AVAILABLE CASES")
+        if self.isVisible():
+            self._post_layout_adjust()
 
     def _populate_browse_year_combo(self, campaign: "str | None"):
         from archive.catalog import CAMPAIGN_YEARS
@@ -732,6 +883,11 @@ class LaunchDialog(QDialog):
     def _on_browse_campaign_changed(self):
         self._populate_browse_year_combo(self._browse_campaign_combo.currentData())
 
+    def _on_browse_platform_changed(self):
+        """Full selection text as a tooltip -- a safety net for anyone on
+        a narrower screen/font where the combo itself still elides it."""
+        self._browse_platform_combo.setToolTip(self._browse_platform_combo.currentText())
+
     def _on_find_dates_clicked(self):
         from archive.catalog import list_dates_for_platform
 
@@ -740,7 +896,9 @@ class LaunchDialog(QDialog):
             return
         self._browse_find_btn.setEnabled(False)
         self._browse_dates_list.setVisible(False)
-        self._browse_status_lbl.setText(f"Checking THREDDS for {platform.display_name}…")
+        self._browse_status_lbl.setText(f"Checking THREDDS for {platform.family} — {platform.display_name}…")
+        if self.isVisible():
+            self._post_layout_adjust()
 
         worker = _CatalogQueryWorker(list_dates_for_platform, platform, parent=self)
         worker.finished.connect(self._on_dates_found)
@@ -757,15 +915,16 @@ class LaunchDialog(QDialog):
         if not dates:
             self._browse_status_lbl.setText("No dates found for this platform (and filter, if set).")
             self._browse_dates_list.setVisible(False)
-            return
-
-        self._browse_status_lbl.setText(f"{len(dates)} date(s) found — double-click one to use it:")
-        self._browse_dates_list.clear()
-        for d in reversed(dates):  # most recent first
-            item = QListWidgetItem(d.strftime("%Y-%m-%d"))
-            item.setData(Qt.ItemDataRole.UserRole, d)
-            self._browse_dates_list.addItem(item)
-        self._browse_dates_list.setVisible(True)
+        else:
+            self._browse_status_lbl.setText(f"{len(dates)} date(s) found — double-click one to use it:")
+            self._browse_dates_list.clear()
+            for d in reversed(dates):  # most recent first
+                item = QListWidgetItem(d.strftime("%Y-%m-%d"))
+                item.setData(Qt.ItemDataRole.UserRole, d)
+                self._browse_dates_list.addItem(item)
+            self._browse_dates_list.setVisible(True)
+        if self.isVisible():
+            self._post_layout_adjust()
 
     def _on_browse_date_chosen(self, item: "QListWidgetItem"):
         picked = item.data(Qt.ItemDataRole.UserRole)
@@ -783,6 +942,8 @@ class LaunchDialog(QDialog):
             f"Checking all {len(ALL_PLATFORMS)} known platforms for {target_date.strftime('%Y-%m-%d')}… "
             f"this queries THREDDS live and can take a minute."
         )
+        if self.isVisible():
+            self._post_layout_adjust()
 
         worker = _CatalogQueryWorker(coverage_for_date, target_date, parent=self)
         worker.finished.connect(self._on_coverage_result)
@@ -803,17 +964,23 @@ class LaunchDialog(QDialog):
         target = self._archive_dt_edit.date()
         summary = f"{len(present)} of {len(ALL_PLATFORMS)} platforms have data for {target.toString('yyyy-MM-dd')}"
         if by_family:
-            breakdown = ", ".join(f"{fam} ({n})" for fam, n in by_family.items())
-            summary += f":\n{breakdown}"
+            lines = "\n".join(f"  •  {fam} — {n}" for fam, n in by_family.items())
+            summary += f":\n{lines}"
         self._browse_coverage_lbl.setText(summary)
+        if self.isVisible():
+            self._post_layout_adjust()
 
     def _on_find_dates_failed(self, message: str):
         self._browse_find_btn.setEnabled(True)
         self._browse_status_lbl.setText(f"Query failed: {message}")
+        if self.isVisible():
+            self._post_layout_adjust()
 
     def _on_coverage_failed(self, message: str):
         self._browse_coverage_btn.setEnabled(True)
         self._browse_coverage_lbl.setText(f"Query failed: {message}")
+        if self.isVisible():
+            self._post_layout_adjust()
 
     def _set_fields_locked(self, locked: bool):
         self._vid_input.setReadOnly(locked)
@@ -869,7 +1036,7 @@ class LaunchDialog(QDialog):
     def _toggle_data_section(self):
         visible = not self._data_section.isVisible()
         self._data_section.setVisible(visible)
-        self._data_toggle_btn.setText("▾  DATA ON LAUNCH" if visible else "▸  DATA ON LAUNCH")
+        self._data_toggle_btn.setText("▾  DATA CONFIGURATION" if visible else "▸  DATA CONFIGURATION")
         QTimer.singleShot(0, self.adjustSize)
 
     def _toggle_layer(self, key: str):

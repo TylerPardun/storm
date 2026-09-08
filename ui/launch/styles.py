@@ -148,13 +148,21 @@ QCalendarWidget QToolButton {
     padding: 3px 6px;
 }
 QCalendarWidget QToolButton:hover {
+    background-color: #0D1A2E;
     border-color: #00CFFF;
     color: #00CFFF;
 }
 QCalendarWidget QToolButton#qt_calendar_prevmonth,
 QCalendarWidget QToolButton#qt_calendar_nextmonth {
     min-width: 26px;
+    min-height: 22px;
     padding: 3px 4px;
+}
+QCalendarWidget QToolButton::menu-indicator {
+    /* the built-in month button draws a native drop-arrow glyph next to
+       its text by default -- suppress it so month/year controls read as
+       one consistent icon-free label style */
+    image: none;
 }
 QCalendarWidget QMenu {
     background-color: #0A0A0F;
@@ -167,31 +175,13 @@ QCalendarWidget QSpinBox {
     border-radius: 4px;
     color: #E8EAF0;
     font-size: 11px;
+    font-weight: 600;
     padding: 2px 4px;
 }
-QCalendarWidget QSpinBox::up-button {
-    subcontrol-origin: border;
-    subcontrol-position: top right;
-    width: 16px;
-    border-left: 1px solid #1E1E2E;
-    border-bottom: 1px solid #1E1E2E;
-    border-top-right-radius: 4px;
-    background-color: #1A1A2E;
-}
-QCalendarWidget QSpinBox::up-button:hover {
+QCalendarWidget QSpinBox:hover {
     background-color: #0D1A2E;
-}
-QCalendarWidget QSpinBox::down-button {
-    subcontrol-origin: border;
-    subcontrol-position: bottom right;
-    width: 16px;
-    border-left: 1px solid #1E1E2E;
-    border-top: 1px solid #1E1E2E;
-    border-bottom-right-radius: 4px;
-    background-color: #1A1A2E;
-}
-QCalendarWidget QSpinBox::down-button:hover {
-    background-color: #0D1A2E;
+    border-color: #00CFFF;
+    color: #00CFFF;
 }
 QCalendarWidget QAbstractItemView {
     background-color: #0D0D1A;
@@ -280,6 +270,119 @@ QComboBox QAbstractItemView {
     selection-background-color: #00CFFF;
     selection-color: #0A0A0F;
     outline: none;
+}
+QComboBox QAbstractItemView::item {
+    padding: 4px 8px;
+    min-height: 20px;
+}
+QListWidget#browseDatesList {
+    background-color: #0D0D1A;
+    border: 1px solid #1E1E2E;
+    border-radius: 6px;
+    color: #E8EAF0;
+    font-size: 12px;
+    outline: none;
+    padding: 3px;
+}
+QListWidget#browseDatesList::item {
+    padding: 5px 8px;
+    border-radius: 4px;
+}
+QListWidget#browseDatesList::item:hover {
+    background-color: #12121E;
+}
+QListWidget#browseDatesList::item:selected {
+    background-color: #00CFFF;
+    color: #0A0A0F;
+}
+QScrollBar:vertical {
+    background: transparent;
+    width: 9px;
+    margin: 2px 0px;
+}
+QScrollBar::handle:vertical {
+    background-color: #2A2A3E;
+    border-radius: 4px;
+    min-height: 24px;
+}
+QScrollBar::handle:vertical:hover {
+    background-color: #00CFFF;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+"""
+
+_BROWSE_ACTION_BTN_STYLE = """
+QPushButton {
+    background-color: #1A1A2E;
+    border: 1px solid #1E1E2E;
+    border-radius: 6px;
+    color: #E8EAF0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    padding: 7px 14px;
+}
+QPushButton:hover {
+    border-color: #00CFFF;
+    color: #00CFFF;
+}
+QPushButton:pressed {
+    background-color: #0D1A2E;
+}
+QPushButton:disabled {
+    background-color: #12121E;
+    border-color: #16162A;
+    color: #3A3B4A;
+}
+"""
+
+_YEAR_GRID_STYLE = """
+QWidget#yearGridPopup {
+    background-color: #0A0A0F;
+    border: 1px solid #2A2A3E;
+    border-radius: 10px;
+}
+QLabel#yearRangeLbl {
+    color: #8E97AB;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+QToolButton#yearNavBtn {
+    background-color: #1A1A2E;
+    border: 1px solid #1E1E2E;
+    border-radius: 4px;
+    min-width: 22px;
+    min-height: 20px;
+    padding: 2px;
+}
+QToolButton#yearNavBtn:hover {
+    background-color: #0D1A2E;
+    border-color: #00CFFF;
+}
+QPushButton#yearCell {
+    background-color: #1A1A2E;
+    border: 1px solid #1E1E2E;
+    border-radius: 5px;
+    color: #E8EAF0;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 7px 4px;
+    min-width: 44px;
+}
+QPushButton#yearCell:hover {
+    border-color: #00CFFF;
+    color: #00CFFF;
+}
+QPushButton#yearCell[selected="true"] {
+    background-color: #0D1A2E;
+    border: 2px solid #00CFFF;
+    color: #00CFFF;
 }
 """
 

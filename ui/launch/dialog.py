@@ -4,16 +4,19 @@ import hashlib
 import hmac
 import os
 import sys
+import threading
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QToolButton, QFileDialog, QFrame,
     QApplication, QMessageBox, QSizePolicy, QWidget,
     QDateTimeEdit, QAbstractButton, QSpinBox, QComboBox, QCheckBox,
-    QCalendarWidget,
+    QCalendarWidget, QListWidget, QListWidgetItem,
 )
-from PyQt6.QtCore import Qt, QSettings, QTimer, QSize, QDateTime, QPointF, QRectF
+from PyQt6.QtCore import (
+    Qt, QSettings, QTimer, QSize, QDate, QDateTime, QPointF, QRectF, QObject, pyqtSignal,
+)
 from PyQt6.QtGui import QPixmap, QPainter, QIcon, QColor, QPolygonF, QPen
 
 import config as _config
@@ -74,6 +77,33 @@ def _calendar_glyph_icon(color: str = "#8E97AB", w: int = 16, h: int = 16) -> QI
     p.drawLine(QPointF(w * 0.68, 1.0), QPointF(w * 0.68, 4.4))
     p.end()
     return QIcon(px)
+
+
+class _CatalogQueryWorker(QObject):
+    """Runs one archive.catalog query (list_dates_for_platform or
+    coverage_for_date, both live network calls) on a background thread,
+    matching the QObject + threading.Thread pattern used by every other
+    archive fetcher in this codebase, so the dialog stays responsive
+    while THREDDS is queried."""
+
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, fn, *args, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+        self._args = args
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        try:
+            result = self._fn(*self._args)
+        except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(result)
 
 
 class LaunchDialog(QDialog):
@@ -327,6 +357,9 @@ class LaunchDialog(QDialog):
         arc_hint.setObjectName("hint")
         arc_hint.setWordWrap(True)
         av_layout.addWidget(arc_hint)
+
+        av_layout.addSpacing(8)
+        self._build_browse_section(av_layout)
 
         self._archive_section.setVisible(False)
         root.addWidget(self._archive_section)
@@ -602,6 +635,185 @@ class LaunchDialog(QDialog):
         with its own popup, precisely so its icon/size/click target are
         fully within our control."""
         self._style_calendar_nav_icons(self._archive_dt_edit.calendarWidget())
+
+    # -- Browse available cases (archive.catalog: live, on-demand THREDDS queries) --
+
+    def _build_browse_section(self, parent_layout: QVBoxLayout):
+        """A collapsible panel for discovering what dates a data source
+        actually has, and how many sources have data on a given date --
+        every query here hits THREDDS live when the user asks, there is
+        nothing precomputed or cached (see archive/catalog.py)."""
+        self._browse_toggle_btn = QPushButton("▸  BROWSE AVAILABLE CASES")
+        self._browse_toggle_btn.setObjectName("dataToggleBtn")
+        self._browse_toggle_btn.setFixedHeight(18)
+        self._browse_toggle_btn.clicked.connect(self._toggle_browse_section)
+        parent_layout.addWidget(self._browse_toggle_btn)
+
+        self._browse_section = QWidget()
+        bs = QVBoxLayout(self._browse_section)
+        bs.setContentsMargins(0, 8, 0, 0)
+        bs.setSpacing(6)
+
+        from archive.catalog import CAMPAIGN_YEARS, platforms_by_family
+
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(6)
+        self._browse_campaign_combo = QComboBox()
+        self._browse_campaign_combo.addItem("Any campaign", None)
+        for name in CAMPAIGN_YEARS:
+            self._browse_campaign_combo.addItem(name, name)
+        self._browse_campaign_combo.currentIndexChanged.connect(self._on_browse_campaign_changed)
+        filter_row.addWidget(self._browse_campaign_combo, 1)
+
+        self._browse_year_combo = QComboBox()
+        self._populate_browse_year_combo(None)
+        filter_row.addWidget(self._browse_year_combo, 1)
+        bs.addLayout(filter_row)
+
+        platform_row = QHBoxLayout()
+        platform_row.setSpacing(6)
+        self._browse_platform_combo = QComboBox()
+        for family, platforms in platforms_by_family().items():
+            for p in sorted(platforms, key=lambda x: x.display_name):
+                self._browse_platform_combo.addItem(f"{family} — {p.display_name}", p)
+        platform_row.addWidget(self._browse_platform_combo, 1)
+
+        self._browse_find_btn = QPushButton("Find dates")
+        self._browse_find_btn.clicked.connect(self._on_find_dates_clicked)
+        platform_row.addWidget(self._browse_find_btn)
+        bs.addLayout(platform_row)
+
+        self._browse_status_lbl = QLabel("")
+        self._browse_status_lbl.setObjectName("hint")
+        self._browse_status_lbl.setWordWrap(True)
+        bs.addWidget(self._browse_status_lbl)
+
+        self._browse_dates_list = QListWidget()
+        self._browse_dates_list.setFixedHeight(90)
+        self._browse_dates_list.setVisible(False)
+        self._browse_dates_list.itemDoubleClicked.connect(self._on_browse_date_chosen)
+        bs.addWidget(self._browse_dates_list)
+
+        cov_div = QFrame()
+        cov_div.setFrameShape(QFrame.Shape.HLine)
+        cov_div.setStyleSheet("background-color: #1E1E2E;")
+        cov_div.setFixedHeight(1)
+        bs.addWidget(cov_div)
+
+        self._browse_coverage_btn = QPushButton("Check coverage for the date above")
+        self._browse_coverage_btn.clicked.connect(self._on_check_coverage_clicked)
+        bs.addWidget(self._browse_coverage_btn)
+
+        self._browse_coverage_lbl = QLabel("")
+        self._browse_coverage_lbl.setObjectName("hint")
+        self._browse_coverage_lbl.setWordWrap(True)
+        bs.addWidget(self._browse_coverage_lbl)
+
+        self._browse_section.setVisible(False)
+        parent_layout.addWidget(self._browse_section)
+
+    def _toggle_browse_section(self):
+        visible = not self._browse_section.isVisible()
+        self._browse_section.setVisible(visible)
+        self._browse_toggle_btn.setText("▾  BROWSE AVAILABLE CASES" if visible else "▸  BROWSE AVAILABLE CASES")
+
+    def _populate_browse_year_combo(self, campaign: "str | None"):
+        from archive.catalog import CAMPAIGN_YEARS
+
+        self._browse_year_combo.clear()
+        self._browse_year_combo.addItem("Any year", None)
+        if campaign:
+            years = CAMPAIGN_YEARS.get(campaign, ())
+        else:
+            years = sorted({y for years in CAMPAIGN_YEARS.values() for y in years})
+        for year in years:
+            self._browse_year_combo.addItem(str(year), year)
+
+    def _on_browse_campaign_changed(self):
+        self._populate_browse_year_combo(self._browse_campaign_combo.currentData())
+
+    def _on_find_dates_clicked(self):
+        from archive.catalog import list_dates_for_platform
+
+        platform = self._browse_platform_combo.currentData()
+        if platform is None:
+            return
+        self._browse_find_btn.setEnabled(False)
+        self._browse_dates_list.setVisible(False)
+        self._browse_status_lbl.setText(f"Checking THREDDS for {platform.display_name}…")
+
+        worker = _CatalogQueryWorker(list_dates_for_platform, platform, parent=self)
+        worker.finished.connect(self._on_dates_found)
+        worker.failed.connect(self._on_find_dates_failed)
+        self._browse_worker = worker  # keep a reference so it isn't garbage-collected mid-query
+        worker.start()
+
+    def _on_dates_found(self, dates: list):
+        self._browse_find_btn.setEnabled(True)
+        year = self._browse_year_combo.currentData()
+        if year is not None:
+            dates = [d for d in dates if d.year == year]
+
+        if not dates:
+            self._browse_status_lbl.setText("No dates found for this platform (and filter, if set).")
+            self._browse_dates_list.setVisible(False)
+            return
+
+        self._browse_status_lbl.setText(f"{len(dates)} date(s) found — double-click one to use it:")
+        self._browse_dates_list.clear()
+        for d in reversed(dates):  # most recent first
+            item = QListWidgetItem(d.strftime("%Y-%m-%d"))
+            item.setData(Qt.ItemDataRole.UserRole, d)
+            self._browse_dates_list.addItem(item)
+        self._browse_dates_list.setVisible(True)
+
+    def _on_browse_date_chosen(self, item: "QListWidgetItem"):
+        picked = item.data(Qt.ItemDataRole.UserRole)
+        current_time = self._archive_dt_edit.time()
+        self._archive_dt_edit.setDateTime(QDateTime(QDate(picked.year, picked.month, picked.day), current_time))
+        self._browse_status_lbl.setText(f"Archive start time set to {picked.strftime('%Y-%m-%d')}.")
+
+    def _on_check_coverage_clicked(self):
+        from archive.catalog import coverage_for_date, ALL_PLATFORMS
+
+        target = self._archive_dt_edit.date()
+        target_date = date(target.year(), target.month(), target.day())
+        self._browse_coverage_btn.setEnabled(False)
+        self._browse_coverage_lbl.setText(
+            f"Checking all {len(ALL_PLATFORMS)} known platforms for {target_date.strftime('%Y-%m-%d')}… "
+            f"this queries THREDDS live and can take a minute."
+        )
+
+        worker = _CatalogQueryWorker(coverage_for_date, target_date, parent=self)
+        worker.finished.connect(self._on_coverage_result)
+        worker.failed.connect(self._on_coverage_failed)
+        self._coverage_worker = worker
+        worker.start()
+
+    def _on_coverage_result(self, result: dict):
+        from archive.catalog import ALL_PLATFORMS
+
+        self._browse_coverage_btn.setEnabled(True)
+        present = {pid for pid, ok in result.items() if ok}
+        by_family: dict[str, int] = {}
+        for p in ALL_PLATFORMS:
+            if p.platform_id in present:
+                by_family[p.family] = by_family.get(p.family, 0) + 1
+
+        target = self._archive_dt_edit.date()
+        summary = f"{len(present)} of {len(ALL_PLATFORMS)} platforms have data for {target.toString('yyyy-MM-dd')}"
+        if by_family:
+            breakdown = ", ".join(f"{fam} ({n})" for fam, n in by_family.items())
+            summary += f":\n{breakdown}"
+        self._browse_coverage_lbl.setText(summary)
+
+    def _on_find_dates_failed(self, message: str):
+        self._browse_find_btn.setEnabled(True)
+        self._browse_status_lbl.setText(f"Query failed: {message}")
+
+    def _on_coverage_failed(self, message: str):
+        self._browse_coverage_btn.setEnabled(True)
+        self._browse_coverage_lbl.setText(f"Query failed: {message}")
 
     def _set_fields_locked(self, locked: bool):
         self._vid_input.setReadOnly(locked)

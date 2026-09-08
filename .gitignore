@@ -18,6 +18,9 @@ __pycache__/
 # ignore the DS_Store stuff
 .DS_Store
 
+# AppleDouble shadow files (exFAT/external-drive checkouts generate these)
+._*
+
 # build artifacts
 STORM.app
 *.iconset/

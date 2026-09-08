@@ -42,6 +42,11 @@ def _daily_url(vehicle_id: str, date_str: str) -> str:
     return f"{_FILE_ROOT}/{directory}/raw/{date_str}.txt"
 
 
+def _processed_netcdf_url(vehicle_id: str, date_str: str) -> str:
+    directory = thredds_vehicle_id(vehicle_id)
+    return f"{_FILE_ROOT}/{directory}/processed/{directory}.mesonet.{date_str}.nc"
+
+
 def _float_or_none(value: str | None) -> float | None:
     if value is None:
         return None
@@ -112,6 +117,66 @@ def parse_vehicle_csv(
             wind_speed_ms=_float_or_none(row.get("sfc_wspd")),
             wind_dir_deg=_float_or_none(row.get("sfc_wdir")),
             pressure_mb=_float_or_none(row.get("pressure")),
+        ))
+
+    observations.sort(key=lambda obs: obs.timestamp)
+    return observations
+
+
+def _nc_value(array, index: int) -> "float | None":
+    import numpy as np
+    if array is None:
+        return None
+    value = float(array[index])
+    return value if np.isfinite(value) else None
+
+
+def parse_vehicle_netcdf(data: bytes, vehicle_id: str, icon_type: str | None = None) -> list[Observation]:
+    """Parse a FOFS processed netCDF file into timestamp-sorted observations.
+
+    Preferred over parse_vehicle_csv: `epochtime` is unambiguous UTC
+    seconds-since-epoch, unlike the raw CSV's gps_date/gps_time strings,
+    which have been observed in both DDMMYY and MMDDYY forms depending on
+    vehicle/era (see _parse_gps_timestamp). When a vehicle-day's source
+    time data is unusable, the processed file reflects that by masking
+    every epochtime value rather than a downstream parser guessing at a
+    wrong-but-plausible date -- a row with no valid epochtime is dropped
+    here rather than assigned any timestamp.
+    """
+    import numpy as np
+    import xarray as xr
+
+    # decode_times=False: epochtime's non-standard units ("s since ...")
+    # trip xarray's CF time auto-decoding; read it as a plain float and
+    # convert manually below instead.
+    with xr.open_dataset(io.BytesIO(data), engine="h5netcdf", decode_times=False) as ds:
+        epoch = np.asarray(ds["epochtime"].values, dtype="float64")
+        lat = np.asarray(ds["lat"].values, dtype="float64")
+        lon = np.asarray(ds["lon"].values, dtype="float64")
+        t_fast = np.asarray(ds["t_fast"].values, dtype="float64") if "t_fast" in ds else None
+        dewpoint = np.asarray(ds["dewpoint"].values, dtype="float64") if "dewpoint" in ds else None
+        sfc_wspd = np.asarray(ds["sfc_wspd"].values, dtype="float64") if "sfc_wspd" in ds else None
+        sfc_wdir = np.asarray(ds["sfc_wdir"].values, dtype="float64") if "sfc_wdir" in ds else None
+        pressure = np.asarray(ds["pressure"].values, dtype="float64") if "pressure" in ds else None
+
+    observations: list[Observation] = []
+    for i in range(epoch.size):
+        e = epoch[i]
+        la, lo = lat[i], lon[i]
+        if not (np.isfinite(e) and np.isfinite(la) and np.isfinite(lo)):
+            continue
+
+        observations.append(Observation(
+            vehicle_id=vehicle_id,
+            lat=float(la),
+            lon=float(lo),
+            timestamp=datetime.fromtimestamp(float(e), tz=timezone.utc),
+            icon_type=icon_type,
+            temperature_c=_nc_value(t_fast, i),
+            dewpoint_c=_nc_value(dewpoint, i),
+            wind_speed_ms=_nc_value(sfc_wspd, i),
+            wind_dir_deg=_nc_value(sfc_wdir, i),
+            pressure_mb=_nc_value(pressure, i),
         ))
 
     observations.sort(key=lambda obs: obs.timestamp)
@@ -232,6 +297,56 @@ class ArchiveVehicleObsFetcher(QObject):
         vehicle_id: str,
         icon_type: str | None,
     ) -> list[Observation]:
+        nc_observations = self._fetch_vehicle_netcdf(vehicle_id, icon_type)
+        if nc_observations is not None:
+            # A processed file was fetched and parsed -- trust it even if
+            # empty (that means the source flagged this vehicle-day's time
+            # data as unusable). Falling back to the raw CSV here would
+            # reintroduce exactly the wrong-date risk the netCDF path
+            # avoids, since the raw file can silently carry the wrong day.
+            return nc_observations
+        return self._fetch_vehicle_csv(vehicle_id, icon_type)
+
+    def _fetch_vehicle_netcdf(
+        self,
+        vehicle_id: str,
+        icon_type: str | None,
+    ) -> "list[Observation] | None":
+        """Try the processed netCDF source first. Returns None (not []) on
+        a missing file or parse failure, signaling the caller to fall back
+        to the raw CSV; returns a (possibly empty) list on a successful
+        parse, which the caller must trust as-is."""
+        url = _processed_netcdf_url(vehicle_id, self._date_str)
+        request = Request(url, headers={"User-Agent": _USER_AGENT})
+        try:
+            with urlopen(request, timeout=30, context=_ssl_context()) as response:
+                data = response.read()
+        except HTTPError as exc:
+            if exc.code in (404, 410):
+                return None
+            log.warning("Processed netCDF fetch failed for %s: %s", vehicle_id, exc)
+            return None
+        except Exception as exc:  # noqa: BLE001 - network/SSL errors, fall back
+            log.warning("Processed netCDF fetch failed for %s: %s", vehicle_id, exc)
+            return None
+
+        try:
+            observations = parse_vehicle_netcdf(data, vehicle_id, icon_type)
+        except Exception as exc:  # noqa: BLE001 - malformed file, fall back
+            log.warning("Processed netCDF parse failed for %s: %s", vehicle_id, exc)
+            return None
+
+        log.info(
+            "One-second archive: loaded %d observations for %s from %s (processed netCDF)",
+            len(observations), vehicle_id, url,
+        )
+        return observations
+
+    def _fetch_vehicle_csv(
+        self,
+        vehicle_id: str,
+        icon_type: str | None,
+    ) -> list[Observation]:
         url = _daily_url(vehicle_id, self._date_str)
         request = Request(url, headers={"User-Agent": _USER_AGENT})
         try:
@@ -243,7 +358,7 @@ class ArchiveVehicleObsFetcher(QObject):
             raise
         observations = parse_vehicle_csv(text, vehicle_id, icon_type, expected_date=self._date_str)
         log.info(
-            "One-second archive: loaded %d observations for %s from %s",
+            "One-second archive: loaded %d observations for %s from %s (raw CSV fallback)",
             len(observations),
             vehicle_id,
             url,

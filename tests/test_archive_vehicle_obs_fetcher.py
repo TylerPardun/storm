@@ -2,11 +2,29 @@
 
 from datetime import datetime, timedelta, timezone
 
+import numpy as np
+
 from archive.fetchers.vehicle_obs_archive_fetcher import (
     ArchiveVehicleObsFetcher,
     _daily_url,
     parse_vehicle_csv,
+    parse_vehicle_netcdf,
 )
+
+
+def _write_processed_netcdf(path, epochtime, lat, lon, t_fast=None):
+    """Build a minimal file matching the real FOFS processed/*.nc schema."""
+    import xarray as xr
+
+    n = len(epochtime)
+    data_vars = {
+        "epochtime": ("time", np.array(epochtime, dtype="float64")),
+        "lat": ("time", np.array(lat, dtype="float64")),
+        "lon": ("time", np.array(lon, dtype="float64")),
+    }
+    if t_fast is not None:
+        data_vars["t_fast"] = ("time", np.array(t_fast, dtype="float64"))
+    xr.Dataset(data_vars).to_netcdf(path, engine="h5netcdf")
 
 
 _CSV = """sfc_wspd,sfc_wdir,t_fast,dewpoint,pressure,gps_date,gps_time,lat,lon
@@ -70,6 +88,45 @@ def test_parse_vehicle_csv_rejects_rows_that_dont_match_expected_date():
     observations = parse_vehicle_csv(csv_text, "probe1", expected_date="20240427")
 
     assert observations == []
+
+
+def test_parse_vehicle_netcdf_uses_epochtime_directly(tmp_path):
+    epoch0 = datetime(2022, 5, 24, tzinfo=timezone.utc).timestamp()
+    path = tmp_path / "probe1.mesonet.20220524.nc"
+    _write_processed_netcdf(
+        path,
+        epochtime=[epoch0, epoch0 + 1],
+        lat=[33.8, 33.81],
+        lon=[-102.7, -102.71],
+        t_fast=[20.5, 20.6],
+    )
+
+    observations = parse_vehicle_netcdf(path.read_bytes(), "probe1")
+
+    assert len(observations) == 2
+    assert observations[0].timestamp == datetime(2022, 5, 24, 0, 0, 0, tzinfo=timezone.utc)
+    assert observations[0].lat == 33.8
+    assert observations[0].temperature_c == 20.5
+
+
+def test_parse_vehicle_netcdf_drops_rows_with_masked_epochtime(tmp_path):
+    # Mirrors a real observed case (LIFT 2024 probe1): the processing
+    # pipeline flags an entire vehicle-day's time data as unusable by
+    # masking epochtime, while lat/lon/temperature remain populated. Those
+    # rows must be dropped, not assigned a fabricated timestamp.
+    epoch0 = datetime(2024, 4, 27, tzinfo=timezone.utc).timestamp()
+    path = tmp_path / "probe1.mesonet.20240427.nc"
+    _write_processed_netcdf(
+        path,
+        epochtime=[np.nan, np.nan, epoch0],
+        lat=[35.1, 35.2, 35.3],
+        lon=[-97.4, -97.5, -97.6],
+    )
+
+    observations = parse_vehicle_netcdf(path.read_bytes(), "probe1")
+
+    assert len(observations) == 1
+    assert observations[0].lat == 35.3
 
 
 def test_fetcher_looks_up_and_emits_latest_observation():

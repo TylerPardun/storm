@@ -11,9 +11,10 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QToolButton, QFileDialog, QFrame,
     QApplication, QMessageBox, QSizePolicy, QWidget,
     QDateTimeEdit, QAbstractButton, QSpinBox, QComboBox, QCheckBox,
+    QCalendarWidget,
 )
-from PyQt6.QtCore import Qt, QSettings, QTimer, QSize, QDateTime, QPointF
-from PyQt6.QtGui import QPixmap, QPainter, QIcon, QColor, QPolygonF
+from PyQt6.QtCore import Qt, QSettings, QTimer, QSize, QDateTime, QPointF, QRectF
+from PyQt6.QtGui import QPixmap, QPainter, QIcon, QColor, QPolygonF, QPen
 
 import config as _config
 from ui.launch.icons import combo_down_arrow_qss, _svg_pixmap
@@ -38,6 +39,41 @@ def _verify_pbkdf2(passphrase: str, stored: str) -> bool:
         return False
     dk = hashlib.pbkdf2_hmac("sha256", passphrase.encode(), salt, _PBKDF2_ITERATIONS)
     return hmac.compare_digest(dk, expected_dk)
+
+
+def _triangle_icon(pts: list, color: str, w: int = 10, h: int = 10) -> QIcon:
+    """A small filled triangle from fractional (x, y) points in [0, 1],
+    used for the calendar popup's prev/next-month and year-step arrows."""
+    px = QPixmap(w, h)
+    px.fill(Qt.GlobalColor.transparent)
+    p = QPainter(px)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setBrush(QColor(color))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawPolygon(QPolygonF([QPointF(x * w, y * h) for x, y in pts]))
+    p.end()
+    return QIcon(px)
+
+
+def _calendar_glyph_icon(color: str = "#8E97AB", w: int = 16, h: int = 16) -> QIcon:
+    """A simple hand-drawn calendar glyph (rounded body, header rule, two
+    binder-ring ticks), matching this dialog's existing minimal line-art
+    icon style rather than an emoji or bundled image asset."""
+    px = QPixmap(w, h)
+    px.fill(Qt.GlobalColor.transparent)
+    p = QPainter(px)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.2)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    body = QRectF(1.5, 3.5, w - 3.0, h - 5.0)
+    p.drawRoundedRect(body, 1.5, 1.5)
+    p.drawLine(QPointF(body.left(), body.top() + 3.2), QPointF(body.right(), body.top() + 3.2))
+    p.drawLine(QPointF(w * 0.32, 1.0), QPointF(w * 0.32, 4.4))
+    p.drawLine(QPointF(w * 0.68, 1.0), QPointF(w * 0.68, 4.4))
+    p.end()
+    return QIcon(px)
 
 
 class LaunchDialog(QDialog):
@@ -280,7 +316,11 @@ class LaunchDialog(QDialog):
                 yesterday.hour, yesterday.minute, yesterday.second,
             )
         )
-        av_layout.addWidget(self._archive_dt_edit)
+        dt_row = QHBoxLayout()
+        dt_row.setSpacing(6)
+        dt_row.addWidget(self._archive_dt_edit, 1)
+        dt_row.addWidget(self._build_calendar_button())
+        av_layout.addLayout(dt_row)
         self._init_calendar_icons()
 
         arc_hint = QLabel("All data products will replay from this UTC time.")
@@ -472,47 +512,96 @@ class LaunchDialog(QDialog):
         self.move(x, y)
 
 
-    def _init_calendar_icons(self):
-        """Inject custom white triangle icons into the calendar popup widgets."""
+    def _build_calendar_button(self) -> QToolButton:
+        """A small button next to the archive date field that opens a
+        standard month/year calendar popup -- an explicit, always-visible
+        alternative to typing the date by hand. Stored on self so it can
+        be found/clicked directly (production code and tests alike)."""
+        self._calendar_popup: "QCalendarWidget | None" = None
+        btn = QToolButton()
+        btn.setIcon(_calendar_glyph_icon())
+        btn.setIconSize(QSize(16, 16))
+        btn.setToolTip("Pick a date from the calendar")
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFixedSize(32, 32)
+        btn.setStyleSheet(
+            "QToolButton {"
+            "  background-color: #1A1A2E;"
+            "  border: 1px solid #1E1E2E;"
+            "  border-radius: 6px;"
+            "}"
+            "QToolButton:hover {"
+            "  border-color: #00CFFF;"
+            "  background-color: #0D1A2E;"
+            "}"
+        )
+        btn.clicked.connect(self._open_date_picker)
+        self._cal_btn = btn
+        return btn
 
-        def _tri_icon(pts, color, w=10, h=10):
-            px = QPixmap(w, h)
-            px.fill(Qt.GlobalColor.transparent)
-            p = QPainter(px)
-            p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            p.setBrush(QColor(color))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawPolygon(QPolygonF([QPointF(x * w, y * h) for x, y in pts]))
-            p.end()
-            return QIcon(px)
+    def _open_date_picker(self):
+        """Show a popup calendar anchored under the calendar button,
+        pre-selected to the archive field's current date."""
+        if self._calendar_popup is None:
+            popup = QCalendarWidget(self)
+            popup.setWindowFlags(Qt.WindowType.Popup)
+            popup.setGridVisible(False)
+            popup.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+            popup.setStyleSheet(_DIALOG_STYLE)
+            popup.clicked.connect(self._on_date_picked)
+            self._calendar_popup = popup
+            self._style_calendar_nav_icons(popup)
 
-        # dropdown arrow on the QDateTimeEdit itself
-        _drop = self._archive_dt_edit.findChild(QToolButton)
-        if _drop:
-            _drop.setIcon(_tri_icon([(0.1, 0.2), (0.9, 0.2), (0.5, 0.85)], "#8E97AB", 10, 8))
-            _drop.setIconSize(QSize(10, 8))
+        self._calendar_popup.setSelectedDate(self._archive_dt_edit.date())
+        anchor = self.sender()
+        pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
+        self._calendar_popup.move(pos)
+        self._calendar_popup.show()
 
-        # calendar prev/next month nav arrows
-        cal = self._archive_dt_edit.calendarWidget()
-        _prev = cal.findChild(QToolButton, "qt_calendar_prevmonth")
-        _next = cal.findChild(QToolButton, "qt_calendar_nextmonth")
+    def _on_date_picked(self, qdate):
+        """Apply the calendar's chosen date to the archive field, keeping
+        the currently-set time of day, then close the popup."""
+        current_time = self._archive_dt_edit.time()
+        self._archive_dt_edit.setDateTime(QDateTime(qdate, current_time))
+        if self._calendar_popup is not None:
+            self._calendar_popup.hide()
+
+    def _style_calendar_nav_icons(self, calendar: "QCalendarWidget"):
+        """Apply prev/next-month and year-spinbox triangle icons to a
+        QCalendarWidget's built-in navigation controls, styled to match
+        this dialog's dark theme. Used for both the archive date field's
+        own calendar and the standalone popup from _build_calendar_button,
+        so the two look identical."""
+        _prev = calendar.findChild(QToolButton, "qt_calendar_prevmonth")
+        _next = calendar.findChild(QToolButton, "qt_calendar_nextmonth")
         if _prev:
-            _prev.setIcon(_tri_icon([(0.85, 0.1), (0.85, 0.9), (0.15, 0.5)], "#FFFFFF"))
+            _prev.setIcon(_triangle_icon([(0.85, 0.1), (0.85, 0.9), (0.15, 0.5)], "#FFFFFF"))
             _prev.setIconSize(QSize(10, 10))
         if _next:
-            _next.setIcon(_tri_icon([(0.15, 0.1), (0.15, 0.9), (0.85, 0.5)], "#FFFFFF"))
+            _next.setIcon(_triangle_icon([(0.15, 0.1), (0.15, 0.9), (0.85, 0.5)], "#FFFFFF"))
             _next.setIconSize(QSize(10, 10))
-
-        # year spinbox up/down arrows
-        _spin = cal.findChild(QSpinBox, "qt_calendar_yearedit")
+        _spin = calendar.findChild(QSpinBox, "qt_calendar_yearedit")
         if _spin:
             _btns = _spin.findChildren(QAbstractButton)
             if len(_btns) >= 2:
-                _btns[0].setIcon(_tri_icon([(0.1, 0.85), (0.9, 0.85), (0.5, 0.15)], "#8E97AB", 10, 8))
+                _btns[0].setIcon(_triangle_icon([(0.1, 0.85), (0.9, 0.85), (0.5, 0.15)], "#8E97AB", 10, 8))
                 _btns[0].setIconSize(QSize(10, 8))
-                _btns[1].setIcon(_tri_icon([(0.1, 0.15), (0.9, 0.15), (0.5, 0.85)], "#8E97AB", 10, 8))
+                _btns[1].setIcon(_triangle_icon([(0.1, 0.15), (0.9, 0.15), (0.5, 0.85)], "#8E97AB", 10, 8))
                 _btns[1].setIconSize(QSize(10, 8))
 
+    def _init_calendar_icons(self):
+        """Style the archive date field's own built-in calendar popup
+        (from setCalendarPopup(True)) to match the dark theme.
+
+        Note: the QDateTimeEdit's calendar-popup *trigger* is drawn by
+        the style as a `::drop-down`/`::down-arrow` sub-control (see
+        styles.py), not a real child widget -- there is nothing for
+        findChild(QToolButton) to locate or re-icon there, so it isn't
+        attempted. The visible calendar button next to the date field is
+        a separate, explicit QToolButton (see _build_calendar_button)
+        with its own popup, precisely so its icon/size/click target are
+        fully within our control."""
+        self._style_calendar_nav_icons(self._archive_dt_edit.calendarWidget())
 
     def _set_fields_locked(self, locked: bool):
         self._vid_input.setReadOnly(locked)

@@ -133,10 +133,15 @@ def _lbl(text, color=_TEXT, size=10, bold=False,
 class VADDialog(QDialog):
     """Dialog displaying VAD wind profile hodograph with time scrubber."""
 
-    def __init__(self, site: str, parent=None):
+    def __init__(self, site: str, parent=None, preloaded_set: Optional[VADSet] = None):
+        """`preloaded_set`, when given, is displayed as-is instead of
+        fetching live NEXRAD VAD data for `site` -- used for archive-mode
+        sources (e.g. CLAMPS) that are fetched by the caller ahead of time
+        for a specific archive date rather than "now"."""
         super().__init__(parent, Qt.WindowType.Window)
         self.site = site
         self.vad_set: Optional[VADSet] = None
+        self._preloaded_set = preloaded_set
         self._cur_idx = 0
         self._tick_labels: list[QLabel] = []
         self._param_labels: dict[str, QLabel] = {}
@@ -391,9 +396,12 @@ class VADDialog(QDialog):
 
 
     def _fetch_data(self):
-        """Fetch VAD data from THREDDS."""
+        """Fetch VAD data from THREDDS, or use a preloaded archive set."""
         try:
-            self.vad_set = fetch_recent_vads(self.site, count=12)
+            self.vad_set = (
+                self._preloaded_set if self._preloaded_set is not None
+                else fetch_recent_vads(self.site, count=12)
+            )
 
             if len(self.vad_set) == 0:
                 self._header_line2.setText("VAD data not available via THREDDS")

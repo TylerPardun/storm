@@ -362,6 +362,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         from archive.fetchers.satellite_archive_fetcher import ArchiveSatelliteFetcher
         from archive.fetchers.hazard_archive_fetcher import ArchiveHazardFetcher
         from archive.fetchers.sounding_archive_fetcher import ArchiveSoundingFetcher
+        from archive.fetchers.clamps_wind_archive_fetcher import ArchiveClampsWindFetcher
         from archive.fetchers.mqtt_reader import ArchiveMQTTReader
         from ui.controls.archive_controls import ArchiveControls
         from ui.dialogs.archive_loading_dialog import ArchiveLoadingDialog
@@ -430,6 +431,13 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         )
         # also initialise the sounding-station layer so the map shows clickable sites.
         self._sounding_stations_geojson = build_stations_geojson()
+
+        # CLAMPS wind profiles (VAD dialog reuse; on-demand, like soundings).
+        self._archive_clamps_wind = ArchiveClampsWindFetcher(parent=self)
+        self._archive_clamps_wind.sets_ready.connect(self._on_archive_clamps_wind_ready)
+        self._archive_clamps_wind.error.connect(
+            lambda msg: self.status_msg_label.setText(f"CLAMPS wind: {msg}")
+        )
 
         # radar overlay (reuses existing renderer).
         self._radar_overlay = RadarOverlay(self.map_widget)
@@ -3760,10 +3768,34 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._clamps_sounding_fetcher.fetch()
 
     def _on_vad_requested(self):
-        """Open VAD wind profile hodograph dialog for the current radar site."""
+        """Open the VAD wind-profile hodograph dialog: live NEXRAD VAD for
+        the current radar site, or CLAMPS wind profiles for the archive
+        date/known platforms in archive mode (fetched on the archive
+        clock, not "now" -- live NEXRAD semantics don't apply here)."""
+        if self._archive:
+            self.status_msg_label.setText("Fetching CLAMPS wind profiles…")
+            if not self._archive_clamps_wind.fetch(self._archive_time):
+                self.status_msg_label.setText("CLAMPS wind: fetch already in progress")
+            return
+
         site = self.radar_controls.current_site()
         from ui.dialogs.vad_dialog import VADDialog
         dlg = VADDialog(site, parent=self)
+        dlg.exec()
+
+    def _on_archive_clamps_wind_ready(self, sets: dict) -> None:
+        if not sets:
+            self.status_msg_label.setText("CLAMPS wind: no data for this date")
+            return
+        # More than one platform can have data on a given date; show
+        # whichever sorts first for now. Picking among several is a later
+        # UI improvement once that's a common case rather than the
+        # exception it is today.
+        platform_id = sorted(sets)[0]
+        note = f" ({len(sets)} platforms available)" if len(sets) > 1 else ""
+        self.status_msg_label.setText(f"CLAMPS wind: showing {platform_id}{note}")
+        from ui.dialogs.vad_dialog import VADDialog
+        dlg = VADDialog(platform_id, parent=self, preloaded_set=sets[platform_id])
         dlg.exec()
 
     def _toggle_radar_station_picker(self):

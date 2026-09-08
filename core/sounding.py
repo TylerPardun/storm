@@ -83,6 +83,15 @@ class SoundingSet:
         """True when this set came from the NSSL CLAMPS DL Truck."""
         return self.source == "nssl"
 
+    @property
+    def is_clamps_tropoe(self) -> bool:
+        """True when this set came from a CLAMPS AERI/MWR TROPoe thermodynamic
+        retrieval (a remote-sensing profile, not an in-situ radiosonde launch --
+        kept as a distinct source from is_nssl so the two can't collide as
+        comparison-overlay keys and so their real difference in measurement
+        technique stays visible rather than being silently conflated)."""
+        return self.source == "clamps_tropoe"
+
     def get(self, slot_offset: int):
         """Return the Sounding for a given hour offset, or None."""
         for s in self.soundings:

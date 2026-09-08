@@ -186,7 +186,13 @@ class ArchiveSoundingFetcher(QObject):
 
 
     def _do_fetch_nssl(self, t: datetime) -> None:
-        """Fetch all NSSL soundings from the same UTC day as t, up to and including t."""
+        """Fetch all NSSL radiosonde soundings from the same UTC day as t,
+        up to and including t. Falls back to a CLAMPS TROPoe thermodynamic
+        retrieval for the day if no radiosonde launches are found -- a
+        genuinely different measurement technique (remote-sensing
+        retrieval vs. in-situ launch, see SoundingSet.is_clamps_tropoe),
+        not a substitute, but a reasonable fallback when the preferred
+        source has nothing for this date."""
         try:
             from data.fetchers.clamps_sounding_fetcher import (
                 _api_sonde_entries,
@@ -199,28 +205,36 @@ class ArchiveSoundingFetcher(QObject):
                 entry for entry in _api_sonde_entries()
                 if day_start <= entry.file_time <= t
             ]
-            if not entries:
-                raise ValueError("No NSSL soundings available for this archive time")
-
-            entries.sort(key=lambda entry: entry.file_time)
             soundings = []
-            for idx, entry in enumerate(entries):
-                try:
-                    snd = _fetch_and_parse_url(
-                        entry.skewt_url,
-                        entry.file_time,
-                        idx,
-                        entry.raw_url,
-                    )
-                    if snd is not None:
-                        soundings.append(snd)
-                except Exception as e:
-                    log.warning("ArchiveSoundingFetcher: failed to fetch NSSL API file %s: %s", entry.skewt_url, e)
+            if entries:
+                entries.sort(key=lambda entry: entry.file_time)
+                for idx, entry in enumerate(entries):
+                    try:
+                        snd = _fetch_and_parse_url(
+                            entry.skewt_url,
+                            entry.file_time,
+                            idx,
+                            entry.raw_url,
+                        )
+                        if snd is not None:
+                            soundings.append(snd)
+                    except Exception as e:
+                        log.warning("ArchiveSoundingFetcher: failed to fetch NSSL API file %s: %s", entry.skewt_url, e)
 
-            sset = _soundings_to_set(soundings, t)
-            self.sounding_ready.emit(sset)
+            if soundings:
+                sset = _soundings_to_set(soundings, t)
+                self.sounding_ready.emit(sset)
+                return
+
+            from archive.fetchers.clamps_tropoe_archive_fetcher import fetch_clamps_tropoe_soundings
+            tropoe_sset = fetch_clamps_tropoe_soundings(t)
+            if tropoe_sset is not None:
+                self.sounding_ready.emit(tropoe_sset)
+                return
+
+            raise ValueError("No NSSL radiosonde or CLAMPS TROPoe data available for this archive date")
         except Exception as exc:
-            log.error("ArchiveSoundingFetcher: NSSL API sounding failed: %s", exc)
+            log.error("ArchiveSoundingFetcher: NSSL/CLAMPS sounding failed: %s", exc)
             self.fetch_error.emit(f"NSSL sounding error: {exc}")
 
 

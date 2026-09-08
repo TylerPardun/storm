@@ -116,12 +116,18 @@ class SoundingDialog(QDialog):
 
         self._sset = sset
 
-        # check if this is an observed or NSSL sounding set
-        if sset.is_observed or sset.is_nssl:
+        # check if this is an observed, NSSL, or CLAMPS TROPoe sounding set
+        if sset.is_observed or sset.is_nssl or sset.is_clamps_tropoe:
             # default to the most recent (last) sounding
             self._cur_idx = len(sset.soundings) - 1
             self._source_cur_idx[sset.source] = self._cur_idx
-            self.setWindowTitle("NSSL Observed Sounding" if sset.is_nssl else "Observed Sounding")
+            if sset.is_nssl:
+                title = "NSSL Observed Sounding"
+            elif sset.is_clamps_tropoe:
+                title = "CLAMPS TROPoe Profile"
+            else:
+                title = "Observed Sounding"
+            self.setWindowTitle(title)
         else:
             # existing logic for HRRR/Model soundings: default to F0 (Analysis)
             self._cur_idx = next(
@@ -155,8 +161,8 @@ class SoundingDialog(QDialog):
         src = sset.source
         self._sources[src] = sset
         self._enabled_sources.add(src)
-        # pick best matching index: for HRRR secondary snap to F0; for OBS/NSSL use latest
-        if sset.is_observed or sset.is_nssl:
+        # pick best matching index: for HRRR secondary snap to F0; for OBS/NSSL/TROPoe use latest
+        if sset.is_observed or sset.is_nssl or sset.is_clamps_tropoe:
             self._source_cur_idx[src] = len(sset.soundings) - 1
         else:
             self._source_cur_idx[src] = next(
@@ -502,7 +508,7 @@ class SoundingDialog(QDialog):
         self._scrubber.blockSignals(False)
 
         # for obs/nssl: show the day number if any two soundings share the same hour.
-        time_based = self._sset.is_observed or self._sset.is_nssl
+        time_based = self._sset.is_observed or self._sset.is_nssl or self._sset.is_clamps_tropoe
         snd_hours = (
             [s.valid_time.strftime("%H%d") for s in self._sset.soundings]
             if time_based else []
@@ -571,6 +577,14 @@ class SoundingDialog(QDialog):
             )
             self._header_line2.setText(
                 f"Valid {valid_str}  ·  {self._sset.elevation:.0f} m MSL"
+            )
+        elif self._sset.is_clamps_tropoe:
+            valid_str = snd.valid_time.strftime("%H%MZ %d %b %Y")
+            self._header_line1.setText(
+                f"CLAMPS  ·  {self._sset.station_name}"
+            )
+            self._header_line2.setText(
+                f"Valid {valid_str}  ·  {self._sset.elevation:.0f} m MSL  ·  no wind (AERI/MWR retrieval)"
             )
         else:
             f0 = self._sset.get(0)

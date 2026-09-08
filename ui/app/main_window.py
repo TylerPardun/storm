@@ -3587,7 +3587,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if not self.btn_sounding.isChecked():
             return
         if self._archive:
-            # archive mode: HRRR → model sounding, OBS → radiosonde, NSSL not supported.
+            # archive mode: HRRR → model sounding, OBS → radiosonde,
+            # NSSL → CLAMPS radiosonde launch, falling back to a CLAMPS
+            # TROPoe thermodynamic retrieval if no launch exists for the day.
             if mode == "hrrr":
                 self.map_widget.set_obs_sounding_mode(False)
                 self.map_widget.clear_sounding_stations()

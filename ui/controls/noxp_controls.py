@@ -57,8 +57,14 @@ class NoxpControls(QWidget):
         asset_row.addWidget(self._asset_combo, stretch=1)
         col.addLayout(asset_row)
 
-        self._status_label = QLabel("")
+        self._status_label = QLabel("Select a campaign to search")
         self._status_label.setWordWrap(True)
+        self._status_label.setStyleSheet("color: #6E7A8F; font-size: 10px;")
+        # A genuinely-empty word-wrapped QLabel's sizeHint is unstable
+        # during the drawer's open/close animation (it can measure taller
+        # than any real message ever needs); always keeping real text in
+        # it, even as an initial placeholder, avoids that without capping
+        # the height and risking a long message getting clipped.
         col.addWidget(self._status_label)
 
         render_row = QHBoxLayout()
@@ -112,16 +118,26 @@ class NoxpControls(QWidget):
     def set_status(self, text: str) -> None:
         self._status_label.setText(str(text or ""))
 
-    def set_assets(self, assets: list) -> None:
-        """assets: list[RadarAsset] for the currently-selected platform/date."""
-        self._assets = list(assets)
+    def _clear_assets(self) -> None:
+        self._assets = []
         self._asset_combo.blockSignals(True)
         self._asset_combo.clear()
+        self._asset_combo.blockSignals(False)
+        self._btn_render.setEnabled(False)
+
+    def set_assets(self, assets: list) -> None:
+        """assets: list[RadarAsset] for the currently-selected platform/date.
+        Only call this once a search has actually finished -- an in-progress
+        search should show a "searching" status instead (see
+        _on_platform_changed), not an empty list here, which would read as
+        a completed "nothing found" rather than "still looking"."""
+        self._clear_assets()
+        self._assets = list(assets)
+        self._asset_combo.blockSignals(True)
         for asset in self._assets:
             label = asset.nominal_time.strftime("%H:%M:%S UTC") if asset.nominal_time else asset.name
             self._asset_combo.addItem(f"{label} ({asset.format})", asset)
         self._asset_combo.blockSignals(False)
-        self._btn_render.setEnabled(False)
         self.set_status(f"{len(self._assets)} volume(s) found" if self._assets else "No volumes found for this date")
 
     def set_volume_summary(self, volume) -> None:
@@ -148,16 +164,23 @@ class NoxpControls(QWidget):
         self.set_status(f"{self._sweep_combo.count()} sweep(s), {self._field_combo.count()} field(s) — ready to render")
 
     def _on_platform_changed(self, _index: int) -> None:
-        self.set_assets([])
+        self._clear_assets()
         self.set_volume_summary(None)
         platform = self.current_platform()
         if platform is not None:
+            # NOXP discovery is a real bounded network crawl, not a lookup
+            # -- it can take anywhere from a few seconds to over a minute
+            # (see planning/archive-browse-backlog.md's GUI-wiring
+            # writeup), so say so rather than leaving the volume list
+            # looking like an already-completed "nothing here" result.
+            self.set_status(f"Searching {platform.display_name}…")
             self.platform_selected.emit(platform.platform_id)
 
     def _on_asset_changed(self, _index: int) -> None:
         self.set_volume_summary(None)
         asset = self._asset_combo.currentData()
         if asset is not None:
+            self.set_status(f"Loading {asset.name}…")
             self.asset_selected.emit(asset)
 
     def _on_render_clicked(self) -> None:

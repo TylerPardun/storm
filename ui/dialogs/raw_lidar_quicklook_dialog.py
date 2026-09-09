@@ -24,6 +24,7 @@ from PyQt6.QtGui import QPalette, QColor
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
+from config import ACCENT_COLOR as _STORM_ACCENT
 from ui.export_tools import copy_widget_png, save_widget_png
 
 log = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ QToolButton {{
     font-size: 10px;
     font-weight: 700;
 }}
-QToolButton:hover {{ border-color: #00e5ff; color: #00e5ff; }}
+QToolButton:hover {{ border-color: {_STORM_ACCENT}; color: {_STORM_ACCENT}; }}
 QToolButton:pressed {{ background-color: #202033; }}
 """
 

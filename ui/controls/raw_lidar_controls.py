@@ -56,8 +56,16 @@ class RawLidarControls(QWidget):
         asset_row.addWidget(self._btn_view)
         col.addLayout(asset_row)
 
-        self._status_label = QLabel("")
+        self._status_label = QLabel("Searching known sources for this date…")
         self._status_label.setWordWrap(True)
+        self._status_label.setStyleSheet("color: #6E7A8F; font-size: 10px;")
+        # A genuinely-empty word-wrapped QLabel's sizeHint is unstable
+        # during the drawer's open/close animation (it can measure taller
+        # than any real message ever needs); always keeping real text in
+        # it, even as an initial placeholder, avoids that without capping
+        # the height and risking a long message getting clipped. Accurate
+        # as a placeholder since discovery runs automatically once archive
+        # mode starts (main_window._begin_archive_startup), not on open.
         col.addWidget(self._status_label)
 
         outer.addWidget(self._drawer)

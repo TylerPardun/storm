@@ -184,12 +184,23 @@ class ArchiveNoxpRadarFetcher(QObject):
             return
         self.assets_ready.emit(platform_id, inventory.assets)
         if inventory.errors or inventory.pending:
-            detail = "; ".join(inventory.errors) if inventory.errors else f"{inventory.pending} subcatalog(s) unchecked"
+            # Full URLs/exception text go to the log; the on-screen status
+            # stays short so it reads at a glance instead of wrapping to
+            # several lines of raw request detail.
+            if inventory.errors:
+                reason = inventory.errors[0].split(": ", 1)[-1]
+                if len(inventory.errors) > 1:
+                    reason += f" (+{len(inventory.errors) - 1} more)"
+            else:
+                reason = f"{inventory.pending} subcatalog(s) unchecked"
             note = (
-                f"NOXP search for {platform_id} was incomplete ({detail}) -- "
-                f"found {len(inventory.assets)} volume(s) so far, more may exist; try again"
+                f"NOXP search incomplete ({reason}) -- "
+                f"found {len(inventory.assets)} so far, more may exist; try again"
             )
-            log.warning("ArchiveNoxpRadarFetcher: %s", note)
+            log.warning(
+                "ArchiveNoxpRadarFetcher: search for %s was incomplete -- errors=%s pending=%s found=%d",
+                platform_id, inventory.errors, inventory.pending, len(inventory.assets),
+            )
             self.error.emit(note)
 
     def load_volume(self, platform_id: str, asset) -> bool:

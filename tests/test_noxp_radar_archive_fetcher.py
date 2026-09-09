@@ -60,7 +60,8 @@ def test_do_discover_still_emits_assets_ready_when_the_crawl_was_incomplete():
     fetcher.error.connect(errors.append)
     fetcher._do_discover("NOXP-2013", "https://example.test/2013/catalog.html", datetime(2013, 5, 31, tzinfo=timezone.utc))
     assert assets_events == [("NOXP-2013", [asset])]
-    assert errors and 'incomplete' in errors[0] and '1 volume' in errors[0]
+    assert errors and 'incomplete' in errors[0] and 'found 1' in errors[0]
+    assert 'example.test' not in errors[0]  # raw URLs stay in the log, not the on-screen status
 
 
 def test_do_discover_surfaces_a_root_fetch_failure_as_zero_assets_plus_an_error():

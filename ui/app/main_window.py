@@ -495,6 +495,24 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._time_ctrl.time_changed.connect(self._archive_asos.on_time_changed)
             self.map_widget.asos_bbox_selected.connect(self._on_archive_asos_bbox_selected)
 
+        # Damage-survey paths (DAT, falling back to NCEI Storm Events),
+        # bbox-draw like ASOS above -- reuses the same asos_bbox_selected
+        # draw tool (decided deliberately: the draw gesture itself is
+        # generic, only the method/signal names are ASOS-specific; each
+        # feature self-guards by its own toolbar button's checked state).
+        # No render-worker/chunking needed here, unlike ASOS's per-station
+        # PNG glyphs -- this is one JS call with a modest GeoJSON payload.
+        self._archive_damage_paths = None
+        if feature_flags.is_enabled("damage_paths"):
+            from archive.fetchers.damage_paths_archive_fetcher import ArchiveDamagePathsFetcher
+            self._archive_damage_paths = ArchiveDamagePathsFetcher(self._archive_time, parent=self)
+            self._archive_damage_paths_showing = False
+            self._archive_damage_paths.paths_ready.connect(self._on_archive_damage_paths_ready)
+            self._archive_damage_paths.error.connect(
+                lambda msg: self.status_msg_label.setText(f"Damage paths: {msg}")
+            )
+            self.map_widget.asos_bbox_selected.connect(self._on_archive_damage_paths_bbox_selected)
+
         # radar overlay (reuses existing renderer).
         self._radar_overlay = RadarOverlay(self.map_widget)
 
@@ -1265,6 +1283,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             feature_flags.is_enabled("noxp_radar")
             or feature_flags.is_enabled("raw_lidar_quicklook")
             or feature_flags.is_enabled("archive_asos")
+            or feature_flags.is_enabled("damage_paths")
         ):
             self._add_separator(tb)
 
@@ -1303,6 +1322,13 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 "ASOS", "Draw a bounding box to show historical ASOS observations (archive)", tb
             )
             self.btn_archive_asos.toggled.connect(self._on_archive_asos_toggled)
+
+        if self._archive and feature_flags.is_enabled("damage_paths"):
+            # No drawer -- like ASOS, nothing to pick from a list.
+            self.btn_damage_paths = self._toolbar_toggle(
+                "DAMAGE", "Draw a bounding box to show NWS damage-survey paths (archive)", tb
+            )
+            self.btn_damage_paths.toggled.connect(self._on_damage_paths_toggled)
 
         self.btn_surface = self._toolbar_toggle(
             "SURFACE", "Show/hide surface observation controls", tb
@@ -4117,6 +4143,50 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                     time.sleep(0.015)
 
         threading.Thread(target=_render_worker, daemon=True).start()
+
+    # -- Damage-survey paths (archive) -----------------------------------
+
+    def _on_damage_paths_toggled(self, checked: bool) -> None:
+        """Same shape as _on_archive_asos_toggled: no drawer, checking
+        enters bbox-draw mode (unless already showing something), unchecking
+        clears everything and exits draw mode."""
+        if checked:
+            if not self._archive_damage_paths_showing:
+                self.status_msg_label.setText("Damage paths: draw a bounding box")
+                self.map_widget.set_asos_bbox_mode(True)
+            return
+        self.map_widget.set_asos_bbox_mode(False)
+        self.map_widget.run_js(
+            "if(window.stormRestoreAsosMapInteractions) stormRestoreAsosMapInteractions();"
+        )
+        self.map_widget.clear_damage_paths()
+        self._archive_damage_paths_showing = False
+
+    def _on_archive_damage_paths_bbox_selected(self, west: float, south: float, east: float, north: float) -> None:
+        """asos_bbox_selected is shared with ASOS's own archive handler (and
+        live mode's, which never runs in archive mode) on the same signal --
+        only act on it when our button is the one that put the map into
+        draw mode."""
+        if self._archive_damage_paths is None or not self.btn_damage_paths.isChecked():
+            return
+        self.status_msg_label.setText("Damage paths: searching…")
+        self.map_widget.set_asos_bbox_mode(False)
+        self.map_widget.run_js(
+            "if(window.stormRestoreAsosMapInteractions) stormRestoreAsosMapInteractions();"
+        )
+        self.map_widget.clear_damage_paths()
+        self._archive_damage_paths_showing = False
+        self._archive_damage_paths.set_bbox(west, south, east, north)
+
+    def _on_archive_damage_paths_ready(self, fc: dict) -> None:
+        count = len(fc.get("features", []))
+        if count:
+            source = (fc["features"][0].get("properties", {}) or {}).get("damage_source", "damage path")
+            self.status_msg_label.setText(f"Damage paths: {count} found ({source})")
+        else:
+            self.status_msg_label.setText("Damage paths: none found in this box")
+        self._archive_damage_paths_showing = True
+        self.map_widget.set_damage_paths(json.dumps(fc))
 
     def _toggle_radar_station_picker(self):
         self._set_radar_station_picker_visible(not self._radar_station_picker_visible)

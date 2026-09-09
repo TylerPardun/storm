@@ -54,6 +54,12 @@ FEATURES = {
         default_enabled=True,
         admin_only=True,
     ),
+    "damage_paths": Feature(
+        key="damage_paths",
+        label="Damage paths (archive)",
+        default_enabled=True,
+        admin_only=True,
+    ),
 }
 
 

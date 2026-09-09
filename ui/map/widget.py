@@ -506,6 +506,16 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         """Remove the route line and destination marker."""
         self.run_js("if(window.stormClearRoute) stormClearRoute();")
 
+    def set_damage_paths(self, geojson_str: str):
+        """Show damage-survey path lines (DAT/NCEI Storm Events), colored by EF-scale rating."""
+        self.run_js(
+            f"if(window.stormSetDamagePaths) stormSetDamagePaths({json.dumps(geojson_str)});"
+        )
+
+    def clear_damage_paths(self):
+        """Remove all damage-survey path lines from the map."""
+        self.run_js("if(window.stormClearDamagePaths) stormClearDamagePaths();")
+
     def set_private_pin_own_location(self, lat: float, lon: float):
         """Expose the local vehicle fix to local-only private pin tools."""
         self.run_js(

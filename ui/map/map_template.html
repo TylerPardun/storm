@@ -460,6 +460,8 @@
     window.stormSetRoute = _stormNoop;
     window.stormClearRoute = _stormNoop;
     window.stormSetRoutePickMode = _stormNoop;
+    window.stormSetDamagePaths = _stormNoop;
+    window.stormClearDamagePaths = _stormNoop;
     window.stormSetPrivatePinOwnLocation = _stormNoop;
     // cwa overlay hooks (populated when the map loads)
     window.stormSetCwaGeoJSON = _stormNoop;
@@ -1146,6 +1148,60 @@
         paint: {'line-color':'#4A90E2','line-width':5,'line-opacity':0.9}
       }, 'road-label-motorway');
 
+      // Damage-survey path lines (DAT / NCEI Storm Events), EF-scale colored.
+      // Ported from MESO-VIEW's dat-tracks layers -- same paint values, since
+      // they already work well. Casing + colored line + start/end circle
+      // markers (synthesized client-side in _stormDamagePathEndpoints),
+      // plus an invisible wide hit-line for hover picking (mirrors
+      // road-hover-hit above) since the visible line is too thin to hover.
+      map.addSource('damage-paths', {type:'geojson', data:{type:'FeatureCollection', features:[]}});
+      map.addLayer({
+        id: 'damage-paths-hit', type: 'line', source: 'damage-paths',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        layout: {'line-join':'round','line-cap':'round'},
+        paint: {'line-color':'#000000','line-opacity':0.01,'line-width':16}
+      }, 'road-label-motorway');
+      map.addLayer({
+        id: 'damage-paths-casing', type: 'line', source: 'damage-paths',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        layout: {'line-join':'round','line-cap':'round'},
+        paint: {
+          'line-color': 'rgba(0,0,0,0.82)',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 6.0, 9, 8.0, 13, 10.0],
+          'line-opacity': 0.92
+        }
+      }, 'road-label-motorway');
+      map.addLayer({
+        id: 'damage-paths-line', type: 'line', source: 'damage-paths',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        layout: {'line-join':'round','line-cap':'round'},
+        paint: {
+          'line-color': ['coalesce', ['get', 'ef_color'], '#bee8ff'],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.8, 9, 5.2, 13, 6.8],
+          'line-opacity': 1.0
+        }
+      }, 'road-label-motorway');
+      map.addLayer({
+        id: 'damage-paths-start', type: 'circle', source: 'damage-paths',
+        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'marker'], 'start']],
+        paint: {
+          'circle-color': '#ffffff',
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 4.0, 9, 5.2, 13, 6.4],
+          'circle-stroke-width': 2,
+          'circle-stroke-color': ['coalesce', ['get', 'ef_color'], '#bee8ff']
+        }
+      }, 'road-label-motorway');
+      map.addLayer({
+        id: 'damage-paths-end', type: 'circle', source: 'damage-paths',
+        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'marker'], 'end']],
+        paint: {
+          'circle-color': ['coalesce', ['get', 'ef_color'], '#bee8ff'],
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 4.0, 9, 5.2, 13, 6.4],
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#ffffff'
+        }
+      }, 'road-label-motorway');
+
       map.addSource('scan-sectors', {type:'geojson', data:{type:'FeatureCollection',features:[]}});
       if (window._scanSectorsData) {
         try { map.getSource('scan-sectors').setData(JSON.parse(window._scanSectorsData)); }
@@ -1823,10 +1879,24 @@
         var _hits = _hazardLayers.length > 0
           ? map.queryRenderedFeatures(e.point, {layers: _hazardLayers})
           : [];
-        if (_hits.length > 0) {
+        // Damage-path hover uses the same shared tooltip -- queried
+        // separately (not folded into _hazardLayers) so that array's
+        // existing hazard-specific semantics/filtering stay untouched.
+        var _dmgHits = (map.getLayer('damage-paths-hit') &&
+                        map.getLayoutProperty('damage-paths-hit', 'visibility') === 'visible')
+          ? map.queryRenderedFeatures(e.point, {layers: ['damage-paths-hit']})
+          : [];
+        if (_hits.length > 0 || _dmgHits.length > 0) {
           // build a label for every unique product under the cursor.
           var _tipParts = [];
           var _tipSeen = {};
+          if (_dmgHits.length > 0) {
+            var _dp = _dmgHits[0].properties || {};
+            var _dpBits = [_dp.ef_label || 'Damage path'];
+            if (_dp.length != null) _dpBits.push(Number(_dp.length).toFixed(1) + 'mi');
+            _dpBits.push(_dp.damage_source || 'Damage path');
+            _tipParts.push(_dpBits.join(' · '));
+          }
           // probabilistic layers first — _spcProbLabel merges CIG/significant + prob.
           [['spc-tor','Tor'],['spc-wind','Wind'],['spc-hail','Hail'],['spc-prob','Prob'],['spc-sig','Sig']].forEach(function(pv) {
             var l = _spcProbLabel(pv[1], _hits, pv[0]);
@@ -3522,6 +3592,46 @@
       var src = map.getSource('route');
       if (src) src.setData({type:'Feature',geometry:{type:'LineString',coordinates:[]}});
       if (_destMarker) { _destMarker.remove(); _destMarker = null; }
+    };
+
+    // Synthesize start/end Point features from each LineString so the
+    // damage-paths-start/-end circle layers have something to filter on.
+    // Ported from MESO-VIEW's _datLineEndpoints/_prepareDATFeatureCollection.
+    function _stormDamagePathEndpoints(feature) {
+      if (!feature || !feature.geometry || feature.geometry.type !== 'LineString') return [];
+      var coords = feature.geometry.coordinates || [];
+      if (!coords.length) return [];
+      var props = Object.assign({}, feature.properties || {});
+      var start = {type:'Feature', geometry:{type:'Point', coordinates: coords[0]},
+                   properties: Object.assign({}, props, {marker:'start'})};
+      var end = {type:'Feature', geometry:{type:'Point', coordinates: coords[coords.length - 1]},
+                 properties: Object.assign({}, props, {marker:'end'})};
+      return [start, end];
+    }
+
+    function _stormPrepareDamagePathsFC(fc) {
+      var features = (fc && Array.isArray(fc.features)) ? fc.features : [];
+      var out = [];
+      features.forEach(function(f) {
+        if (!f || !f.geometry) return;
+        out.push(f);
+        out.push.apply(out, _stormDamagePathEndpoints(f));
+      });
+      return {type:'FeatureCollection', features: out};
+    }
+
+    window.stormSetDamagePaths = function(geojsonStr) {
+      var src = map.getSource('damage-paths');
+      if (!src) return;
+      try {
+        var fc = JSON.parse(geojsonStr);
+        src.setData(_stormPrepareDamagePathsFC(fc));
+      } catch(e) { console.warn('stormSetDamagePaths:', e); }
+    };
+
+    window.stormClearDamagePaths = function() {
+      var src = map.getSource('damage-paths');
+      if (src) src.setData({type:'FeatureCollection', features:[]});
     };
 
     window.stormSetDestinationMarker = function(lon, lat) {

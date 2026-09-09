@@ -36,6 +36,18 @@ FEATURES = {
         default_enabled=True,
         admin_only=False,
     ),
+    "noxp_radar": Feature(
+        key="noxp_radar",
+        label="NOXP mobile radar (archive)",
+        default_enabled=True,
+        admin_only=True,
+    ),
+    "raw_lidar_quicklook": Feature(
+        key="raw_lidar_quicklook",
+        label="CLAMPS raw lidar quicklook (archive)",
+        default_enabled=True,
+        admin_only=True,
+    ),
 }
 
 

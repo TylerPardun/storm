@@ -33,11 +33,14 @@ from ui.controls.landcover_controls import LandcoverControls
 from ui.controls.mesoanalysis_controls import MesoanalysisControls
 from ui.controls.sfcoa_controls import SfcoaControls
 from ui.controls.surface_controls import SurfaceControls
+from ui.controls.noxp_controls import NoxpControls
+from ui.controls.raw_lidar_controls import RawLidarControls
 from ui.widgets.outlook_panel import OutlookPanel
 from ui.map.radar_overlay import RadarOverlay, render_scan_to_png as _render_scan_to_png
 from ui.sounding.dialog import SoundingDialog
 from ui.sounding.controls import SoundingControls
 from ui.dialogs.vehicle_timeseries_dialog import VehicleTimeseriesDialog
+from ui.dialogs.raw_lidar_quicklook_dialog import RawLidarQuicklookDialog
 from archive.vehicle_speed import calculate_vehicle_speed, format_vehicle_speed
 from ui.app.overlay_geometry import bottom_left_y_avoiding
 from ui.widgets.annotation_tools import AnnotationTools
@@ -171,6 +174,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     _render_ready = pyqtSignal(object)
     # emitted from the archive-render thread when an archive scan PNG is ready.
     _archive_render_ready = pyqtSignal(object)
+    # emitted from the NOXP render thread when a rendered sweep PNG is ready.
+    _noxp_render_ready = pyqtSignal(object)
     # emitted when the user aborts an archive loading session.
     session_aborted = pyqtSignal()
 
@@ -439,6 +444,34 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             lambda msg: self.status_msg_label.setText(f"CLAMPS wind: {msg}")
         )
 
+        # NOXP mobile radar (on-demand, platform picked in noxp_controls;
+        # noxp_controls itself, and its platform list, are set up in
+        # _init_toolbar -- that always runs before this).
+        self._archive_noxp = None
+        if feature_flags.is_enabled("noxp_radar"):
+            from archive.fetchers.noxp_radar_archive_fetcher import ArchiveNoxpRadarFetcher
+            self._noxp_current_volume = None
+            self._archive_noxp = ArchiveNoxpRadarFetcher(parent=self)
+            self._archive_noxp.assets_ready.connect(self._on_archive_noxp_assets_ready)
+            self._archive_noxp.volume_loaded.connect(self._on_archive_noxp_volume_loaded)
+            self._archive_noxp.error.connect(
+                lambda msg: self.status_msg_label.setText(f"NOXP: {msg}")
+            )
+
+        # CLAMPS raw lidar quicklook (discovers every known source once per
+        # archive date; on-demand load of one selected file).
+        self._archive_raw_lidar = None
+        self._raw_lidar_dialog = None
+        if feature_flags.is_enabled("raw_lidar_quicklook"):
+            from archive.fetchers.raw_lidar_quicklook_fetcher import ArchiveRawLidarQuicklookFetcher
+            self._archive_raw_lidar = ArchiveRawLidarQuicklookFetcher(parent=self)
+            self._archive_raw_lidar.assets_ready.connect(self._on_archive_raw_lidar_assets_ready)
+            self._archive_raw_lidar.rays_ready.connect(self._on_archive_raw_lidar_rays_ready)
+            self._archive_raw_lidar.error.connect(
+                lambda msg: self.status_msg_label.setText(f"Raw lidar: {msg}")
+            )
+            self._archive_raw_lidar.fetch(self._archive_time)
+
         # radar overlay (reuses existing renderer).
         self._radar_overlay = RadarOverlay(self.map_widget)
 
@@ -458,6 +491,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_pending_render_scan = None
         self._archive_render_in_flight = False
         self._archive_render_ready.connect(self._on_archive_render_ready)
+        self._noxp_render_ready.connect(self._on_noxp_render_ready)
 
         # wire time controller to archive fetchers.
         self._time_ctrl.time_changed.connect(self._archive_mqtt.on_time_changed)
@@ -1204,8 +1238,36 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.btn_sfcoa.toggled.connect(self._on_sfcoa_drawer_toggled)
             self.sfcoa_controls.content_resized.connect(self._start_layout_pulse)
 
-        if feature_flags.is_enabled("mesoanalysis") or feature_flags.is_enabled("sfcoa"):
+        if self._archive and (feature_flags.is_enabled("noxp_radar") or feature_flags.is_enabled("raw_lidar_quicklook")):
             self._add_separator(tb)
+
+        if self._archive and feature_flags.is_enabled("noxp_radar"):
+            from archive.catalog import ALL_PLATFORMS as _ALL_PLATFORMS
+            self.btn_noxp = self._toolbar_toggle(
+                "NOXP", "Show/hide NOXP mobile radar controls (archive)", tb
+            )
+            self.noxp_controls = NoxpControls(self._map_container)
+            self.noxp_controls.setObjectName("floatingToolbar")
+            self.noxp_controls.set_platforms(
+                [p for p in _ALL_PLATFORMS if p.family == "NOXP Radar"]
+            )
+            self.btn_noxp.toggled.connect(self.noxp_controls.toggle_drawer)
+            self.btn_noxp.toggled.connect(self._start_layout_pulse)
+            self.noxp_controls.platform_selected.connect(self._on_noxp_platform_selected)
+            self.noxp_controls.asset_selected.connect(self._on_noxp_asset_selected)
+            self.noxp_controls.render_requested.connect(self._on_noxp_render_requested)
+
+        if self._archive and feature_flags.is_enabled("raw_lidar_quicklook"):
+            self.btn_raw_lidar = self._toolbar_toggle(
+                "RAW LIDAR", "Show/hide CLAMPS raw lidar quicklook controls (archive)", tb
+            )
+            self.raw_lidar_controls = RawLidarControls(self._map_container)
+            self.raw_lidar_controls.setObjectName("floatingToolbar")
+            from archive.fetchers.raw_lidar_archive_fetcher import KNOWN_RAW_LIDAR_SOURCES
+            self.raw_lidar_controls.set_sources(KNOWN_RAW_LIDAR_SOURCES)
+            self.btn_raw_lidar.toggled.connect(self.raw_lidar_controls.toggle_drawer)
+            self.btn_raw_lidar.toggled.connect(self._start_layout_pulse)
+            self.raw_lidar_controls.quicklook_requested.connect(self._on_raw_lidar_quicklook_requested)
 
         self.btn_surface = self._toolbar_toggle(
             "SURFACE", "Show/hide surface observation controls", tb
@@ -1641,6 +1703,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 _stack(self.mesoanalysis_controls)
             if hasattr(self, "sfcoa_controls") and self.btn_sfcoa.isChecked():
                 _stack(self.sfcoa_controls)
+            if hasattr(self, "noxp_controls") and self.btn_noxp.isChecked():
+                _stack(self.noxp_controls)
+            if hasattr(self, "raw_lidar_controls") and self.btn_raw_lidar.isChecked():
+                _stack(self.raw_lidar_controls)
             if hasattr(self, "surface_controls") and self.btn_surface.isChecked():
                 _stack(self.surface_controls)
             if hasattr(self, "sounding_controls") and self.btn_sounding.isChecked():
@@ -3799,6 +3865,99 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         from ui.dialogs.vad_dialog import VADDialog
         dlg = VADDialog(platform_id, parent=self, preloaded_set=sets[platform_id])
         dlg.exec()
+
+    # -- NOXP mobile radar (archive) ------------------------------------
+
+    def _on_noxp_platform_selected(self, platform_id: str) -> None:
+        from archive.catalog import catalogs_for_platform
+        platform = next((p for p in self._archive_noxp_platforms() if p.platform_id == platform_id), None)
+        if platform is None:
+            return
+        catalog_root = catalogs_for_platform(platform)[0].url
+        self.status_msg_label.setText(f"NOXP: searching {platform.display_name}…")
+        if not self._archive_noxp.discover(platform_id, catalog_root, self._archive_time):
+            self.status_msg_label.setText("NOXP: search already in progress")
+
+    def _archive_noxp_platforms(self):
+        from archive.catalog import ALL_PLATFORMS
+        return [p for p in ALL_PLATFORMS if p.family == "NOXP Radar"]
+
+    def _on_archive_noxp_assets_ready(self, platform_id: str, assets: list) -> None:
+        if self.noxp_controls.current_platform() is None or self.noxp_controls.current_platform().platform_id != platform_id:
+            return  # a later platform selection has already superseded this result
+        self.noxp_controls.set_assets(assets)
+        self.status_msg_label.setText(f"NOXP: {len(assets)} volume(s) found")
+
+    def _on_noxp_asset_selected(self, asset) -> None:
+        platform = self.noxp_controls.current_platform()
+        if platform is None:
+            return
+        self.status_msg_label.setText(f"NOXP: loading {asset.name}…")
+        if not self._archive_noxp.load_volume(platform.platform_id, asset):
+            self.status_msg_label.setText("NOXP: load already in progress")
+
+    def _on_archive_noxp_volume_loaded(self, platform_id: str, volume) -> None:
+        self._noxp_current_volume = volume
+        self.noxp_controls.set_volume_summary(volume)
+        self.status_msg_label.setText(f"NOXP: {volume.scan_type} volume loaded ({volume.provenance.get('format', '?')})")
+
+    def _on_noxp_render_requested(self, sweep_index: int, field_name: str) -> None:
+        if self._noxp_current_volume is None:
+            return
+        from archive.fetchers.noxp_radar_archive_fetcher import noxp_volume_to_scan
+        try:
+            scan = noxp_volume_to_scan(self._noxp_current_volume, sweep_index, field_name)
+        except ValueError as exc:
+            self.status_msg_label.setText(f"NOXP: {exc}")
+            return
+        self.status_msg_label.setText(f"NOXP: rendering sweep {sweep_index} ({field_name})…")
+        from ui.map.radar_overlay import RENDER_GRID_SIZE
+        threading.Thread(
+            target=self._bg_render_noxp, args=(scan, max(RENDER_GRID_SIZE, 768)), daemon=True,
+        ).start()
+
+    def _bg_render_noxp(self, scan, grid_size: int) -> None:
+        """A NOXP render is a discrete, user-triggered one-shot -- unlike the
+        continuously-advancing NEXRAD archive playback, there's no in-flight
+        render to preempt, so this doesn't need that pipeline's
+        generation-tracking, just the same render + inject calls."""
+        try:
+            png, bounds, _ = _render_scan_to_png(scan, grid_size)
+        except Exception as exc:
+            log.error("NOXP render failed: %s", exc)
+            self._noxp_render_ready.emit({"error": str(exc)})
+            return
+        self._noxp_render_ready.emit({"png": png, "bounds": bounds, "scan": scan})
+
+    def _on_noxp_render_ready(self, result: dict) -> None:
+        if "error" in result:
+            self.status_msg_label.setText(f"NOXP: render error — {result['error']}")
+            return
+        self._radar_overlay.inject(result["png"], result["bounds"])
+        scan = result["scan"]
+        self.status_msg_label.setText(
+            f"NOXP: {scan.native_field} {scan.elevation_deg:.1f}° {scan.scan_time.strftime('%H:%MZ')}"
+        )
+
+    # -- CLAMPS raw lidar quicklook (archive) ---------------------------
+
+    def _on_archive_raw_lidar_assets_ready(self, assets_by_source: dict) -> None:
+        self.raw_lidar_controls.set_assets_for_all_sources(assets_by_source)
+
+    def _on_raw_lidar_quicklook_requested(self, platform_id: str, asset) -> None:
+        self.status_msg_label.setText(f"Raw lidar: loading {asset.filename}…")
+        if not self._archive_raw_lidar.load(platform_id, asset):
+            self.status_msg_label.setText("Raw lidar: load already in progress")
+
+    def _on_archive_raw_lidar_rays_ready(self, platform_id: str, rays) -> None:
+        self.status_msg_label.setText(f"Raw lidar: {platform_id} loaded")
+        if self._raw_lidar_dialog is not None and self._raw_lidar_dialog.platform_id == platform_id:
+            self._raw_lidar_dialog.set_rays(rays)
+            self._raw_lidar_dialog.raise_()
+            self._raw_lidar_dialog.activateWindow()
+            return
+        self._raw_lidar_dialog = RawLidarQuicklookDialog(platform_id, parent=self, preloaded_rays=rays)
+        self._raw_lidar_dialog.show()
 
     def _toggle_radar_station_picker(self):
         self._set_radar_station_picker_visible(not self._radar_station_picker_visible)

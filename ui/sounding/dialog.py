@@ -558,8 +558,8 @@ class SoundingDialog(QDialog):
 
         if self._sset.is_nssl:
             valid_str = snd.valid_time.strftime("%H%MZ %d %b %Y")
-            lat = snd.lat if (snd.lat != 0.0 or snd.lon != 0.0) else self._sset.lat
-            lon = snd.lon if (snd.lat != 0.0 or snd.lon != 0.0) else self._sset.lon
+            lat = snd.lat if (snd.location_source is not None or snd.lat != 0.0 or snd.lon != 0.0) else self._sset.lat
+            lon = snd.lon if (snd.location_source is not None or snd.lat != 0.0 or snd.lon != 0.0) else self._sset.lon
             self._header_line1.setText("NSSL  ·  DL Truck")
             location = ""
             if lat != 0.0 or lon != 0.0:

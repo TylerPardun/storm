@@ -2,9 +2,11 @@
 import json
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -21,20 +23,61 @@ log = logging.getLogger(__name__)
 _ANNOTATIONS_PATH = "annotations"
 _TOPICS = ("vehicles", "annotations", "cones", "drawings", "scan_sectors")
 
+# THREDDS mirror of the same storm.<topic>.<date> files as the API below --
+# public, unauthenticated, and confirmed live 2026-09-08 to be the exact
+# same backing data (its data/sonde/ start date matches what
+# clamps_sonde_archive_fetcher.py independently found there) and format
+# (a real scan_sectors record's fields match ScanSector.__init__ exactly,
+# and one record's time+position matched the FOFS dltruck GPS track at
+# the same instant to 5 decimal places). Tried first: at the time this was
+# added, config.NSSL_API_ROOT was returning a 404 for every path tested,
+# including endpoints unrelated to archive mode, suggesting that host/app
+# was down entirely rather than these specific dates being unavailable.
+# THREDDS's retention here is a rolling ~5 months, not permanent, so the
+# API is still tried as a fallback -- for older dates, and in case it
+# comes back for dates THREDDS doesn't have.
+_THREDDS_ANNOTATIONS_ROOT = "https://data.nssl.noaa.gov/thredds/fileServer/FOFS/Storm/annotations"
 
-def _fetch_text(url: str) -> Optional[str]:
-    """Fetch an archive API file as text; return None on 404, raise on other errors."""
+
+def _fetch_text(url: str, *, api_key: bool = False) -> Optional[str]:
+    """Fetch an archive JSONL file as text; return None on 404, raise on
+    other errors. api_key=True adds the NSSL API's auth header; THREDDS
+    doesn't need or want it."""
     try:
         headers = {"User-Agent": "Mozilla/5.0 STORM/1.0"}
-        if config.NSSL_API_KEY:
+        if api_key and config.NSSL_API_KEY:
             headers["X-API-Key"] = config.NSSL_API_KEY
         req = Request(url, headers=headers)
         with urlopen(req, timeout=20, context=config.NSSL_SSL_CONTEXT) as resp:
             return resp.read().decode("utf-8", errors="replace")
-    except Exception as exc:
-        if "404" in str(exc) or "HTTP Error 404" in str(exc):
+    except HTTPError as exc:
+        if exc.code == 404:
             return None
         raise
+
+
+def _fetch_topic_text(topic: str, date_str: str) -> "tuple[str | None, str]":
+    """THREDDS first, API second. Returns (text_or_None, source_used) --
+    source is reported purely for logging, callers don't need to branch
+    on it. THREDDS failures (a genuinely missing date, or any network
+    error) fall through to the API rather than only falling back on a
+    clean 404, since a THREDDS hiccup shouldn't sink the whole lookup
+    when the API might still answer."""
+    thredds_url = f"{_THREDDS_ANNOTATIONS_ROOT}/storm.{topic}.{date_str}"
+    thredds_error = None
+    try:
+        text = _fetch_text(thredds_url)
+        if text is not None:
+            return text, "THREDDS"
+    except Exception as exc:
+        thredds_error = exc
+        log.debug("ArchiveMQTTReader: THREDDS fetch failed for %s %s, trying API: %s", topic, date_str, exc)
+
+    api_url = f"{config.NSSL_API_ROOT}/{_ANNOTATIONS_PATH}/storm.{topic}.{date_str}"
+    text = _fetch_text(api_url, api_key=True)
+    if text is None and thredds_error is not None:
+        raise RuntimeError(f"THREDDS availability unknown for {topic} {date_str}: {thredds_error}; API returned 404") from thredds_error
+    return text, "API"
 
 
 def _parse_timestamp(obj: dict) -> Optional[datetime]:
@@ -226,25 +269,31 @@ class ArchiveMQTTReader(QObject):
 
 
     def _fetch_all(self) -> None:
+        # Each topic is an independent request, and a THREDDS-miss + API-fallback
+        # round trip can take ~10s+ under NSSL's WAF (observed on both hosts, not
+        # just the API) -- fetched sequentially that's 5x worst case (~60s for a
+        # date with no data anywhere). Fetching all 5 topics concurrently instead
+        # bounds the wait to roughly one topic's worst case.
         errors = []
-        for topic in _TOPICS:
-            url = (
-                f"{config.NSSL_API_ROOT}/{_ANNOTATIONS_PATH}/"
-                f"storm.{topic}.{self._date_str}"
-            )
-            try:
-                text = _fetch_text(url)
-                if text:
-                    self._data[topic] = _parse_jsonl(text)
-                    log.info(
-                        "ArchiveMQTTReader: loaded %d %s records",
-                        len(self._data[topic]), topic,
-                    )
-                else:
-                    log.info("ArchiveMQTTReader: no %s file for %s", topic, self._date_str)
-            except Exception as exc:
-                log.error("ArchiveMQTTReader: fetch failed for %s: %s", topic, exc)
-                errors.append(f"{topic}: {exc}")
+        with ThreadPoolExecutor(max_workers=len(_TOPICS)) as pool:
+            futures = {
+                pool.submit(_fetch_topic_text, topic, self._date_str): topic
+                for topic in _TOPICS
+            }
+            for future, topic in futures.items():
+                try:
+                    text, source = future.result()
+                    if text:
+                        self._data[topic] = _parse_jsonl(text)
+                        log.info(
+                            "ArchiveMQTTReader: loaded %d %s records (%s)",
+                            len(self._data[topic]), topic, source,
+                        )
+                    else:
+                        log.info("ArchiveMQTTReader: no %s file for %s", topic, self._date_str)
+                except Exception as exc:
+                    log.error("ArchiveMQTTReader: fetch failed for %s: %s", topic, exc)
+                    errors.append(f"{topic}: {exc}")
 
         self._loaded = False  # set True on main thread via _load_complete signal
         if errors:

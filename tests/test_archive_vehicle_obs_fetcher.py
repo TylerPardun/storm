@@ -11,9 +11,11 @@ from archive.fetchers.vehicle_obs_archive_fetcher import (
     ArchiveVehicleObsFetcher,
     _daily_url,
     _urlopen_with_retry,
+    load_dltruck_track,
     parse_vehicle_csv,
     parse_vehicle_netcdf,
 )
+from core.observation import Observation
 
 
 def _write_processed_netcdf(path, epochtime, lat, lon, t_fast=None):
@@ -204,3 +206,38 @@ def test_fetcher_looks_up_and_emits_latest_observation():
     assert fetcher.has_fresh_observation("hailcam", _utc(59)) is True
     assert fetcher.has_fresh_observation("hailcam", _utc(66)) is False
     assert fetcher.history("hailcam", _utc(4)) == observations[:1]
+
+
+def _obs_at(lat, lon):
+    return Observation("dltruck", lat, lon, _utc(0))
+
+
+def test_dltruck_track_retains_paired_fixes(monkeypatch):
+    observations = [_obs_at(35.0, -97.0), _obs_at(35.2, -97.2)]
+    requested = []
+    def fetch(self, vehicle_id, icon_type):
+        requested.append(vehicle_id)
+        return observations
+    monkeypatch.setattr(ArchiveVehicleObsFetcher, "_fetch_vehicle", fetch)
+    assert load_dltruck_track(_utc(0)) == observations
+    assert requested == ["dltruck"]
+
+
+def test_dltruck_track_failure_is_unknown(monkeypatch):
+    def fail(*args):
+        raise URLError("timed out")
+    monkeypatch.setattr(ArchiveVehicleObsFetcher, "_fetch_vehicle", fail)
+    assert load_dltruck_track(_utc(0)) == []
+
+
+def test_position_track_uses_launch_time_and_rejects_stale_invalid_fixes():
+    from archive.positions import PositionTrack
+    observations = [Observation("dltruck", 36, -98, _utc(120)),
+                    Observation("dltruck", 35, -97, _utc(0)),
+                    Observation("dltruck", -999, -999, _utc(60))]
+    track = PositionTrack(observations)
+    assert track.nearest(_utc(119)).lat == 36
+    assert track.nearest(_utc(20)).lat == 35
+    assert track.nearest(_utc(60)).lat == 35  # ties prefer earlier actual fix
+    assert track.nearest(_utc(181)) is None
+    assert track.nearest(float("nan")) is None

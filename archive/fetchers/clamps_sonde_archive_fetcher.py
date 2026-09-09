@@ -20,9 +20,13 @@ format), not another copy of the same skewT file -- so only .b1 is used.
 
 Launch lat/lon: unlike the live API path, no raw/location-header
 companion file was found alongside these THREDDS files (only the skewT
-text itself), so location defaults to _parse_skewt's own built-in (0, 0)
-"unknown" -- the same behavior the live module already has whenever its
-own raw_url happens to be absent. Not fabricated from another source.
+text itself), so _parse_skewt always returns its own built-in (0, 0)
+"unknown" here -- not fabricated from the skewT file itself. Backfilled
+below (2026-09-08, Tyler) from the DL Truck's own FOFS mesonet GPS
+track instead: it's the same physical vehicle the sonde launches from,
+and that track is real for any date FOFS has it. Falls back to (0, 0)
+when no valid GPS fix lies within 60 seconds of that launch. Each launch
+retains its own position and the GPS timestamp used for the backfill.
 """
 
 from __future__ import annotations
@@ -34,7 +38,9 @@ from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from archive.fetchers.vehicle_obs_archive_fetcher import load_dltruck_track
 from core.sounding import SoundingSet
+from archive.positions import PositionTrack
 from data.fetchers.clamps_sounding_fetcher import _FILENAME_RE, _format_label, _parse_skewt
 
 log = logging.getLogger(__name__)
@@ -134,10 +140,20 @@ def fetch_clamps_sonde_soundings(archive_date: datetime) -> "SoundingSet | None"
     if not soundings:
         return None
 
-    surface_elev = float(soundings[0].height[0]) if soundings[0].height.size > 0 else 0.0
+    track = PositionTrack(load_dltruck_track(archive_date))
+    for sounding in soundings:
+        sounding.location_source = "unknown"
+        fix = track.nearest(sounding.valid_time)
+        if fix is not None:
+            sounding.lat, sounding.lon = fix.lat, fix.lon
+            sounding.location_source = "FOFS dltruck GPS matched to launch time (within 60 s)"
+            sounding.location_time = fix.timestamp
+    latest = soundings[-1]
+    surface_elev = float(latest.height[0]) if latest.height.size else 0.0
+    lat, lon = latest.lat, latest.lon
     return SoundingSet(
-        lat=soundings[0].lat,
-        lon=soundings[0].lon,
+        lat=lat,
+        lon=lon,
         elevation=surface_elev,
         fetch_time=archive_date,
         soundings=soundings,

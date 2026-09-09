@@ -392,3 +392,12 @@ class ArchiveVehicleObsFetcher(QObject):
             url,
         )
         return observations
+
+
+def load_dltruck_track(archive_date: datetime) -> list[Observation]:
+    """Load the truck's measured FOFS track once for timestamp-based backfills."""
+    try:
+        return ArchiveVehicleObsFetcher(archive_date)._fetch_vehicle("dltruck", None)
+    except Exception as exc:
+        log.warning("DL Truck track lookup failed for %s: %s", archive_date.date(), exc)
+        return []

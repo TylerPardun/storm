@@ -1,5 +1,5 @@
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import numpy as np
@@ -40,6 +40,12 @@ class Sounding:
     u_wind:      np.ndarray  # m/s  (eastward component)
     v_wind:      np.ndarray  # m/s  (northward component)
     height:      np.ndarray  # m    (geopotential height MSL)
+
+    # None retains the existing set-location fallback; "unknown" explicitly
+    # prevents borrowing another mobile launch's coordinates.
+    location_source: str | None = None
+    location_time: datetime | None = None
+    provenance: dict = field(default_factory=dict)
 
     @property
     def wind_speed(self) -> np.ndarray:

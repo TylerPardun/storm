@@ -112,7 +112,7 @@ class ArchiveSoundingFetcher(QObject):
                 lat=lat, lon=lon, elevation=elevation,
                 fetch_time=t,
                 soundings=[sounding],
-                source="ruc_rap",
+                source="hrrr",
             )
             self.sounding_ready.emit(sset)
         except Exception as exc:
@@ -186,67 +186,60 @@ class ArchiveSoundingFetcher(QObject):
 
 
     def _do_fetch_nssl(self, t: datetime) -> None:
-        """Fetch all NSSL radiosonde soundings from the same UTC day as t,
-        up to and including t. Tries the live API's rolling sonde index
-        first, then the same launch files discovered directly from
-        THREDDS (permanent, verified per-date coverage rather than the
-        live index's undocumented historical depth), then falls back to
-        a CLAMPS TROPoe thermodynamic retrieval for the day -- a
-        genuinely different measurement technique (remote-sensing
-        retrieval vs. in-situ launch, see SoundingSet.is_clamps_tropoe),
-        not a substitute, but a reasonable fallback when no launch is
-        found by either path."""
-        try:
-            from data.fetchers.clamps_sounding_fetcher import (
-                _api_sonde_entries,
-                _fetch_and_parse_url,
-                _soundings_to_set,
-            )
+        """Try archived launches, the API, then clearly labelled TROPoe retrievals.
 
-            day_start = t.replace(hour=0, minute=0, second=0, microsecond=0)
-            entries = [
-                entry for entry in _api_sonde_entries()
-                if day_start <= entry.file_time <= t
-            ]
+        Provider failures cannot short-circuit another provider. Every result
+        is limited to the selected UTC day and archive time, including TROPoe.
+        """
+        from archive.fetchers.clamps_sonde_archive_fetcher import fetch_clamps_sonde_soundings
+        from archive.fetchers.clamps_tropoe_archive_fetcher import fetch_clamps_tropoe_soundings
+        from data.fetchers.clamps_sounding_fetcher import (
+            _api_sonde_entries, _fetch_and_parse_url, _soundings_to_set,
+        )
+
+        day_start = t.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        def api_soundings():
             soundings = []
-            if entries:
-                entries.sort(key=lambda entry: entry.file_time)
-                for idx, entry in enumerate(entries):
-                    try:
-                        snd = _fetch_and_parse_url(
-                            entry.skewt_url,
-                            entry.file_time,
-                            idx,
-                            entry.raw_url,
-                        )
-                        if snd is not None:
-                            soundings.append(snd)
-                    except Exception as e:
-                        log.warning("ArchiveSoundingFetcher: failed to fetch NSSL API file %s: %s", entry.skewt_url, e)
+            for idx, entry in enumerate(sorted(_api_sonde_entries(), key=lambda e: e.file_time)):
+                if not day_start <= entry.file_time <= t:
+                    continue
+                try:
+                    snd = _fetch_and_parse_url(entry.skewt_url, entry.file_time, idx, entry.raw_url)
+                    if snd is not None:
+                        soundings.append(snd)
+                except Exception as exc:
+                    log.warning("Archive sonde file failed: %s: %s", entry.skewt_url, exc)
+            return _soundings_to_set(soundings, t) if soundings else None
 
-            if soundings:
-                sset = _soundings_to_set(soundings, t)
+        errors = []
+        for name, fetch in (
+            ("THREDDS sonde", lambda: fetch_clamps_sonde_soundings(t)),
+            ("NSSL API", api_soundings),
+            ("CLAMPS TROPoe", lambda: fetch_clamps_tropoe_soundings(t)),
+        ):
+            try:
+                sset = fetch()
+                if sset is None:
+                    continue
+                sset.soundings = sorted(
+                    (s for s in sset.soundings if day_start <= s.valid_time <= t),
+                    key=lambda s: s.valid_time,
+                )
+                if not sset.soundings:
+                    continue
+                latest = sset.soundings[-1]
+                if latest.location_source is not None or (latest.lat, latest.lon) != (0, 0):
+                    sset.lat, sset.lon = latest.lat, latest.lon
+                if latest.height.size:
+                    sset.elevation = float(latest.height[0])
                 self.sounding_ready.emit(sset)
                 return
-
-            from archive.fetchers.clamps_sonde_archive_fetcher import fetch_clamps_sonde_soundings
-            thredds_sset = fetch_clamps_sonde_soundings(t)
-            if thredds_sset is not None:
-                thredds_sset.soundings = [s for s in thredds_sset.soundings if s.valid_time <= t]
-                if thredds_sset.soundings:
-                    self.sounding_ready.emit(thredds_sset)
-                    return
-
-            from archive.fetchers.clamps_tropoe_archive_fetcher import fetch_clamps_tropoe_soundings
-            tropoe_sset = fetch_clamps_tropoe_soundings(t)
-            if tropoe_sset is not None:
-                self.sounding_ready.emit(tropoe_sset)
-                return
-
-            raise ValueError("No NSSL radiosonde or CLAMPS TROPoe data available for this archive date")
-        except Exception as exc:
-            log.error("ArchiveSoundingFetcher: NSSL/CLAMPS sounding failed: %s", exc)
-            self.fetch_error.emit(f"NSSL sounding error: {exc}")
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+                log.warning("Archive sounding provider failed: %s: %s", name, exc)
+        detail = "; ".join(errors) if errors else "No profiles at or before the selected archive time"
+        self.fetch_error.emit(f"NSSL/CLAMPS sounding unavailable: {detail}")
 
 
 
@@ -265,6 +258,7 @@ def _parse_open_meteo_archive(
 
     hourly = data.get("hourly") or {}
     times = hourly.get("time") or []
+    valid_time = valid_time.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
     target_key = valid_time.strftime("%Y-%m-%dT%H:00")
     if target_key not in times:
         return None, float(data.get("elevation", 0.0))
@@ -293,7 +287,7 @@ def _parse_open_meteo_archive(
         u_val = values["u"][t_idx]
         v_val = values["v"][t_idx]
         z_val = values["z"][t_idx]
-        if any(v is None for v in (t_val, td_val, u_val, v_val, z_val)):
+        if any(v is None or not np.isfinite(v) for v in (t_val, td_val, u_val, v_val, z_val)):
             continue
         if z_val < site_elevation - 10:
             continue
@@ -313,13 +307,20 @@ def _parse_open_meteo_archive(
         lon=lon,
         valid_time=valid_time,
         slot_offset=0,
-        label="Archive Analysis",
+        label=f"HRRR {valid_time:%H:%M} UTC",
         pressure=np.array(pressures, dtype=np.float32),
         temperature=np.array(temps, dtype=np.float32),
         dewpoint=np.array(dewpts, dtype=np.float32),
         u_wind=np.array(u_winds, dtype=np.float32),
         v_wind=np.array(v_winds, dtype=np.float32),
         height=np.array(heights, dtype=np.float32),
+        provenance={
+            "provider": "Open-Meteo historical forecast", "model": _ARCHIVE_MODEL,
+            "source_url": _OPEN_METEO_ARCHIVE_URL,
+            "model_run_time": None, "forecast_lead_hours": None,
+            "time_semantics": "Continuous series stitched from early forecast hours; run and lead are not returned",
+            "grid_latitude": data.get("latitude"), "grid_longitude": data.get("longitude"),
+        },
     )
     return sounding, site_elevation
 

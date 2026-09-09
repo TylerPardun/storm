@@ -65,6 +65,10 @@ def test_fetch_clamps_sonde_soundings_filters_by_date_and_parses(monkeypatch):
         "upperair.NSSL_Lidar_sonde.202205240036.skewT.text",
         "upperair.NSSL_Lidar_sonde.202205250000.skewT.text",
     ])
+    # _SAMPLE_SKEWT always parses to (0, 0) -- avoid the real DL Truck
+    # position lookup this now triggers as a backfill (see the dedicated
+    # tests below), it's not what this test is checking.
+    monkeypatch.setattr(csf, "load_dltruck_track", lambda archive_date: [])
 
     fetched_urls = []
 
@@ -107,3 +111,48 @@ def test_fetch_clamps_sonde_soundings_returns_none_when_no_launches_that_day(mon
     sset = csf.fetch_clamps_sonde_soundings(datetime(2022, 5, 24, tzinfo=timezone.utc))
 
     assert sset is None
+
+
+def _fetch_one_sounding(monkeypatch, dltruck_position):
+    """Shared setup: one skewT launch (always parses to lat=lon=0.0),
+    with the DL Truck position lookup stubbed to the given result."""
+    monkeypatch.setattr(csf, "_list_catalog_filenames", lambda platform_dir, datastream: [
+        "upperair.NSSL_Lidar_sonde.202205240036.skewT.text",
+    ])
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return _SAMPLE_SKEWT.encode("utf-8")
+
+    monkeypatch.setattr(csf, "_urlopen_with_retry", lambda request, timeout: FakeResponse())
+    from core.observation import Observation
+    track = [] if dltruck_position is None else [Observation(
+        "dltruck", *dltruck_position, datetime(2022, 5, 24, 0, 36, tzinfo=timezone.utc))]
+    monkeypatch.setattr(csf, "load_dltruck_track", lambda archive_date: track)
+
+    return csf.fetch_clamps_sonde_soundings(datetime(2022, 5, 24, tzinfo=timezone.utc))
+
+
+def test_fetch_clamps_sonde_soundings_backfills_location_from_dltruck_gps(monkeypatch):
+    # _parse_skewt always returns lat=lon=0.0 (no location in the skewT
+    # file itself) -- the set-level location should come from the DL
+    # Truck's own FOFS GPS track instead, since it's the same vehicle.
+    sset = _fetch_one_sounding(monkeypatch, dltruck_position=(35.5, -97.4))
+
+    assert sset is not None
+    assert (sset.lat, sset.lon) == (35.5, -97.4)
+    assert (sset.soundings[0].lat, sset.soundings[0].lon) == (35.5, -97.4)
+    assert sset.soundings[0].location_time == sset.soundings[0].valid_time
+
+
+def test_fetch_clamps_sonde_soundings_stays_at_0_0_when_dltruck_has_no_gps_either(monkeypatch):
+    sset = _fetch_one_sounding(monkeypatch, dltruck_position=None)
+
+    assert sset is not None
+    assert (sset.lat, sset.lon) == (0.0, 0.0)

@@ -472,6 +472,29 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             )
             self._archive_raw_lidar.fetch(self._archive_time)
 
+        # ASOS historical surface observations (bbox-draw, replays with the
+        # archive clock -- the archive-mode counterpart to live mode's
+        # SurfaceFetcher/set_asos_bbox_mode feature). btn_archive_asos and
+        # its toggle handling live in _init_toolbar, which always runs
+        # before this.
+        self._archive_asos = None
+        if feature_flags.is_enabled("archive_asos"):
+            from archive.fetchers.asos_archive_fetcher import ArchiveAsosFetcher
+            self._archive_asos = ArchiveAsosFetcher(self._archive_time, parent=self)
+            self._archive_asos_cache: dict[str, tuple[tuple, bytes]] = {}
+            self._archive_asos_station_ids: set[str] = set()
+            self._archive_asos_render_generation = 0
+            self._archive_asos_pending: dict[str, tuple[str, object]] = {}
+            self._archive_asos_flush_scheduled = False
+            self._archive_asos.stations_updated.connect(self._on_archive_asos_station_updated)
+            self._archive_asos.stations_cleared.connect(self._on_archive_asos_stations_cleared)
+            self._archive_asos.load_finished.connect(self._on_archive_asos_load_finished)
+            self._archive_asos.error.connect(
+                lambda msg: self.status_msg_label.setText(f"ASOS: {msg}")
+            )
+            self._time_ctrl.time_changed.connect(self._archive_asos.on_time_changed)
+            self.map_widget.asos_bbox_selected.connect(self._on_archive_asos_bbox_selected)
+
         # radar overlay (reuses existing renderer).
         self._radar_overlay = RadarOverlay(self.map_widget)
 
@@ -1238,7 +1261,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.btn_sfcoa.toggled.connect(self._on_sfcoa_drawer_toggled)
             self.sfcoa_controls.content_resized.connect(self._start_layout_pulse)
 
-        if self._archive and (feature_flags.is_enabled("noxp_radar") or feature_flags.is_enabled("raw_lidar_quicklook")):
+        if self._archive and (
+            feature_flags.is_enabled("noxp_radar")
+            or feature_flags.is_enabled("raw_lidar_quicklook")
+            or feature_flags.is_enabled("archive_asos")
+        ):
             self._add_separator(tb)
 
         if self._archive and feature_flags.is_enabled("noxp_radar"):
@@ -1268,6 +1295,14 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.btn_raw_lidar.toggled.connect(self.raw_lidar_controls.toggle_drawer)
             self.btn_raw_lidar.toggled.connect(self._start_layout_pulse)
             self.raw_lidar_controls.quicklook_requested.connect(self._on_raw_lidar_quicklook_requested)
+
+        if self._archive and feature_flags.is_enabled("archive_asos"):
+            # No drawer -- nothing to pick from a list, just "draw a box,
+            # see markers replay," so a standalone toggle button is enough.
+            self.btn_archive_asos = self._toolbar_toggle(
+                "ASOS", "Draw a bounding box to show historical ASOS observations (archive)", tb
+            )
+            self.btn_archive_asos.toggled.connect(self._on_archive_asos_toggled)
 
         self.btn_surface = self._toolbar_toggle(
             "SURFACE", "Show/hide surface observation controls", tb
@@ -3958,6 +3993,130 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             return
         self._raw_lidar_dialog = RawLidarQuicklookDialog(platform_id, parent=self, preloaded_rays=rays)
         self._raw_lidar_dialog.show()
+
+    # -- ASOS historical surface observations (archive) -----------------
+
+    def _on_archive_asos_toggled(self, checked: bool) -> None:
+        """No drawer -- checking enters bbox-draw mode (unless something is
+        already showing); unchecking clears everything and exits draw mode.
+        Toggling off then on again is how the user redraws a box."""
+        if checked:
+            if not self._archive_asos_station_ids:
+                self.status_msg_label.setText("ASOS: draw a bounding box")
+                self.map_widget.set_asos_bbox_mode(True)
+            return
+        self.map_widget.set_asos_bbox_mode(False)
+        self.map_widget.run_js(
+            "if(window.stormRestoreAsosMapInteractions) stormRestoreAsosMapInteractions();"
+        )
+        if self._archive_asos is not None:
+            self._archive_asos.clear()
+        self._clear_archive_asos_plots()
+
+    def _clear_archive_asos_plots(self) -> None:
+        self._archive_asos_render_generation += 1
+        self._archive_asos_pending = {}
+        if self._archive_asos_station_ids:
+            self.map_widget.remove_surface_station_plots_batch(list(self._archive_asos_station_ids))
+        self._archive_asos_station_ids = set()
+        self._archive_asos_cache = {}
+
+    def _on_archive_asos_bbox_selected(self, west: float, south: float, east: float, north: float) -> None:
+        """asos_bbox_selected is shared with live mode's own handler on the
+        same signal -- only act on it when our button is the one that put
+        the map into draw mode (live mode's handler never runs in archive
+        mode at all, since it's only connected during the live-only startup
+        path, but this guard also covers the archive ASOS button itself
+        being off, e.g. a stray box drawn some other way)."""
+        if self._archive_asos is None or not self.btn_archive_asos.isChecked():
+            return
+        self.status_msg_label.setText("ASOS: fetching history…")
+        self.map_widget.set_asos_bbox_mode(False)
+        self.map_widget.run_js(
+            "if(window.stormRestoreAsosMapInteractions) stormRestoreAsosMapInteractions();"
+        )
+        self._clear_archive_asos_plots()
+        self._archive_asos.set_bbox(west, south, east, north)
+
+    def _on_archive_asos_load_finished(self, count: int) -> None:
+        if count:
+            self.status_msg_label.setText(f"ASOS: {count} station(s) loaded")
+            self._archive_asos.on_time_changed(self._time_ctrl.current_time)
+        else:
+            self.status_msg_label.setText("ASOS: no stations found in this box")
+
+    def _on_archive_asos_stations_cleared(self) -> None:
+        self._clear_archive_asos_plots()
+
+    def _on_archive_asos_station_updated(self, station_id: str, name: str, obs) -> None:
+        self._archive_asos_pending[station_id] = (name, obs)
+        if not self._archive_asos_flush_scheduled:
+            self._archive_asos_flush_scheduled = True
+            QTimer.singleShot(0, self._flush_archive_asos_render_queue)
+
+    def _flush_archive_asos_render_queue(self) -> None:
+        """Coalesces every station_updated emitted within one on_time_changed
+        tick (an archive-clock scrub can move many stations' bisected index
+        at once) into a single chunked background render, mirroring
+        _on_surface_observations_updated's live-mode pattern but with its
+        own cache/generation state rather than self._surface_layer, which
+        doesn't exist in archive mode."""
+        self._archive_asos_flush_scheduled = False
+        if not self._archive_asos_pending:
+            return
+        pending = self._archive_asos_pending
+        self._archive_asos_pending = {}
+        self._archive_asos_render_generation += 1
+        render_generation = self._archive_asos_render_generation
+        archive_time = self._time_ctrl.current_time
+        cache_snapshot = dict(self._archive_asos_cache)
+        self._archive_asos_station_ids |= set(pending)
+
+        class _AsosRenderSignals(QObject):
+            ready = pyqtSignal(list)
+
+        signals = _AsosRenderSignals()
+
+        def _push(rendered):
+            if render_generation != self._archive_asos_render_generation:
+                return
+            batch = []
+            for sid, lat, lon, fp, png, name in rendered:
+                self._archive_asos_cache[sid] = (fp, png)
+                batch.append((sid, lat, lon, png, name))
+            if batch:
+                self.map_widget.add_surface_station_plots_batch(batch)
+
+        signals.ready.connect(_push, Qt.ConnectionType.QueuedConnection)
+
+        def _render_worker():
+            from ui.layers.station_plot_layer import _render
+            from ui.layers.surface_plot_layer import SurfacePlotLayer, _surface_obs_fingerprint
+
+            rendered = []
+            items = list(pending.items())
+            chunk_size = 24
+            for i, (sid, (name, obs)) in enumerate(items):
+                if render_generation != self._archive_asos_render_generation:
+                    return
+                fp = _surface_obs_fingerprint(obs)
+                cached = cache_snapshot.get(sid)
+                if cached and cached[0] == fp:
+                    continue
+                try:
+                    color = SurfacePlotLayer._obs_age_color(obs, sid, reference_time=archive_time)
+                    png = _render(obs, center_color=color)
+                    rendered.append((sid, obs.lat, obs.lon, fp, png, name))
+                except Exception as exc:
+                    log.error("archive ASOS render failed for %s: %s", sid, exc)
+                if len(rendered) >= chunk_size or i == len(items) - 1:
+                    if render_generation != self._archive_asos_render_generation:
+                        return
+                    signals.ready.emit(rendered)
+                    rendered = []
+                    time.sleep(0.015)
+
+        threading.Thread(target=_render_worker, daemon=True).start()
 
     def _toggle_radar_station_picker(self):
         self._set_radar_station_picker_visible(not self._radar_station_picker_visible)

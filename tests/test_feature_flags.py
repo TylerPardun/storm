@@ -12,6 +12,7 @@ def test_admin_only_features_disabled_by_default():
     assert feature_flags.is_enabled("mesoanalysis") is False
     assert feature_flags.is_enabled("noxp_radar") is False
     assert feature_flags.is_enabled("raw_lidar_quicklook") is False
+    assert feature_flags.is_enabled("archive_asos") is False
     assert feature_flags.is_enabled("nlcd") is True
     assert feature_flags.is_enabled("satellite_basemap") is True
     assert feature_flags.is_enabled("sfcoa") is True
@@ -22,6 +23,7 @@ def test_all_features_enabled_in_admin_mode():
     assert feature_flags.is_enabled("mesoanalysis") is True
     assert feature_flags.is_enabled("noxp_radar") is True
     assert feature_flags.is_enabled("raw_lidar_quicklook") is True
+    assert feature_flags.is_enabled("archive_asos") is True
     assert feature_flags.is_enabled("nlcd") is True
     assert feature_flags.is_enabled("satellite_basemap") is True
     assert feature_flags.is_enabled("sfcoa") is True

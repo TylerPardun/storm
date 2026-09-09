@@ -48,6 +48,12 @@ FEATURES = {
         default_enabled=True,
         admin_only=True,
     ),
+    "archive_asos": Feature(
+        key="archive_asos",
+        label="ASOS (archive)",
+        default_enabled=True,
+        admin_only=True,
+    ),
 }
 
 

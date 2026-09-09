@@ -46,6 +46,23 @@ def test_asos_station_cache_uses_bundled_data_file():
     assert sf._ASOS_STATIONS_FILE.parent.name == "data"
 
 
+def test_ensure_asos_stations_delegates_to_the_shared_roster_loader(monkeypatch):
+    # load_asos_station_roster() is also used directly by archive mode
+    # (archive/fetchers/asos_archive_fetcher.py) -- SurfaceFetcher must keep
+    # using the same shared loader/cache, not its own separate copy.
+    calls = []
+    roster = {"OUN": {"lat": 35.24, "lon": -97.47, "name": "Norman"}}
+    monkeypatch.setattr(sf, "load_asos_station_roster", lambda: (calls.append(1), roster)[1])
+
+    fetcher = SurfaceFetcher()
+    first = fetcher._ensure_asos_stations()
+    second = fetcher._ensure_asos_stations()
+
+    assert first is roster
+    assert second is roster
+    assert len(calls) == 1  # cached on the instance after the first call
+
+
 def test_fetch_iem_batch_uses_utc_valid_timestamp():
     fetcher = SurfaceFetcher()
     fetcher._http_get = lambda _url: b"""{

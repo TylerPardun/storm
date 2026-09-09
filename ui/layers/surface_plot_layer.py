@@ -53,13 +53,19 @@ class SurfacePlotLayer:
         self._map.set_surface_station_plots_visible(visible)
 
     @staticmethod
-    def _obs_age_color(obs: Observation, station_id: str = "") -> str:
+    def _obs_age_color(obs: Observation, station_id: str = "", reference_time: datetime | None = None) -> str:
+        """`reference_time` defaults to wall-clock now (live mode's original
+        behavior). Archive mode must pass the archive clock's current time
+        explicitly -- otherwise every archived observation, however "fresh"
+        it was at the time, would compare against real now() and render as
+        maximally stale."""
         ts = obs.timestamp
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
         else:
             ts = ts.astimezone(timezone.utc)
-        age_min = max(0.0, (datetime.now(timezone.utc) - ts).total_seconds() / 60.0)
+        now = reference_time or datetime.now(timezone.utc)
+        age_min = max(0.0, (now - ts).total_seconds() / 60.0)
         if station_id.startswith("surface:asos:"):
             # asos reports hourly — use wider freshness thresholds
             if age_min <= 70.0:

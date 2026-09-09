@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 
 from PyQt6.QtCore import QDate, QDateTime, QTime, Qt
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QListWidgetItem, QSpinBox, QLineEdit
+from PyQt6.QtWidgets import QApplication, QListWidgetItem, QSpinBox, QToolButton
 
 from ui.launch.dialog import LaunchDialog, _CatalogQueryWorker, _YearGridPopup
 
@@ -124,13 +124,18 @@ def test_populate_browse_year_combo_with_a_campaign_shows_only_its_years():
     assert years == [None, 2024, 2025, 2026]
 
 
-def test_populate_browse_year_combo_with_no_campaign_shows_union_of_all_years():
+def test_populate_browse_year_combo_with_no_campaign_shows_a_broad_year_range():
+    # Not campaign-scoped: covers real pre-2009 history (confirmed live
+    # 2026-09-08 -- probe9 has 2009-2010 VORTEX2-era data, mg1-3/
+    # noxp_scout have 2015 data, none tied to any CAMPAIGN_YEARS entry)
+    # rather than being capped to the union of campaign years.
     _, dlg = _dialog()
 
     dlg._populate_browse_year_combo(None)
 
     years = [dlg._browse_year_combo.itemData(i) for i in range(dlg._browse_year_combo.count())]
     assert years[0] is None
+    assert 1999 in years
     assert 2009 in years and 2017 in years and 2026 in years
     assert years == sorted(years, key=lambda y: (y is not None, y))
 
@@ -202,32 +207,120 @@ def test_on_browse_date_chosen_applies_date_and_preserves_time():
     assert "2022-05-24" in dlg._browse_status_lbl.text()
 
 
-def test_on_coverage_result_summarizes_present_platforms_by_family():
+def test_on_coverage_result_announces_found_and_lists_stage_names_by_family():
     from archive.catalog import ALL_PLATFORMS
 
     _, dlg = _dialog()
+    dlg._select_mode("archive")
+    dlg._toggle_browse_section()  # _archive_section/_browse_section must be visible for isVisibleTo checks
     dlg._archive_dt_edit.setDateTime(QDateTime(QDate(2022, 5, 25), QTime(0, 0, 0)))
     dlg._browse_coverage_btn.setEnabled(False)
-    present_ids = {p.platform_id for p in ALL_PLATFORMS[:2]}
+    dlg._browse_coverage_progress.setVisible(True)
+    assert dlg._browse_coverage_progress.isVisibleTo(dlg) is True  # sanity check before the real assertion
+    present = ALL_PLATFORMS[:2]  # two platforms, possibly different families
+    present_ids = {p.platform_id for p in present}
     result = {p.platform_id: (p.platform_id in present_ids) for p in ALL_PLATFORMS}
 
     dlg._on_coverage_result(result)
 
     assert dlg._browse_coverage_btn.isEnabled() is True
+    assert dlg._browse_coverage_progress.isVisibleTo(dlg) is False  # spinner stops
     text = dlg._browse_coverage_lbl.text()
-    assert f"2 of {len(ALL_PLATFORMS)} platforms have data for 2022-05-25" in text
+    assert f"Found! 2 of {len(ALL_PLATFORMS)} platforms have data for 2022-05-25" in text
+    for p in present:
+        assert p.display_name in text  # stage names, not just a per-family count
+    assert dlg._browse_coverage_lbl.styleSheet() == "color: #4ADE80;"
 
 
-def test_on_coverage_result_with_no_data_omits_the_breakdown_line():
+def test_post_layout_adjust_gives_the_coverage_label_enough_height_for_its_full_text():
+    # Regression test: a word-wrapped QLabel's height as settled by a
+    # plain QVBoxLayout reliably lands a few px under its own
+    # heightForWidth() (confirmed live 2026-09-08 on a long multi-family
+    # "Found! ..." summary) -- _post_layout_adjust must force it to the
+    # correct height, not just resize the dialog around a short label.
+    # No dlg.show()/QTest.qWait: adjustSize()/heightForWidth() are plain
+    # layout computation and don't need a real on-screen window, and
+    # skipping it keeps this test out of this file's rare pre-existing
+    # calendar-construction crash (see planning/archive-browse-backlog.md)
+    # since that only reproduces when many dialogs are actually shown.
+    _, dlg = _dialog()
+    dlg._select_mode("archive")
+    dlg._toggle_browse_section()
+    lbl = dlg._browse_coverage_lbl
+    # a long enough string to actually need multiple wrapped lines at
+    # this dialog's width, exercising the same shortfall as a real
+    # multi-family coverage result
+    lbl.setText(
+        "Found! 24 of 29 platforms have data for 2026-09-09:\n"
+        "FOFS Mobile Mesonet: DL Truck (mesonet), Far Field, Hail Cam, MG1, MG2, "
+        "MG3, NOXP Scout, Probe 1, Probe 2, Probe 3, Probe 4, Probe 5, Probe 7, "
+        "Probe 9, Wind Sonde 1, Wind Sonde 2\n"
+        "CLAMPS Winds: DL Truck — Lidar 1 (VAD), DL Truck — Lidar 2 (VAD), "
+        "DL Truck — Lidar 1 (CSM), DL Truck — Lidar 2 (CSM), CLAMPS 1 (VAD), "
+        "CLAMPS 2 (VAD)\n"
+        "CLAMPS TROPoe: CLAMPS 1, CLAMPS 2"
+    )
+
+    dlg._post_layout_adjust()
+
+    assert lbl.height() >= lbl.heightForWidth(lbl.width())
+
+
+def test_post_layout_adjust_resets_the_coverage_labels_minimum_height_when_cleared():
+    # so a later, shorter result doesn't stay stuck at a prior tall size
+    _, dlg = _dialog()
+    dlg._select_mode("archive")
+    dlg._toggle_browse_section()
+    dlg._browse_coverage_lbl.setText("a\nb\nc\nd\ne\nf")
+    dlg._post_layout_adjust()
+    assert dlg._browse_coverage_lbl.minimumHeight() > 0
+
+    dlg._browse_coverage_lbl.setText("")
+    dlg._post_layout_adjust()
+
+    assert dlg._browse_coverage_lbl.minimumHeight() == 0
+
+
+def test_on_coverage_result_with_no_data_shows_a_plain_not_found_message():
     from archive.catalog import ALL_PLATFORMS
 
     _, dlg = _dialog()
     dlg._archive_dt_edit.setDateTime(QDateTime(QDate(1999, 1, 1), QTime(0, 0, 0)))
+    dlg._browse_coverage_lbl.setStyleSheet("color: #4ADE80;")  # from a previous, successful check
     result = {p.platform_id: False for p in ALL_PLATFORMS}
 
     dlg._on_coverage_result(result)
 
-    assert dlg._browse_coverage_lbl.text() == f"0 of {len(ALL_PLATFORMS)} platforms have data for 1999-01-01"
+    assert dlg._browse_coverage_lbl.text() == "No data found for 1999-01-01 on any known platform."
+    assert dlg._browse_coverage_lbl.styleSheet() == ""  # green highlight cleared, not left over
+
+
+def test_check_coverage_clicked_shows_the_progress_spinner(monkeypatch):
+    # don't let the worker actually start a real network thread -- only
+    # the synchronous UI-state-setting half of the click handler is
+    # under test here, matching how _on_find_dates_clicked is treated
+    # elsewhere in this file.
+    monkeypatch.setattr(_CatalogQueryWorker, "start", lambda self: None)
+    _, dlg = _dialog()
+    dlg._select_mode("archive")
+    dlg._toggle_browse_section()
+
+    dlg._on_check_coverage_clicked()
+
+    assert dlg._browse_coverage_btn.isEnabled() is False
+    assert dlg._browse_coverage_progress.isVisibleTo(dlg) is True
+
+
+def test_on_coverage_failed_hides_the_progress_spinner():
+    _, dlg = _dialog()
+    dlg._select_mode("archive")
+    dlg._toggle_browse_section()
+    dlg._browse_coverage_progress.setVisible(True)
+    assert dlg._browse_coverage_progress.isVisibleTo(dlg) is True  # sanity check before the real assertion
+
+    dlg._on_coverage_failed("boom")
+
+    assert dlg._browse_coverage_progress.isVisibleTo(dlg) is False
 
 
 def test_on_find_dates_failed_reenables_button_and_reports_in_status_label():
@@ -291,28 +384,33 @@ def test_year_grid_popup_pick_emits_the_picked_year_and_closes():
     assert popup.isVisible() is False
 
 
-def test_calendar_year_field_is_read_only_with_a_click_forwarder_installed():
-    # read-only + NoButtons means no typing and no dead/invisible step
-    # buttons (see _style_calendar_nav_icons) -- a click always opens the
-    # grid instead of placing a cursor or hitting an inert button area.
+def test_calendar_year_button_has_a_click_consumer_installed_and_spin_is_locked_down():
+    # qt_calendar_yearbutton is the widget the user actually sees/clicks;
+    # qt_calendar_yearedit is Qt's own hidden-until-revealed editable
+    # field behind it -- locked down defensively in case that reveal
+    # ever still runs (see _style_calendar_nav_icons).
     _, dlg = _dialog()
-    dlg._cal_btn.click()  # builds the popup calendar and wires its year field
+    dlg._cal_btn.click()  # builds the popup calendar and wires its year button
 
+    year_btn = dlg._calendar_popup.findChild(QToolButton, "qt_calendar_yearbutton")
     spin = dlg._calendar_popup.findChild(QSpinBox, "qt_calendar_yearedit")
 
+    assert year_btn is not None
     assert spin is not None
     assert spin.isReadOnly() is True
+    assert spin.focusPolicy() == Qt.FocusPolicy.NoFocus
     assert spin.buttonSymbols() == QSpinBox.ButtonSymbols.NoButtons
     assert len(dlg._year_click_filters) >= 1
 
 
-def test_open_year_grid_seeds_the_popup_with_the_spins_current_value():
+def test_open_year_grid_seeds_the_popup_from_the_calendars_shown_year():
     _, dlg = _dialog()
     dlg._cal_btn.click()
-    spin = dlg._calendar_popup.findChild(QSpinBox, "qt_calendar_yearedit")
-    spin.setValue(2019)
+    calendar = dlg._calendar_popup
+    calendar.setCurrentPage(2019, 3)
+    year_btn = calendar.findChild(QToolButton, "qt_calendar_yearbutton")
 
-    dlg._open_year_grid(dlg._calendar_popup, spin)
+    dlg._open_year_grid(calendar, year_btn)
 
     assert dlg._year_grid_popup is not None
     assert dlg._year_grid_popup._current_year == 2019
@@ -330,17 +428,26 @@ def test_on_year_picked_moves_the_calendar_to_that_year_keeping_the_month():
     assert calendar.monthShown() == 6
 
 
-def test_a_real_click_on_the_year_field_opens_the_grid_end_to_end():
-    # exercises the actual _ClickForwarder/eventFilter wiring with a real
-    # Qt mouse event, rather than calling _open_year_grid directly.
+def test_a_real_click_on_the_year_button_opens_the_grid_in_one_click():
+    # Regression test for the "must click twice" bug: clicking
+    # qt_calendar_yearbutton used to trigger Qt's own built-in
+    # reveal-an-editable-spinbox behavior first (which looks exactly
+    # like "now type a year"), and only a second click, now landing on
+    # the newly-revealed spinbox, opened the grid. _ClickConsumer
+    # swallows the press before Qt's internal handler ever runs, so one
+    # real click is enough.
     _, dlg = _dialog()
     dlg._cal_btn.click()
-    spin = dlg._calendar_popup.findChild(QSpinBox, "qt_calendar_yearedit")
-    line_edit = spin.findChild(QLineEdit)
+    calendar = dlg._calendar_popup
+    calendar.setCurrentPage(2023, 6)
+    year_btn = calendar.findChild(QToolButton, "qt_calendar_yearbutton")
 
     assert dlg._year_grid_popup is None
-    QTest.mouseClick(line_edit, Qt.MouseButton.LeftButton)
+    QTest.mouseClick(year_btn, Qt.MouseButton.LeftButton)
 
     assert dlg._year_grid_popup is not None
     assert dlg._year_grid_popup.isVisible() is True
-    assert dlg._year_grid_popup._current_year == spin.value()
+    assert dlg._year_grid_popup._current_year == 2023
+    # and Qt's own spinbox-reveal never fired: the year button is still
+    # the visible control, not swapped out for the (locked-down) spinbox
+    assert year_btn.isVisibleTo(calendar) is True

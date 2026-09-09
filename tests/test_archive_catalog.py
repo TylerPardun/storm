@@ -37,6 +37,39 @@ def test_campaign_for_year_and_years_for_campaign_are_inverses():
     assert cat.years_for_campaign("NotACampaign") == ()
 
 
+def test_list_fofs_dates_prefers_processed_when_it_has_entries(monkeypatch):
+    calls = []
+
+    def fake_fetch(url):
+        calls.append(url)
+        assert "processed" in url  # raw/ must not be queried when processed/ already answered
+        return '<a href="catalog.html?dataset=FOFS/Mobile-Mesonet/data/probe1/processed/probe1.mesonet.20220524.nc">'
+
+    monkeypatch.setattr(cat, "_fetch_catalog_html", fake_fetch)
+
+    assert cat._list_fofs_dates("probe1") == [date(2022, 5, 24)]
+    assert len(calls) == 1
+
+
+def test_list_fofs_dates_falls_back_to_raw_when_processed_is_empty(monkeypatch):
+    # mg1/mg2/mg3/noxp_scout/probe9 confirmed live (2026-09-08) to have no
+    # processed/ directory at all on THREDDS, only raw/ -- without this
+    # fallback they silently reported zero dates despite having real
+    # archived history (mg1-3/noxp_scout: 2015; probe9: 2009-2010).
+    def fake_fetch(url):
+        if "processed" in url:
+            return ""  # empty catalog -- no processed/ directory
+        assert "raw" in url
+        return (
+            '<a href="http://data.nssl.noaa.gov/thredds/fileServer/'
+            'FOFS/Mobile-Mesonet/data/mg1/raw/20150529.txt">'
+        )
+
+    monkeypatch.setattr(cat, "_fetch_catalog_html", fake_fetch)
+
+    assert cat._list_fofs_dates("mg1") == [date(2015, 5, 29)]
+
+
 def test_list_dates_for_platform_dispatches_by_family(monkeypatch):
     calls = []
     monkeypatch.setitem(cat._LIST_FUNCS, "FOFS Mobile Mesonet", lambda key: calls.append(key) or [date(2024, 4, 27)])

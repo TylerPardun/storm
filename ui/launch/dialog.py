@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QToolButton, QFileDialog, QFrame,
     QApplication, QMessageBox, QSizePolicy, QWidget,
-    QDateTimeEdit, QSpinBox, QComboBox, QCheckBox,
+    QDateTimeEdit, QSpinBox, QComboBox, QCheckBox, QProgressBar,
     QCalendarWidget, QListWidget, QListWidgetItem,
 )
 from PyQt6.QtCore import (
@@ -106,11 +106,14 @@ class _CatalogQueryWorker(QObject):
         self.finished.emit(result)
 
 
-class _ClickForwarder(QObject):
-    """Forwards a left-click on a widget to a callback instead of that
-    widget's default click handling -- used to make the calendar's
-    read-only year field open a year-grid picker on click while its own
-    spin arrows keep stepping the year by one."""
+class _ClickConsumer(QObject):
+    """Swallows mouse-press events on a widget and calls `on_click`
+    instead of letting them reach that widget's own handling. Used on
+    the calendar's qt_calendar_yearbutton (see _style_calendar_nav_icons)
+    to replace its built-in "reveal an editable year spinbox" behavior
+    with opening the year-grid popup -- consuming the event means Qt's
+    own internal click handling (and the slot it's wired to) never
+    runs, rather than running alongside a separately-connected handler."""
 
     def __init__(self, on_click, parent=None):
         super().__init__(parent)
@@ -641,8 +644,44 @@ class LaunchDialog(QDialog):
 
 
     def _post_layout_adjust(self):
-        """Resize to content then re-center within the available screen area."""
+        """Resize to content then re-center within the available screen
+        area.
+
+        Runs the resize/settle/recenter sequence twice, synchronously,
+        with processEvents() pumped in between rather than deferring the
+        second pass via QTimer.singleShot: a word-wrapped QLabel's
+        heightForWidth is only correct once a layout pass has actually
+        settled at its final width, and calling adjustSize() again
+        immediately (no event processing in between) doesn't help -- Qt
+        hasn't handled the layout-request event from the first call yet,
+        so the second call still sees stale geometry. Confirmed live
+        2026-09-08: right after content that changes both a label's
+        text *and* the dialog's width (e.g. the coverage-check summary),
+        a single pass undersized the dialog every time. A deferred
+        QTimer.singleShot for the second pass was tried first and
+        rejected: it queues a callback that can outlive the dialog it
+        closes over in a tight test loop that constructs many dialogs
+        without an explicit teardown between them, which is exactly this
+        codebase's existing pre-existing flaky-crash pattern (see
+        planning/archive-browse-backlog.md) -- processEvents() inside
+        one synchronous call has the same settling effect without
+        queuing anything that could fire later against a dead object.
+        A word-wrapped QLabel's own settled height also reliably lands
+        a few px under its own heightForWidth() even after that second
+        pass (a further Qt imprecision) -- setting it as an explicit
+        minimum on _browse_coverage_lbl forces the layout to actually
+        honor it, reset to 0 first when empty so this doesn't ratchet
+        upward forever across queries with shrinking result sets."""
         self.adjustSize()
+        self._recenter()
+        QApplication.processEvents()
+        lbl = getattr(self, "_browse_coverage_lbl", None)
+        if lbl is not None:
+            lbl.setMinimumHeight(lbl.heightForWidth(lbl.width()) if lbl.text() else 0)
+        self.adjustSize()
+        self._recenter()
+
+    def _recenter(self):
         screen = QApplication.primaryScreen().availableGeometry()
         x = screen.x() + max(0, (screen.width()  - self.width())  // 2)
         y = screen.y() + max(0, (screen.height() - self.height()) // 2)
@@ -704,11 +743,36 @@ class LaunchDialog(QDialog):
             self._calendar_popup.hide()
 
     def _style_calendar_nav_icons(self, calendar: "QCalendarWidget"):
-        """Apply prev/next-month and year-spinbox triangle icons to a
-        QCalendarWidget's built-in navigation controls, styled to match
-        this dialog's dark theme. Used for both the archive date field's
-        own calendar and the standalone popup from _build_calendar_button,
-        so the two look identical."""
+        """Apply prev/next-month triangle icons to a QCalendarWidget's
+        built-in navigation controls and wire its year control to open
+        the year-grid popup, styled to match this dialog's dark theme.
+        Used for both the archive date field's own calendar and the
+        standalone popup from _build_calendar_button, so the two look
+        identical.
+
+        Root-caused the "must click twice" bug (2026-09-08): the visible
+        "2026" pill in the nav bar is qt_calendar_yearbutton, a QToolButton
+        whose built-in click handler swaps it out for qt_calendar_yearedit
+        (a real editable QSpinBox, hidden until that swap happens -- Qt's
+        own year-editing UI). The first click was triggering THAT native
+        swap-to-editable-field behavior (which looks exactly like "now
+        write in a year"); only the second click landed on the
+        now-revealed spinbox. Styling/intercepting qt_calendar_yearedit
+        (as an earlier version of this method did) was fixing the wrong
+        widget -- it's never what the user's first click actually lands
+        on. The fix here intercepts qt_calendar_yearbutton directly and
+        consumes its mouse press so Qt's internal swap-to-spinbox slot
+        never fires at all, opening the grid on the one, only click.
+
+        Note on scope: this does not add explicit "<<"/">>" year-step
+        buttons into this navigation bar. QCalendarWidget manages that
+        bar's layout internally and assumes a fixed child count/order --
+        inserting a real sibling widget into it (tried and confirmed
+        live, 2026-09-08) corrupts that internal state and crashes the
+        process on the next repaint. The year-grid popup's own prev/next
+        controls (already built) page by a full screen of years instead,
+        which is the same "jump by a bigger unit" idea without touching
+        Qt's internal layout."""
         _prev = calendar.findChild(QToolButton, "qt_calendar_prevmonth")
         _next = calendar.findChild(QToolButton, "qt_calendar_nextmonth")
         if _prev:
@@ -717,42 +781,30 @@ class LaunchDialog(QDialog):
         if _next:
             _next.setIcon(_triangle_icon([(0.15, 0.1), (0.15, 0.9), (0.85, 0.5)], "#FFFFFF"))
             _next.setIconSize(QSize(10, 10))
+
         _spin = calendar.findChild(QSpinBox, "qt_calendar_yearedit")
         if _spin:
-            # The year field's +/-1 step buttons are native QStyle-painted
-            # sub-controls on this platform/style, not real child widgets --
-            # findChildren(QAbstractButton) finds nothing to re-icon, which
-            # left them rendering as ~20px of blank, same-color dead space
-            # next to the year (no icon ever actually applied). Since a
-            # click now opens a full year-grid instead -- a strictly more
-            # useful way to jump years than one step at a time -- drop the
-            # reserved button space entirely rather than leave it inert;
-            # NoButtons makes the year field one clean pill, matching the
-            # month button beside it.
+            # Defensive: if Qt's swap-to-spinbox behavior still runs for
+            # any reason, make sure what it reveals is never a real text
+            # input either (no caret, no keyboard editing).
             _spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-            # Read-only blocks direct keyboard/typed editing so a click
-            # always means "open the grid," never "place a text cursor."
             _spin.setReadOnly(True)
+            _spin.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             _spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            _spin.setCursor(Qt.CursorShape.PointingHandCursor)
-            # findChild rather than spin.lineEdit(): PyQt6 refuses direct
-            # access to some accessors on internal children QCalendarWidget
-            # created in C++ ("no access to protected functions ... for
-            # objects not created from Python"), but generic QObject
-            # reflection via findChild is unaffected.
-            _line_edit = _spin.findChild(QLineEdit)
-            if _line_edit is not None:
-                _line_edit.setCursor(Qt.CursorShape.PointingHandCursor)
-                _forwarder = _ClickForwarder(lambda c=calendar, s=_spin: self._open_year_grid(c, s))
-                _line_edit.installEventFilter(_forwarder)
-                self._year_click_filters.append(_forwarder)
 
-    def _open_year_grid(self, calendar: "QCalendarWidget", spin: QSpinBox):
-        """Show the year-grid popup anchored under the year field,
-        centered on the year currently shown."""
-        popup = _YearGridPopup(spin.value(), parent=self)
+        _year_btn = calendar.findChild(QToolButton, "qt_calendar_yearbutton")
+        if _year_btn is not None:
+            _consumer = _ClickConsumer(lambda c=calendar, b=_year_btn: self._open_year_grid(c, b))
+            _year_btn.installEventFilter(_consumer)
+            self._year_click_filters.append(_consumer)
+
+    def _open_year_grid(self, calendar: "QCalendarWidget", anchor: QToolButton):
+        """Show the year-grid popup anchored under the clicked year
+        button, seeded from the calendar's own currently-shown year --
+        not the (possibly still-hidden, out-of-sync) year spinbox."""
+        popup = _YearGridPopup(calendar.yearShown(), parent=self)
         popup.yearPicked.connect(lambda year, c=calendar: self._on_year_picked(c, year))
-        pos = spin.mapToGlobal(spin.rect().bottomLeft())
+        pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
         popup.move(pos)
         popup.show()
         self._year_grid_popup = popup  # keep a reference so it isn't gc'd while open
@@ -797,6 +849,8 @@ class LaunchDialog(QDialog):
         filter_row = QHBoxLayout()
         filter_row.setSpacing(6)
         self._browse_campaign_combo = QComboBox()
+        self._browse_campaign_combo.setEditable(False)
+        self._browse_campaign_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self._browse_campaign_combo.addItem("Any campaign", None)
         for name in CAMPAIGN_YEARS:
             self._browse_campaign_combo.addItem(name, name)
@@ -804,6 +858,8 @@ class LaunchDialog(QDialog):
         filter_row.addWidget(self._browse_campaign_combo, 1)
 
         self._browse_year_combo = QComboBox()
+        self._browse_year_combo.setEditable(False)
+        self._browse_year_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self._populate_browse_year_combo(None)
         filter_row.addWidget(self._browse_year_combo, 1)
         bs.addLayout(filter_row)
@@ -811,6 +867,8 @@ class LaunchDialog(QDialog):
         platform_row = QHBoxLayout()
         platform_row.setSpacing(6)
         self._browse_platform_combo = QComboBox()
+        self._browse_platform_combo.setEditable(False)
+        self._browse_platform_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self._browse_platform_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         for family, platforms in platforms_by_family().items():
             for p in sorted(platforms, key=lambda x: x.display_name):
@@ -853,6 +911,17 @@ class LaunchDialog(QDialog):
         self._browse_coverage_btn.clicked.connect(self._on_check_coverage_clicked)
         bs.addWidget(self._browse_coverage_btn)
 
+        # indeterminate "wheel" -- shown only while a coverage check is
+        # actually running, so it reads as "still looking" the same way
+        # a spinner would, without a custom animation to maintain
+        self._browse_coverage_progress = QProgressBar()
+        self._browse_coverage_progress.setObjectName("coverageProgress")
+        self._browse_coverage_progress.setRange(0, 0)
+        self._browse_coverage_progress.setTextVisible(False)
+        self._browse_coverage_progress.setFixedHeight(4)
+        self._browse_coverage_progress.setVisible(False)
+        bs.addWidget(self._browse_coverage_progress)
+
         self._browse_coverage_lbl = QLabel("")
         self._browse_coverage_lbl.setObjectName("hint")
         self._browse_coverage_lbl.setWordWrap(True)
@@ -866,7 +935,7 @@ class LaunchDialog(QDialog):
         self._browse_section.setVisible(visible)
         self._browse_toggle_btn.setText("▾  BROWSE AVAILABLE CASES" if visible else "▸  BROWSE AVAILABLE CASES")
         if self.isVisible():
-            self._post_layout_adjust()
+            QTimer.singleShot(0, self._post_layout_adjust)
 
     def _populate_browse_year_combo(self, campaign: "str | None"):
         from archive.catalog import CAMPAIGN_YEARS
@@ -876,7 +945,16 @@ class LaunchDialog(QDialog):
         if campaign:
             years = CAMPAIGN_YEARS.get(campaign, ())
         else:
-            years = sorted({y for years in CAMPAIGN_YEARS.values() for y in years})
+            # Not campaign-scoped: real archived data goes back to 1999
+            # (a handful of early FOFS/CLAMPS shakedown files) -- confirmed
+            # live 2026-09-08 that limiting this list to the union of
+            # CAMPAIGN_YEARS (2009+) hid real, findable data for platforms
+            # with no campaign association (e.g. probe9's 2009-2010
+            # VORTEX2-era history, mg1-3/noxp_scout's 2015 history). This
+            # is a plain year range to filter by, not a claim every one of
+            # these years has data for every platform -- "Find dates" and
+            # "Check coverage" still do the real live THREDDS check.
+            years = range(1999, datetime.now().year + 2)
         for year in years:
             self._browse_year_combo.addItem(str(year), year)
 
@@ -898,7 +976,7 @@ class LaunchDialog(QDialog):
         self._browse_dates_list.setVisible(False)
         self._browse_status_lbl.setText(f"Checking THREDDS for {platform.family} — {platform.display_name}…")
         if self.isVisible():
-            self._post_layout_adjust()
+            QTimer.singleShot(0, self._post_layout_adjust)
 
         worker = _CatalogQueryWorker(list_dates_for_platform, platform, parent=self)
         worker.finished.connect(self._on_dates_found)
@@ -924,7 +1002,7 @@ class LaunchDialog(QDialog):
                 self._browse_dates_list.addItem(item)
             self._browse_dates_list.setVisible(True)
         if self.isVisible():
-            self._post_layout_adjust()
+            QTimer.singleShot(0, self._post_layout_adjust)
 
     def _on_browse_date_chosen(self, item: "QListWidgetItem"):
         picked = item.data(Qt.ItemDataRole.UserRole)
@@ -938,12 +1016,14 @@ class LaunchDialog(QDialog):
         target = self._archive_dt_edit.date()
         target_date = date(target.year(), target.month(), target.day())
         self._browse_coverage_btn.setEnabled(False)
+        self._browse_coverage_progress.setVisible(True)
+        self._browse_coverage_lbl.setStyleSheet("")  # clear any prior found/empty color
         self._browse_coverage_lbl.setText(
             f"Checking all {len(ALL_PLATFORMS)} known platforms for {target_date.strftime('%Y-%m-%d')}… "
             f"this queries THREDDS live and can take a minute."
         )
         if self.isVisible():
-            self._post_layout_adjust()
+            QTimer.singleShot(0, self._post_layout_adjust)
 
         worker = _CatalogQueryWorker(coverage_for_date, target_date, parent=self)
         worker.finished.connect(self._on_coverage_result)
@@ -955,32 +1035,43 @@ class LaunchDialog(QDialog):
         from archive.catalog import ALL_PLATFORMS
 
         self._browse_coverage_btn.setEnabled(True)
+        self._browse_coverage_progress.setVisible(False)
         present = {pid for pid, ok in result.items() if ok}
-        by_family: dict[str, int] = {}
+        by_family: dict[str, list[str]] = {}
         for p in ALL_PLATFORMS:
             if p.platform_id in present:
-                by_family[p.family] = by_family.get(p.family, 0) + 1
+                by_family.setdefault(p.family, []).append(p.display_name)
 
         target = self._archive_dt_edit.date()
-        summary = f"{len(present)} of {len(ALL_PLATFORMS)} platforms have data for {target.toString('yyyy-MM-dd')}"
-        if by_family:
-            lines = "\n".join(f"  •  {fam} — {n}" for fam, n in by_family.items())
-            summary += f":\n{lines}"
+        if present:
+            summary = (
+                f"Found! {len(present)} of {len(ALL_PLATFORMS)} platforms have data "
+                f"for {target.toString('yyyy-MM-dd')}:\n"
+            )
+            summary += "\n".join(
+                f"{fam}: {', '.join(names)}" for fam, names in by_family.items()
+            )
+            self._browse_coverage_lbl.setStyleSheet("color: #4ADE80;")  # matches _UPD_SUCCESS green
+        else:
+            summary = f"No data found for {target.toString('yyyy-MM-dd')} on any known platform."
+            self._browse_coverage_lbl.setStyleSheet("")
         self._browse_coverage_lbl.setText(summary)
         if self.isVisible():
-            self._post_layout_adjust()
+            QTimer.singleShot(0, self._post_layout_adjust)
 
     def _on_find_dates_failed(self, message: str):
         self._browse_find_btn.setEnabled(True)
         self._browse_status_lbl.setText(f"Query failed: {message}")
         if self.isVisible():
-            self._post_layout_adjust()
+            QTimer.singleShot(0, self._post_layout_adjust)
 
     def _on_coverage_failed(self, message: str):
         self._browse_coverage_btn.setEnabled(True)
+        self._browse_coverage_progress.setVisible(False)
+        self._browse_coverage_lbl.setStyleSheet("")
         self._browse_coverage_lbl.setText(f"Query failed: {message}")
         if self.isVisible():
-            self._post_layout_adjust()
+            QTimer.singleShot(0, self._post_layout_adjust)
 
     def _set_fields_locked(self, locked: bool):
         self._vid_input.setReadOnly(locked)

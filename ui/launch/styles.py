@@ -170,6 +170,11 @@ QCalendarWidget QMenu {
     color: #E8EAF0;
 }
 QCalendarWidget QSpinBox {
+    /* Normally never shown -- the visible year control is
+       qt_calendar_yearbutton (a QToolButton, styled by the generic
+       QCalendarWidget QToolButton rule above); this only matters if
+       Qt's own reveal-an-editable-field behavior ever runs (see
+       _style_calendar_nav_icons for why that shouldn't happen). */
     background-color: #1A1A2E;
     border: 1px solid #1E1E2E;
     border-radius: 4px;
@@ -177,11 +182,6 @@ QCalendarWidget QSpinBox {
     font-size: 11px;
     font-weight: 600;
     padding: 2px 4px;
-}
-QCalendarWidget QSpinBox:hover {
-    background-color: #0D1A2E;
-    border-color: #00CFFF;
-    color: #00CFFF;
 }
 QCalendarWidget QAbstractItemView {
     background-color: #0D0D1A;
@@ -257,7 +257,11 @@ QComboBox::drop-down {
     border-left: 1px solid #1E1E2E;
     border-top-right-radius: 6px;
     border-bottom-right-radius: 6px;
-    background-color: #1A1A2E;
+    /* visibly darker than the field body at rest (not just on hover) --
+       a combo box should always read as "field + attached selector
+       button," not as a plain text field, even before the mouse is
+       anywhere near it */
+    background-color: #12121E;
 }
 QComboBox::drop-down:hover {
     background-color: #0D1A2E;
@@ -274,6 +278,15 @@ QComboBox QAbstractItemView {
 QComboBox QAbstractItemView::item {
     padding: 4px 8px;
     min-height: 20px;
+}
+QProgressBar#coverageProgress {
+    background-color: #12121E;
+    border: none;
+    border-radius: 2px;
+}
+QProgressBar#coverageProgress::chunk {
+    background-color: #00CFFF;
+    border-radius: 2px;
 }
 QListWidget#browseDatesList {
     background-color: #0D0D1A;

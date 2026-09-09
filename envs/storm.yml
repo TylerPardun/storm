@@ -17,6 +17,10 @@ dependencies:
   - pillow=12.1.1
   - h5py
   - h5netcdf
+  # NOXP Sigmet/IRIS and CF/Radial moment readers. xradar 0.11 matches pinned xarray.
+  - netcdf4=1.7.2
+  - arm_pyart=2.1.1
+  - xradar=0.11.1
   # Networking
   - paho-mqtt=2.1.0
   - requests=2.32.5

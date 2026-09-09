@@ -1,18 +1,36 @@
-"""Tests for the archive date picker's calendar button/popup, and the
-"browse available cases" panel (archive.catalog wiring)."""
-
+"""Archive discovery UI: calendar behavior, asynchronous state and teardown."""
 from datetime import date, datetime, timezone
 
+import pytest
 from PyQt6.QtCore import QDate, QDateTime, QTime, Qt
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QListWidgetItem, QSpinBox, QToolButton
+from PyQt6.QtWidgets import QApplication, QSpinBox, QToolButton
 
-from ui.launch.dialog import LaunchDialog, _CatalogQueryWorker, _YearGridPopup
+from archive.catalog import ALL_PLATFORMS, AvailabilitySnapshot, PlatformAvailability
+from ui.launch.dialog import LaunchDialog, _YearGridPopup
+from ui.launch.availability import AvailabilityWorker
+
+
+@pytest.fixture(autouse=True)
+def no_launch_network(monkeypatch):
+    monkeypatch.setattr(LaunchDialog, "_start_update_check", lambda self: None)
+    monkeypatch.setattr(AvailabilityWorker, "request", lambda *args: None)
 
 
 def _dialog():
-    app = QApplication.instance() or QApplication([])
-    return app, LaunchDialog()
+    return QApplication.instance(), LaunchDialog()
+
+
+def _snapshot(dates=(), failed=False, partial=False):
+    results = {p.platform_id: PlatformAvailability(frozenset(), 1, 1, ()) for p in ALL_PLATFORMS}
+    results[ALL_PLATFORMS[0].platform_id] = PlatformAvailability(
+        frozenset(dates), 1, 2 if partial else 1, ("server timed out",) if failed else ())
+    return AvailabilitySnapshot(results, len(results), len(results) + int(partial))
+
+
+def _apply(dlg, snapshot):
+    dlg._select_mode("archive")
+    dlg._on_availability_updated(dlg._availability_generation, snapshot)
 
 
 def test_calendar_button_exists_and_date_field_still_supports_typed_entry():
@@ -69,36 +87,6 @@ def test_reopening_calendar_button_reuses_the_same_popup_instance():
     assert dlg._calendar_popup is first_popup
 
 
-# ---------------------------------------------------------------------------
-# "Browse available cases" panel (archive.catalog wiring)
-# ---------------------------------------------------------------------------
-
-
-def test_catalog_query_worker_emits_finished_with_the_function_result():
-    results = []
-    worker = _CatalogQueryWorker(lambda a, b: a + b, 2, 3)
-    worker.finished.connect(results.append)
-    worker.failed.connect(lambda msg: results.append(("failed", msg)))
-
-    worker._run()  # call directly -- avoid real threading in a test
-
-    assert results == [5]
-
-
-def test_catalog_query_worker_emits_failed_on_exception():
-    def boom():
-        raise RuntimeError("network exploded")
-
-    results = []
-    worker = _CatalogQueryWorker(boom)
-    worker.finished.connect(lambda r: results.append(("finished", r)))
-    worker.failed.connect(results.append)
-
-    worker._run()
-
-    assert results == ["network exploded"]
-
-
 def test_browse_section_starts_collapsed_and_toggle_button_expands_it():
     # isVisibleTo(dlg), not isVisible(): the dialog itself is never shown in
     # this test, so isVisible() would be False regardless of the section's
@@ -150,88 +138,6 @@ def test_on_browse_campaign_changed_repopulates_years_for_the_selected_campaign(
     assert years == [None, 2017]
 
 
-def test_on_dates_found_populates_the_list_most_recent_first():
-    _, dlg = _dialog()
-    dlg._select_mode("archive")  # _archive_section and _browse_section must both
-    dlg._toggle_browse_section()  # be visible for isVisibleTo checks below
-    dlg._browse_find_btn.setEnabled(False)
-
-    dlg._on_dates_found([date(2022, 5, 24), date(2022, 5, 25), date(2023, 3, 3)])
-
-    assert dlg._browse_find_btn.isEnabled() is True
-    assert dlg._browse_dates_list.isVisibleTo(dlg) is True
-    assert dlg._browse_dates_list.count() == 3
-    assert dlg._browse_dates_list.item(0).text() == "2023-03-03"
-    assert dlg._browse_dates_list.item(0).data(Qt.ItemDataRole.UserRole) == date(2023, 3, 3)
-    assert "3 date(s) found" in dlg._browse_status_lbl.text()
-
-
-def test_on_dates_found_filters_by_the_selected_year():
-    _, dlg = _dialog()
-    year_index = dlg._browse_year_combo.findData(2022) if dlg._browse_year_combo.findData(2022) >= 0 else -1
-    if year_index < 0:
-        dlg._browse_year_combo.addItem("2022", 2022)
-        year_index = dlg._browse_year_combo.findData(2022)
-    dlg._browse_year_combo.setCurrentIndex(year_index)
-
-    dlg._on_dates_found([date(2022, 5, 24), date(2023, 3, 3)])
-
-    assert dlg._browse_dates_list.count() == 1
-    assert dlg._browse_dates_list.item(0).text() == "2022-05-24"
-
-
-def test_on_dates_found_with_no_matches_hides_the_list():
-    _, dlg = _dialog()
-    dlg._select_mode("archive")
-    dlg._toggle_browse_section()
-    dlg._browse_dates_list.setVisible(True)
-    assert dlg._browse_dates_list.isVisibleTo(dlg) is True  # sanity check before the real assertion
-
-    dlg._on_dates_found([])
-
-    assert dlg._browse_dates_list.isVisibleTo(dlg) is False
-    assert "No dates found" in dlg._browse_status_lbl.text()
-
-
-def test_on_browse_date_chosen_applies_date_and_preserves_time():
-    _, dlg = _dialog()
-    dlg._archive_dt_edit.setDateTime(QDateTime(QDate(2020, 1, 1), QTime(9, 15, 0)))
-    item = QListWidgetItem("2022-05-24")
-    item.setData(Qt.ItemDataRole.UserRole, date(2022, 5, 24))
-
-    dlg._on_browse_date_chosen(item)
-
-    result = dlg._archive_dt_edit.dateTime()
-    assert result.date() == QDate(2022, 5, 24)
-    assert result.time() == QTime(9, 15, 0)
-    assert "2022-05-24" in dlg._browse_status_lbl.text()
-
-
-def test_on_coverage_result_announces_found_and_lists_stage_names_by_family():
-    from archive.catalog import ALL_PLATFORMS
-
-    _, dlg = _dialog()
-    dlg._select_mode("archive")
-    dlg._toggle_browse_section()  # _archive_section/_browse_section must be visible for isVisibleTo checks
-    dlg._archive_dt_edit.setDateTime(QDateTime(QDate(2022, 5, 25), QTime(0, 0, 0)))
-    dlg._browse_coverage_btn.setEnabled(False)
-    dlg._browse_coverage_progress.setVisible(True)
-    assert dlg._browse_coverage_progress.isVisibleTo(dlg) is True  # sanity check before the real assertion
-    present = ALL_PLATFORMS[:2]  # two platforms, possibly different families
-    present_ids = {p.platform_id for p in present}
-    result = {p.platform_id: (p.platform_id in present_ids) for p in ALL_PLATFORMS}
-
-    dlg._on_coverage_result(result)
-
-    assert dlg._browse_coverage_btn.isEnabled() is True
-    assert dlg._browse_coverage_progress.isVisibleTo(dlg) is False  # spinner stops
-    text = dlg._browse_coverage_lbl.text()
-    assert f"Found! 2 of {len(ALL_PLATFORMS)} platforms have data for 2022-05-25" in text
-    for p in present:
-        assert p.display_name in text  # stage names, not just a per-family count
-    assert dlg._browse_coverage_lbl.styleSheet() == "color: #4ADE80;"
-
-
 def test_post_layout_adjust_gives_the_coverage_label_enough_height_for_its_full_text():
     # Regression test: a word-wrapped QLabel's height as settled by a
     # plain QVBoxLayout reliably lands a few px under its own
@@ -279,75 +185,6 @@ def test_post_layout_adjust_resets_the_coverage_labels_minimum_height_when_clear
     dlg._post_layout_adjust()
 
     assert dlg._browse_coverage_lbl.minimumHeight() == 0
-
-
-def test_on_coverage_result_with_no_data_shows_a_plain_not_found_message():
-    from archive.catalog import ALL_PLATFORMS
-
-    _, dlg = _dialog()
-    dlg._archive_dt_edit.setDateTime(QDateTime(QDate(1999, 1, 1), QTime(0, 0, 0)))
-    dlg._browse_coverage_lbl.setStyleSheet("color: #4ADE80;")  # from a previous, successful check
-    result = {p.platform_id: False for p in ALL_PLATFORMS}
-
-    dlg._on_coverage_result(result)
-
-    assert dlg._browse_coverage_lbl.text() == "No data found for 1999-01-01 on any known platform."
-    assert dlg._browse_coverage_lbl.styleSheet() == ""  # green highlight cleared, not left over
-
-
-def test_check_coverage_clicked_shows_the_progress_spinner(monkeypatch):
-    # don't let the worker actually start a real network thread -- only
-    # the synchronous UI-state-setting half of the click handler is
-    # under test here, matching how _on_find_dates_clicked is treated
-    # elsewhere in this file.
-    monkeypatch.setattr(_CatalogQueryWorker, "start", lambda self: None)
-    _, dlg = _dialog()
-    dlg._select_mode("archive")
-    dlg._toggle_browse_section()
-
-    dlg._on_check_coverage_clicked()
-
-    assert dlg._browse_coverage_btn.isEnabled() is False
-    assert dlg._browse_coverage_progress.isVisibleTo(dlg) is True
-
-
-def test_on_coverage_failed_hides_the_progress_spinner():
-    _, dlg = _dialog()
-    dlg._select_mode("archive")
-    dlg._toggle_browse_section()
-    dlg._browse_coverage_progress.setVisible(True)
-    assert dlg._browse_coverage_progress.isVisibleTo(dlg) is True  # sanity check before the real assertion
-
-    dlg._on_coverage_failed("boom")
-
-    assert dlg._browse_coverage_progress.isVisibleTo(dlg) is False
-
-
-def test_on_find_dates_failed_reenables_button_and_reports_in_status_label():
-    _, dlg = _dialog()
-    dlg._browse_find_btn.setEnabled(False)
-
-    dlg._on_find_dates_failed("boom")
-
-    assert dlg._browse_find_btn.isEnabled() is True
-    assert dlg._browse_status_lbl.text() == "Query failed: boom"
-
-
-def test_on_coverage_failed_reenables_button_and_reports_in_coverage_label_not_status_label():
-    _, dlg = _dialog()
-    dlg._browse_coverage_btn.setEnabled(False)
-    dlg._browse_status_lbl.setText("unrelated")
-
-    dlg._on_coverage_failed("boom")
-
-    assert dlg._browse_coverage_btn.isEnabled() is True
-    assert dlg._browse_coverage_lbl.text() == "Query failed: boom"
-    assert dlg._browse_status_lbl.text() == "unrelated"  # regression check: each worker's failure goes to its own label
-
-
-# ---------------------------------------------------------------------------
-# Year-grid popup (click the calendar's year field to jump to a year)
-# ---------------------------------------------------------------------------
 
 
 def test_year_grid_popup_shows_a_dozen_years_centered_on_current_and_marks_it_selected():
@@ -451,3 +288,193 @@ def test_a_real_click_on_the_year_button_opens_the_grid_in_one_click():
     # and Qt's own spinbox-reveal never fired: the year button is still
     # the visible control, not swapped out for the (locked-down) spinbox
     assert year_btn.isVisibleTo(calendar) is True
+
+
+def test_startup_archive_schedules_discovery_and_date_changes_debounce(monkeypatch):
+    _, dlg = _dialog()
+    calls, cancelled = [], []
+    monkeypatch.setattr(dlg._availability, "request", lambda *args: calls.append(args))
+    monkeypatch.setattr(dlg._availability, "cancel", lambda: cancelled.append(True))
+    dlg._select_mode("archive")
+    dlg.show()
+    assert dlg._availability_timer.isActive()
+    dlg._archive_dt_edit.setDate(QDate(2024, 4, 27))
+    dlg._archive_dt_edit.setDate(QDate(2025, 5, 1))
+    generation = dlg._availability_generation
+    QTest.qWait(350)
+    assert calls == [(generation, False)]
+    assert len(cancelled) >= 3
+    dlg._select_mode("viewer")
+    assert not dlg._availability_timer.isActive()
+
+
+def test_late_result_cannot_overwrite_new_date_or_resume_closed_dialog():
+    _, dlg = _dialog()
+    dlg._select_mode("archive")
+    old_generation = dlg._availability_generation
+    dlg._archive_dt_edit.setDate(QDate(2025, 5, 1))
+    dlg._on_availability_updated(old_generation, _snapshot([date(2024, 4, 27)]))
+    assert dlg._availability_snapshot is None
+    assert "2025-05-01" in dlg._browse_coverage_lbl.text()
+    dlg.show()
+    generation = dlg._availability_generation
+    dlg.close()
+    dlg._on_availability_updated(generation, _snapshot([date(2024, 4, 27)]))
+    assert dlg._availability_snapshot is None
+    assert not dlg._availability_timer.isActive()
+
+
+def test_known_dates_mark_both_calendars_year_grid_and_year_filter():
+    _, dlg = _dialog()
+    dates = {date(2024, 4, 27), date(2015, 5, 15)}
+    _apply(dlg, _snapshot(dates))
+    dlg._cal_btn.click()
+    for calendar in (dlg._archive_dt_edit.calendarWidget(), dlg._calendar_popup):
+        assert calendar._known_dates == dates
+    year_btn = dlg._calendar_popup.findChild(QToolButton, "qt_calendar_yearbutton")
+    dlg._open_year_grid(dlg._calendar_popup, year_btn)
+    assert dlg._year_grid_popup._known_years == {2015, 2024}
+    index = dlg._browse_year_combo.findData(2024)
+    assert dlg._browse_year_combo.itemData(index, Qt.ItemDataRole.ForegroundRole).name() == "#00cfff"
+
+
+def test_campaign_year_and_platform_filters_update_without_requests():
+    _, dlg = _dialog()
+    _apply(dlg, _snapshot([date(2024, 4, 27), date(2025, 5, 1), date(2015, 5, 15)]))
+    assert dlg._browse_dates_list.item(0).text() == "2025-05-01"
+    dlg._browse_campaign_combo.setCurrentIndex(dlg._browse_campaign_combo.findData("LIFT"))
+    assert dlg._browse_dates_list.count() == 2
+    dlg._browse_year_combo.setCurrentIndex(dlg._browse_year_combo.findData(2024))
+    assert dlg._browse_dates_list.count() == 1
+    # First sorted instrument has no dates in this fixture unless it is FOFS dltruck.
+    other = next(i for i in range(1, dlg._browse_platform_combo.count())
+                 if dlg._browse_platform_combo.itemData(i).platform_id != ALL_PLATFORMS[0].platform_id)
+    dlg._browse_platform_combo.setCurrentIndex(other)
+    assert dlg._browse_dates_list.count() == 0
+    assert not dlg._archive_dt_edit.calendarWidget()._known_dates
+
+
+def test_coverage_counts_instruments_and_keeps_errors_distinct_from_absence():
+    _, dlg = _dialog()
+    dlg._archive_dt_edit.setDate(QDate(2024, 4, 27))
+    _apply(dlg, _snapshot([date(2024, 4, 27)], failed=True))
+    assert "1 instruments with listed data" in dlg._browse_coverage_lbl.text()
+    assert "incomplete" in dlg._browse_coverage_lbl.text()
+    assert "server timed out" in dlg._browse_coverage_lbl.toolTip()
+    assert dlg._browse_sources_list.count() == 1
+    _apply(dlg, _snapshot(failed=True))
+    assert "incomplete" in dlg._browse_coverage_lbl.text()
+    assert not dlg._browse_coverage_progress.isVisibleTo(dlg)
+    _apply(dlg, _snapshot())
+    assert "check complete" in dlg._browse_coverage_lbl.text()
+    assert dlg._browse_coverage_lbl.styleSheet() == ""
+
+
+def test_partial_snapshot_keeps_progress_and_positive_dates():
+    _, dlg = _dialog()
+    _apply(dlg, _snapshot([date(2024, 4, 27)], partial=True))
+    assert "Indexing" in dlg._browse_coverage_lbl.text()
+    assert dlg._browse_coverage_progress.isVisibleTo(dlg)
+    assert dlg._browse_dates_list.count() == 1
+
+
+def test_list_selection_preserves_utc_time_and_automatically_changes_query():
+    _, dlg = _dialog()
+    dlg._archive_dt_edit.setTime(QTime(9, 15, 45))
+    _apply(dlg, _snapshot([date(2024, 4, 27)]))
+    generation = dlg._availability_generation
+    dlg._on_browse_date_chosen(dlg._browse_dates_list.item(0))
+    assert dlg._archive_dt_edit.date() == QDate(2024, 4, 27)
+    assert dlg._archive_dt_edit.time() == QTime(9, 15, 45)
+    assert dlg._availability_generation > generation
+
+
+def test_refresh_clears_old_markers_and_requests_fresh_metadata(monkeypatch):
+    _, dlg = _dialog()
+    _apply(dlg, _snapshot([date(2024, 4, 27)]))
+    calls = []
+    monkeypatch.setattr(dlg._availability, "request", lambda *args: calls.append(args))
+    dlg.show()
+    dlg._availability_refresh_btn.click()
+    assert dlg._availability_snapshot is None
+    assert not dlg._archive_dt_edit.calendarWidget()._known_dates
+    QTest.qWait(350)
+    assert calls[-1] == (dlg._availability_generation, True)
+
+
+def test_small_screen_scrolls_form_without_overlap_and_keeps_launch_visible(monkeypatch):
+    from types import SimpleNamespace
+    from PyQt6.QtCore import QRect
+    _, dlg = _dialog()
+    monkeypatch.setattr(dlg, "screen", lambda: SimpleNamespace(availableGeometry=lambda: QRect(0, 0, 800, 600)))
+    _apply(dlg, _snapshot([date(2024, 4, 27)]))
+    dlg.show()
+    dlg._toggle_browse_section()
+    QTest.qWait(30)
+    assert dlg.height() <= 540
+    assert dlg._form_scroll.verticalScrollBar().maximum() > 0
+    assert dlg._footer.geometry().bottom() < dlg.height()
+    assert dlg._launch_btn.isVisibleTo(dlg)
+    assert dlg._browse_results.geometry().top() > dlg._browse_status_lbl.geometry().bottom()
+    # Every visible direct child fits its form section, including wrapped hints.
+    from PyQt6.QtWidgets import QWidget
+    for child in dlg._browse_section.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly):
+        if child.isVisibleTo(dlg._browse_section):
+            assert child.geometry().bottom() < dlg._browse_section.height()
+    dlg._form_scroll.verticalScrollBar().setValue(dlg._form_scroll.verticalScrollBar().maximum())
+    assert dlg._footer.geometry().bottom() < dlg.height()
+
+
+def test_calendar_selection_updates_existing_date_list_highlight():
+    _, dlg = _dialog()
+    _apply(dlg, _snapshot([date(2024, 4, 27), date(2024, 4, 28)]))
+    dlg._archive_dt_edit.setDate(QDate(2024, 4, 28))
+    assert dlg._browse_dates_list.currentItem().text() == "2024-04-28"
+    dlg._archive_dt_edit.setDate(QDate(2024, 4, 27))
+    assert dlg._browse_dates_list.currentItem().text() == "2024-04-27"
+
+
+def test_year_grid_opens_from_keyboard():
+    _, dlg = _dialog()
+    dlg._cal_btn.click()
+    year_btn = dlg._calendar_popup.findChild(QToolButton, "qt_calendar_yearbutton")
+    QTest.keyClick(year_btn, Qt.Key.Key_Space)
+    assert dlg._year_grid_popup.isVisible()
+
+
+def test_saved_archive_mode_hides_live_data_controls_after_construction(monkeypatch):
+    from ui.launch import dialog as module
+    class SavedSettings:
+        def value(self, key, default, **kwargs):
+            return {"launch/mode": "archive", "launch/auto_spc": True}.get(key, default)
+    monkeypatch.setattr(module, "QSettings", SavedSettings)
+    _, dlg = _dialog()
+    assert dlg._selected_mode == "archive"
+    assert dlg._data_toggle_btn.isHidden()
+    assert dlg._data_section.isHidden()
+
+
+def test_deleting_dialog_cancels_pending_layout_callbacks():
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    _, dlg = _dialog()
+    dlg._toggle_data_section()
+    dlg.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    # Formerly a context-free singleShot(self.adjustSize) survived deletion
+    # and raised from a Qt callback, aborting the native macOS test process.
+    QTest.qWait(20)
+
+
+def test_calendar_shades_known_dates_and_clears_shading_when_filtered_out():
+    _, dlg = _dialog()
+    _apply(dlg, _snapshot([date(2024, 4, 27)]))
+    dlg._cal_btn.click()
+    target = QDate(2024, 4, 27)
+    for calendar in (dlg._archive_dt_edit.calendarWidget(), dlg._calendar_popup):
+        assert calendar.dateTextFormat(target).background().color().name() == '#123c50'
+        assert calendar.dateTextFormat(target).foreground().color().name() == '#9be8ff'
+        calendar.setSelectedDate(target)
+        assert calendar.selectedDate() == target
+    dlg._browse_year_combo.setCurrentIndex(dlg._browse_year_combo.findData(2023))
+    for calendar in (dlg._archive_dt_edit.calendarWidget(), dlg._calendar_popup):
+        assert calendar.dateTextFormat(target).background().style() == Qt.BrushStyle.NoBrush

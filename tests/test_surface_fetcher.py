@@ -86,6 +86,8 @@ def test_fetch_ok_mesonet_uses_configured_api_headers():
         captured["url"] = url
         captured["ssl_ctx"] = ssl_ctx
         captured["headers"] = headers
+        if url == sf.OK_META_URL:
+            return b"STID,NAME,LAT,LON,PRES\nacme,Acme,34.80833,-98.02325,1012.4\n"
         return b"""{
           "time": "2026-04-23T19:25:00+00:00",
           "data": {
@@ -106,6 +108,7 @@ def test_fetch_ok_mesonet_uses_configured_api_headers():
     assert len(rows) == 1
     assert rows[0]["id"] == "surface:ok:acme"
     assert rows[0]["obs"].timestamp == datetime(2026, 4, 23, 19, 25, tzinfo=timezone.utc)
+    assert rows[0]["obs"].pressure_mb == 1012.4  # CSV MSLP, not JSON station pressure
 
 
 def test_fetch_wtm_uses_configured_api_headers():
@@ -160,6 +163,7 @@ def test_fetch_ks_mesonet_uses_configured_api_headers_and_embedded_metadata():
             "TEMP2MAVG": "22.1",
             "RELHUM2MAVG": "50.0",
             "PRESSUREAVG": "96.32",
+            "SLPAVG": "101.25",
             "WDIR10M": "212.74",
             "WSPD10MAVG": "9.54",
             "WSPD10MMAX": "12.58",
@@ -190,7 +194,7 @@ def test_fetch_ks_mesonet_uses_configured_api_headers_and_embedded_metadata():
     assert round(obs.dewpoint_c, 1) == 11.2
     assert obs.wind_speed_ms == 9.54
     assert obs.wind_dir_deg == 212.74
-    assert round(obs.pressure_mb, 1) == 963.2
+    assert obs.pressure_mb == 1012.5  # SLPAVG kPa -> hPa, not station pressure
 
 
 def test_fetch_co_mesonet_uses_configured_api_headers_and_metadata_file():

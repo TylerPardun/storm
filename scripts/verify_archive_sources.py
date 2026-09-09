@@ -1,53 +1,75 @@
 #!/usr/bin/env python3
-"""Probe real NSSL/NOAA archive sources for candidate campaign dates.
+"""Priority 5 reconnaissance: representative validation matrix.
 
-Reuses STORM's actual archive-fetcher code (ArchiveVehicleObsFetcher's
-processed-netCDF/raw-CSV fetch path, annotation JSONL fetch, CLAMPS sonde
-index) instead of reimplementing HTTP logic, so what this reports is
-exactly what the running app would see for the same request.
+Runs STORM's real archive-fetcher code (not a reimplementation of the HTTP
+logic) against a fixed set of representative campaign dates, and reports
+file identities, parsed record counts, real time bounds, and basic
+location/QC sanity per source -- the bar set in
+planning/archive-browse-backlog.md's Priority 5 row: "Demonstrate
+catalog-to-file-to-normalized-data behavior, not just HTTP success or
+filename dates."
 
-Checks, per campaign date:
-  - FOFS mobile-mesonet observations for the full known platform roster
-    (not just the 7 currently aliased in archive/vehicle_aliases.py),
-    via the same processed-netCDF-first/raw-CSV-fallback path the app uses
-  - STORM's own recorded MQTT archive (storm.<topic>.<date> JSONL) —
-    this is NOT a general NSSL archive, it only has content for dates
-    STORM itself was deployed and connected
-  - The CLAMPS sonde index, filtered to the date (the index itself may
-    only cover recent/live launches — this probe exists to confirm that
-    one way or another, not to assume it)
+Sources probed (each via its real fetch function, called directly rather
+than through the QObject/threaded wrapper some of them ship in, since the
+probe only needs the synchronous result):
+  - FOFS mobile mesonet   -- ArchiveVehicleObsFetcher._fetch_vehicle, all
+                             16 known platform names (archive/vehicle_aliases.py)
+  - Recorded sector/vehicle history -- mqtt_reader._fetch_topic_text
+                             (THREDDS-first, API-fallback -- see mqtt_reader.py)
+  - CLAMPS mobile sonde   -- fetch_clamps_sonde_soundings
+  - CLAMPS wind (VAD)     -- _fetch_platform_wind_set, all 6 known sources
+  - CLAMPS surface        -- fetch_clamps_surface_observations
+  - CLAMPS TROPoe         -- fetch_clamps_tropoe_soundings
+  - PERiLS CopterSonde    -- fetch_coptersonde_soundings (PERiLS dates only)
+
+NOXP and raw scanning-lidar have separate bounded inventory/sample commands:
+verify_noxp_archive.py and verify_raw_lidar_archive.py. They are not downloaded
+implicitly by this multi-source matrix. Schema 2 records actual request URLs,
+bytes and content hashes, and separates retrieval uncertainty from zero rows.
 
 Does not touch application state or write anything inside the git repo.
 Output goes to case_data/evidence/<campaign>-<date>.json (sibling of the
 storm/ checkout, outside git).
 
 Usage:
-    python scripts/verify_archive_sources.py [--out DIR] [--campaign CODES]
+    python scripts/verify_archive_sources.py [--out DIR] [--campaign CODES] [--full-fofs-roster]
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _STORM_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_STORM_ROOT))
 
-import config  # noqa: E402
-from archive.fetchers.vehicle_obs_archive_fetcher import (  # noqa: E402
-    ArchiveVehicleObsFetcher,
+from archive.fetchers.vehicle_obs_archive_fetcher import ArchiveVehicleObsFetcher  # noqa: E402
+from archive.fetchers.mqtt_reader import _fetch_topic_text, _parse_jsonl, _TOPICS  # noqa: E402
+from archive.fetchers.clamps_sonde_archive_fetcher import fetch_clamps_sonde_soundings  # noqa: E402
+from archive.fetchers.clamps_wind_archive_fetcher import (  # noqa: E402
+    KNOWN_CLAMPS_WIND_SOURCES, _fetch_platform_wind_set,
 )
-from archive.fetchers.mqtt_reader import _fetch_text as _fetch_annotations_text  # noqa: E402
-from archive.vehicle_aliases import KNOWN_FOFS_PLATFORMS as FOFS_PLATFORMS  # noqa: E402
-from data.fetchers.clamps_sounding_fetcher import _api_sonde_entries  # noqa: E402
+from archive.fetchers.clamps_surface_archive_fetcher import fetch_clamps_surface_observations  # noqa: E402
+from archive.fetchers.clamps_tropoe_archive_fetcher import fetch_clamps_tropoe_soundings  # noqa: E402
+from archive.fetchers.coptersonde_archive_fetcher import fetch_coptersonde_soundings  # noqa: E402
+from archive.vehicle_aliases import KNOWN_FOFS_PLATFORMS  # noqa: E402
+from scripts.archive_probe_evidence import RequestEvidence
 
-_REQUEST_PACING_S = 0.3
+_REQUEST_PACING_S = 0.4
 
-ANNOTATION_TOPICS = ("vehicles", "scan_sectors", "cones", "drawings", "annotations")
+# NSSL's WAF has been observed to answer both data.nssl.noaa.gov and
+# api.nssl.noaa.gov in ~5-7s per request even for a clean 404 (see
+# planning/source-and-pilot-register.md, "Recorded sector history" --
+# performance finding). A full 16-platform FOFS roster sweep is already
+# ~16 requests; keep it to cases where the full-discovery sweep itself is
+# the point, and use a short known-active roster elsewhere to stay within
+# a reasonable total request budget across the whole matrix.
+_SHORT_FOFS_ROSTER = ("dltruck", "probe1", "probe2", "probe3", "windsonde1")
 
 
 @dataclass(frozen=True)
@@ -55,139 +77,321 @@ class CampaignDate:
     campaign: str
     date: str  # YYYYMMDD
     note: str
+    fofs_roster: tuple = _SHORT_FOFS_ROSTER  # override to KNOWN_FOFS_PLATFORMS for full sweep
+    check_coptersonde: bool = False
+    also_check_next_day: bool = False  # for the cross-midnight case
 
 
 CANDIDATES = [
-    CampaignDate("LIFT2024", "20240427", "Burkburnett/Lone Wolf/Harrold/Electra, TX/OK"),
-    CampaignDate("LIFT2025", "20250519", "Ringgold/Leon/St. Jo, TX"),
-    CampaignDate("LIFT2026", "20260517", "St. Libory, NE"),
-    CampaignDate("TORUS2019", "20190528", "Waldo, KS EF2, 43 min"),
-    CampaignDate("TORUS2022", "20220524", "Morton, TX EF2, 15 min"),
-    CampaignDate("TORUS2023", "20230615", "Higgins, TX EF1, 4 min"),
-    CampaignDate("RiVorS2017", "20170613", "Bushnell & Harrisburg, NE EF1 x2, same night"),
+    CampaignDate(
+        "LIFT2024", "20240427",
+        "Lone Wolf/Harrold/Electra/Burkburnett TX-OK -- CH2 multi-event date; "
+        "outside THREDDS's ~5-month sector-history retention and the API is "
+        "down, so this also exercises the both-sources-empty path for annotations",
+        fofs_roster=KNOWN_FOFS_PLATFORMS,
+    ),
+    CampaignDate(
+        "LIFT2025", "20250519",
+        "Ringgold/Leon/St. Jo TX -- CH2 multi-event date",
+    ),
+    CampaignDate(
+        "LIFT2026", "20260517",
+        "St. Libory NE -- CH2 date, also NSSL-reported lidar collection; "
+        "within THREDDS's sector-history retention window",
+    ),
+    CampaignDate(
+        "CROSSMIDNIGHT", "20240506",
+        "CH2 deployment period spanning both sides of midnight UTC -- check "
+        "this date and the following day for operational-day boundary behavior",
+        also_check_next_day=True,
+    ),
+    CampaignDate(
+        "IAN2022", "20220928",
+        "Hurricane Ian -- older (pre-LIFT), non-CH2 case. Already "
+        "cross-verified in Priority 1: NOXP + FOFS dltruck/probe1 + CLAMPS "
+        "DL Truck (wind+sonde) all confirmed active this window. NOXP has no "
+        "in-app fetcher yet, so only the FOFS/CLAMPS side is probed live here.",
+        fofs_roster=("dltruck", "probe1", "probe2", "probe3"),
+    ),
+    CampaignDate(
+        "PERILS2022", "20220322",
+        "PERiLS 2022 IOP1 -- CopterSonde ascent confirmed to exist for this "
+        "date in Priority-3-era reconnaissance. Also checked against the "
+        "FOFS/CLAMPS sources as a deliberate missing-source scenario, since "
+        "PERiLS predates LIFT's FOFS/CLAMPS mobile deployment.",
+        fofs_roster=("dltruck", "probe1", "probe2"),
+        check_coptersonde=True,
+    ),
+    CampaignDate(
+        "NODEPLOYMENT", "20200115",
+        "No known STORM/NSSL mobile deployment -- deliberate all-sources-empty "
+        "control case, to confirm the app's fetchers return cleanly empty "
+        "rather than erroring when literally nothing is there.",
+        fofs_roster=("dltruck", "probe1"),
+    ),
 ]
 
 
-def _probe_fofs_platform(platform: str, date_str: str) -> dict:
-    """Probe via the real ArchiveVehicleObsFetcher._fetch_vehicle path
-    (processed netCDF first, raw CSV fallback) so this script stays a
-    faithful mirror of what the app actually does, not a separate copy
-    of the fetch logic that can drift out of sync with it."""
+def _iso(dt: datetime | None) -> str | None:
+    return dt.isoformat() if dt is not None else None
+
+
+def _probe_fofs(date_str: str, roster: tuple) -> dict:
     session_date = datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
     fetcher = ArchiveVehicleObsFetcher(session_date)
-    try:
-        obs = fetcher._fetch_vehicle(platform, None)
-    except Exception as e:  # noqa: BLE001 - this is a diagnostic probe
-        return {"status": f"unexpected:{e}"}
+    results = {}
+    for platform in roster:
+        t0 = time.time()
+        try:
+            obs = fetcher._fetch_vehicle(platform, None)
+            results[platform] = {
+                "status": "ok" if obs else "no_usable_records",
+                "rows": len(obs),
+                "invalid_coordinate_rows": sum(not (math.isfinite(o.lat) and math.isfinite(o.lon) and abs(o.lat) <= 90 and abs(o.lon) <= 180) for o in obs),
+                "first_time": _iso(min(o.timestamp for o in obs)) if obs else None,
+                "last_time": _iso(max(o.timestamp for o in obs)) if obs else None,
+                "sample_lat": obs[0].lat if obs else None,
+                "sample_lon": obs[0].lon if obs else None,
+                "elapsed_s": round(time.time() - t0, 2),
+            }
+        except Exception as e:  # noqa: BLE001 - diagnostic probe
+            results[platform] = {"status": f"error:{e}", "elapsed_s": round(time.time() - t0, 2)}
+        print(f"    fofs/{platform}: {results[platform]['status']} "
+              f"({results[platform].get('rows', '-')} rows, {results[platform]['elapsed_s']}s)")
+        time.sleep(_REQUEST_PACING_S)
+    return results
 
+
+def _probe_annotations(date_str: str) -> dict:
+    results = {}
+    for topic in _TOPICS:
+        t0 = time.time()
+        try:
+            text, source = _fetch_topic_text(topic, date_str)
+            if text:
+                records = _parse_jsonl(text)
+                results[topic] = {
+                    "status": "ok" if records else "no_usable_records", "source": source, "records": len(records),
+                    "first_time": _iso(records[0][0]) if records else None,
+                    "last_time": _iso(records[-1][0]) if records else None,
+                    "elapsed_s": round(time.time() - t0, 2),
+                }
+            else:
+                results[topic] = {"status": "no_usable_records", "source": source, "elapsed_s": round(time.time() - t0, 2)}
+        except Exception as e:  # noqa: BLE001
+            results[topic] = {"status": f"error:{e}", "elapsed_s": round(time.time() - t0, 2)}
+        print(f"    annotations/{topic}: {results[topic]['status']} "
+              f"(source={results[topic].get('source', '-')}, {results[topic]['elapsed_s']}s)")
+        time.sleep(_REQUEST_PACING_S)
+    return results
+
+
+def _probe_clamps_sonde(archive_date: datetime) -> dict:
+    t0 = time.time()
+    try:
+        sset = fetch_clamps_sonde_soundings(archive_date)
+    except Exception as e:  # noqa: BLE001
+        return {"status": f"error:{e}", "elapsed_s": round(time.time() - t0, 2)}
+    elapsed = round(time.time() - t0, 2)
+    if sset is None or not sset.soundings:
+        return {"status": "no_usable_records", "elapsed_s": elapsed}
     return {
-        "status": "ok",
-        "rows": len(obs),
-        "first_time": obs[0].timestamp.isoformat() if obs else None,
-        "last_time": obs[-1].timestamp.isoformat() if obs else None,
+        "status": "ok", "elapsed_s": elapsed,
+        "soundings": len(sset.soundings),
+        "lat": sset.lat, "lon": sset.lon,
+        "first_valid_time": _iso(sset.soundings[0].valid_time),
+        "last_valid_time": _iso(sset.soundings[-1].valid_time),
+        "launches": [{"valid_time": _iso(s.valid_time), "lat": s.lat, "lon": s.lon,
+                      "location_source": s.location_source, "position_time": _iso(s.location_time),
+                      "levels": int(s.pressure.size)} for s in sset.soundings],
     }
 
 
-def _probe_annotation_topic(topic: str, date_str: str) -> dict:
-    url = f"{config.NSSL_API_ROOT}/annotations/storm.{topic}.{date_str}"
-    try:
-        text = _fetch_annotations_text(url)
-    except Exception as e:  # noqa: BLE001
-        return {"status": f"error:{e}", "url": url}
-    if not text:
-        return {"status": "empty_or_404", "url": url}
-    return {"status": "ok", "lines": len(text.splitlines()), "url": url}
+def _probe_clamps_wind(date_str: str) -> dict:
+    results = {}
+    for source in KNOWN_CLAMPS_WIND_SOURCES:
+        t0 = time.time()
+        try:
+            vad_set = _fetch_platform_wind_set(source, date_str)
+        except Exception as e:  # noqa: BLE001
+            results[source.platform_id] = {"status": f"error:{e}", "elapsed_s": round(time.time() - t0, 2)}
+            time.sleep(_REQUEST_PACING_S)
+            continue
+        elapsed = round(time.time() - t0, 2)
+        if vad_set is None or len(vad_set) == 0:
+            results[source.platform_id] = {"status": "no_usable_records", "elapsed_s": elapsed}
+        else:
+            results[source.platform_id] = {
+                "status": "ok", "elapsed_s": elapsed,
+                "profiles": len(vad_set),
+                "first_time": _iso(vad_set[0].timestamp),
+                "last_time": _iso(vad_set[-1].timestamp),
+            }
+        print(f"    clamps_wind/{source.platform_id}: {results[source.platform_id]['status']}")
+        time.sleep(_REQUEST_PACING_S)
+    return results
 
 
-def _clamps_entries_by_date() -> dict:
-    """Fetch the CLAMPS sonde index once; the app's own function has no
-    date filter, so we fetch it once and bucket entries by date here."""
+def _probe_clamps_surface(archive_date: datetime) -> dict:
+    t0 = time.time()
     try:
-        entries = _api_sonde_entries()
+        obs = fetch_clamps_surface_observations(archive_date)
     except Exception as e:  # noqa: BLE001
-        return {"status": f"error:{e}", "by_date": {}}
-    by_date: dict[str, list[str]] = {}
-    for entry in entries:
-        key = entry.file_time.strftime("%Y%m%d")
-        by_date.setdefault(key, []).append(entry.file_time.isoformat())
-    return {"status": "ok", "total_index_entries": len(entries), "by_date": by_date}
+        return {"status": f"error:{e}", "elapsed_s": round(time.time() - t0, 2)}
+    elapsed = round(time.time() - t0, 2)
+    if not obs:
+        return {"status": "no_usable_records", "elapsed_s": elapsed}
+    return {
+        "status": "ok", "elapsed_s": elapsed, "rows": len(obs),
+        "first_time": _iso(min(o.timestamp for o in obs)), "last_time": _iso(max(o.timestamp for o in obs)),
+        "sample_lat": obs[0].lat, "sample_lon": obs[0].lon,
+    }
+
+
+def _probe_clamps_tropoe(archive_date: datetime) -> dict:
+    t0 = time.time()
+    try:
+        sset = fetch_clamps_tropoe_soundings(archive_date)
+    except Exception as e:  # noqa: BLE001
+        return {"status": f"error:{e}", "elapsed_s": round(time.time() - t0, 2)}
+    elapsed = round(time.time() - t0, 2)
+    if sset is None or not sset.soundings:
+        return {"status": "no_usable_records", "elapsed_s": elapsed}
+    return {
+        "status": "ok", "elapsed_s": elapsed, "soundings": len(sset.soundings),
+        "first_valid_time": _iso(min(s.valid_time for s in sset.soundings)),
+        "last_valid_time": _iso(max(s.valid_time for s in sset.soundings)),
+        "lat": sset.lat, "lon": sset.lon,
+    }
+
+
+def _probe_coptersonde(archive_date: datetime) -> dict:
+    t0 = time.time()
+    try:
+        by_site = fetch_coptersonde_soundings(archive_date)
+    except Exception as e:  # noqa: BLE001
+        return {"status": f"error:{e}", "elapsed_s": round(time.time() - t0, 2)}
+    elapsed = round(time.time() - t0, 2)
+    if not by_site:
+        return {"status": "no_usable_records", "elapsed_s": elapsed}
+    return {
+        "status": "ok", "elapsed_s": elapsed,
+        "sites": {
+            site: {
+                "soundings": len(sset.soundings),
+                "lat": sset.lat, "lon": sset.lon,
+            }
+            for site, sset in by_site.items()
+        },
+    }
+
+
+def run_case(cd: CampaignDate, out_dir: Path) -> dict:
+    print(f"\n=== {cd.campaign} {cd.date} ({cd.note}) ===")
+    archive_date = datetime.strptime(cd.date, "%Y%m%d").replace(tzinfo=timezone.utc)
+
+    source_checks = {}
+    def capture(name, function, *args):
+        with RequestEvidence() as evidence:
+            result = function(*args)
+        source_checks[name] = evidence.report()
+        return result
+
+    print("  -- FOFS mobile mesonet --")
+    fofs = capture("fofs", _probe_fofs, cd.date, cd.fofs_roster)
+
+    print("  -- recorded sector/vehicle history (mqtt_reader) --")
+    annotations = capture("annotations", _probe_annotations, cd.date)
+
+    print("  -- CLAMPS mobile sonde --")
+    sonde = capture("sonde", _probe_clamps_sonde, archive_date)
+    print(f"    {sonde['status']}")
+    time.sleep(_REQUEST_PACING_S)
+
+    print("  -- CLAMPS wind (VAD) --")
+    wind = capture("wind", _probe_clamps_wind, cd.date)
+
+    print("  -- CLAMPS surface --")
+    surface = capture("surface", _probe_clamps_surface, archive_date)
+    print(f"    {surface['status']}")
+    time.sleep(_REQUEST_PACING_S)
+
+    print("  -- CLAMPS TROPoe --")
+    tropoe = capture("tropoe", _probe_clamps_tropoe, archive_date)
+    print(f"    {tropoe['status']}")
+    time.sleep(_REQUEST_PACING_S)
+
+    coptersonde = None
+    if cd.check_coptersonde:
+        print("  -- PERiLS CopterSonde --")
+        coptersonde = capture("coptersonde", _probe_coptersonde, archive_date)
+        print(f"    {coptersonde['status']}")
+
+    record = {
+        "schema_version": 2,
+        "source_checks": source_checks,
+        "campaign": cd.campaign,
+        "date": cd.date,
+        "note": cd.note,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "fofs": fofs,
+        "annotations": annotations,
+        "clamps_sonde": sonde,
+        "clamps_wind": wind,
+        "clamps_surface": surface,
+        "clamps_tropoe": tropoe,
+        "coptersonde": coptersonde,
+    }
+
+    out_path = out_dir / f"{cd.campaign}-{cd.date}.json"
+    temporary = out_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(record, indent=2))
+    temporary.replace(out_path)
+    print(f"  -> wrote {out_path}")
+
+    if cd.also_check_next_day:
+        next_day = archive_date.replace(hour=12) + timedelta(days=1)
+        next_cd = CampaignDate(
+            cd.campaign + "_NEXTDAY", next_day.strftime("%Y%m%d"),
+            f"{cd.note} (following day, UTC)",
+            fofs_roster=cd.fofs_roster,
+        )
+        following = run_case(next_cd, out_dir)
+        boundaries = {}
+        for vehicle, previous in fofs.items():
+            last, first = previous.get("last_time"), following["fofs"].get(vehicle, {}).get("first_time")
+            boundaries[vehicle] = {
+                "previous_last": last, "following_first": first,
+                "boundary_gap_seconds": (datetime.fromisoformat(first) - datetime.fromisoformat(last)).total_seconds() if first and last else None,
+                "scope": "File endpoints only; does not assert gap-free observations throughout the interval",
+            }
+        (out_dir / f"{cd.campaign}-boundary.json").write_text(json.dumps(boundaries, indent=2))
+    return record
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--out", default=None,
-        help="Output directory for evidence JSON (default: case_data/evidence next to storm/)",
-    )
-    parser.add_argument(
-        "--campaign", default=None,
-        help="Comma-separated campaign codes to run (default: all), e.g. LIFT2024,RiVorS2017",
-    )
+    parser.add_argument("--out", default=None, help="Output directory (default: case_data/evidence next to storm/)")
+    parser.add_argument("--campaign", default=None, help="Comma-separated campaign codes to run (default: all)")
+    parser.add_argument("--full-fofs-roster", action="store_true",
+                         help="Use the full 16-platform FOFS roster for every case, not just the primary ones")
     args = parser.parse_args()
 
     out_dir = Path(args.out) if args.out else _STORM_ROOT.parent / "case_data" / "evidence"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Fetching CLAMPS sonde index once (shared across all dates)...")
-    clamps = _clamps_entries_by_date()
-    print(f"  CLAMPS index: {clamps['status']}, "
-          f"{clamps.get('total_index_entries', 0)} total entries, "
-          f"{len(clamps.get('by_date', {}))} distinct dates present")
-
-    # NOTE: deliberately sequential (no ThreadPoolExecutor). In this dev
-    # environment, requests to these NSSL hosts complete in ~5-7s when run
-    # synchronously in a foreground shell, but hang indefinitely (no
-    # exception, no timeout firing) when run from a background/detached
-    # shell or from worker threads. Run this script in the foreground.
-    #
-    # A ~150-request unpaced sweep of this script in one session was
-    # followed by data.nssl.noaa.gov connection timeouts (not clean error
-    # responses) for several minutes, consistent with the WAF in front of
-    # it soft-throttling a bursty client rather than a real outage -- see
-    # planning/source-and-pilot-register.md. _REQUEST_PACING_S plus the
-    # fetcher's own retry/backoff (vehicle_obs_archive_fetcher.py) make
-    # this script, and the app, less likely to trigger or get tripped up
-    # by that.
     candidates = CANDIDATES
     if args.campaign:
         wanted = {c.strip().upper() for c in args.campaign.split(",")}
+        unknown = wanted - {c.campaign.upper() for c in CANDIDATES}
+        if unknown:
+            parser.error("Unknown campaign codes: " + ", ".join(sorted(unknown)))
         candidates = [c for c in CANDIDATES if c.campaign.upper() in wanted]
 
     for cd in candidates:
-        print(f"\n=== {cd.campaign} {cd.date} ({cd.note}) ===")
-
-        fofs_results = {}
-        for platform in FOFS_PLATFORMS:
-            r = _probe_fofs_platform(platform, cd.date)
-            fofs_results[platform] = r
-            rows = r.get("rows")
-            detail = f"rows={rows}" if rows is not None else r["status"]
-            print(f"  fofs/{platform}: {r['status']} ({detail})")
-            time.sleep(_REQUEST_PACING_S)
-
-        annot_results = {}
-        for topic in ANNOTATION_TOPICS:
-            r = _probe_annotation_topic(topic, cd.date)
-            annot_results[topic] = r
-            print(f"  annotations/{topic}: {r['status']}")
-            time.sleep(_REQUEST_PACING_S)
-
-        clamps_on_date = clamps.get("by_date", {}).get(cd.date, [])
-        print(f"  clamps: {len(clamps_on_date)} sonde entries on this date")
-
-        record = {
-            "campaign": cd.campaign,
-            "date": cd.date,
-            "note": cd.note,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "fofs": fofs_results,
-            "annotations": annot_results,
-            "clamps_entries_on_date": clamps_on_date,
-        }
-
-        out_path = out_dir / f"{cd.campaign}-{cd.date}.json"
-        out_path.write_text(json.dumps(record, indent=2))
-        print(f"  -> wrote {out_path}")
+        if args.full_fofs_roster:
+            cd = CampaignDate(**{**cd.__dict__, "fofs_roster": KNOWN_FOFS_PLATFORMS})
+        run_case(cd, out_dir)
 
 
 if __name__ == "__main__":

@@ -327,30 +327,24 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
     background: transparent;
 }
-"""
-
-_BROWSE_ACTION_BTN_STYLE = """
-QPushButton {
-    background-color: #1A1A2E;
+QWidget#launchForm, QScrollArea#launchFormScroll {
+    background-color: #0A0A0F;
+    border: none;
+}
+QTabWidget#browseResults::pane {
     border: 1px solid #1E1E2E;
-    border-radius: 6px;
-    color: #E8EAF0;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.3px;
-    padding: 7px 14px;
+    background: #0D0D1A;
+    border-radius: 5px;
 }
-QPushButton:hover {
-    border-color: #00CFFF;
+QTabWidget#browseResults QTabBar::tab {
+    background: #1A1A2E;
+    color: #8E97AB;
+    padding: 6px 10px;
+    border-bottom: 2px solid transparent;
+}
+QTabWidget#browseResults QTabBar::tab:selected {
     color: #00CFFF;
-}
-QPushButton:pressed {
-    background-color: #0D1A2E;
-}
-QPushButton:disabled {
-    background-color: #12121E;
-    border-color: #16162A;
-    color: #3A3B4A;
+    border-bottom-color: #00CFFF;
 }
 """
 
@@ -391,6 +385,10 @@ QPushButton#yearCell {
 QPushButton#yearCell:hover {
     border-color: #00CFFF;
     color: #00CFFF;
+}
+QPushButton#yearCell[available="true"] {
+    color: #00CFFF;
+    border-color: #00CFFF;
 }
 QPushButton#yearCell[selected="true"] {
     background-color: #0D1A2E;

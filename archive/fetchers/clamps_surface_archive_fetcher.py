@@ -171,32 +171,22 @@ def parse_clamps_surface_netcdf(data: bytes, platform_id: str, trust_wind_direct
     import numpy as np
     import xarray as xr
 
-    # engine="netcdf4" via a real temp-file path (not h5netcdf/BytesIO):
-    # confirmed on a real file that the met tower stream is written as
-    # NETCDF3_CLASSIC, not the HDF5-based netCDF4 every other CLAMPS/FOFS
-    # product parsed this session used -- h5netcdf can only read the
-    # latter. netCDF4-python transparently handles both formats, but
-    # xarray's netcdf4 backend only accepts a filesystem path, not an
-    # in-memory file object, hence writing to a temp file first.
-    import os
-    import tempfile
+    # Both readers are already declared in envs/storm.yml. Met-tower files
+    # use classic NetCDF; MWR files and some tests use HDF5-backed NetCDF.
+    # Select by file signature instead of requiring an undeclared netCDF4.
+    import io
 
-    with tempfile.NamedTemporaryFile(suffix=".cdf", delete=False) as tmp:
-        tmp.write(data)
-        tmp_path = tmp.name
-    try:
-        with xr.open_dataset(tmp_path, engine="netcdf4", decode_times=False) as ds:
-            base_time = float(ds["base_time"].values)
-            time_offset = np.asarray(ds["time_offset"].values, dtype="float64")
-            sfc_temp = np.asarray(ds["sfc_temp"].values, dtype="float64")
-            sfc_rh = np.asarray(ds["sfc_rh"].values, dtype="float64")
-            sfc_pres = np.asarray(ds["sfc_pres"].values, dtype="float64")
-            sfc_wspd = np.asarray(ds["sfc_wspd"].values, dtype="float64")
-            sfc_wdir = np.asarray(ds["sfc_wdir"].values, dtype="float64")
-            lat_raw = np.asarray(ds["lat"].values, dtype="float64")
-            lon_raw = np.asarray(ds["lon"].values, dtype="float64")
-    finally:
-        os.unlink(tmp_path)
+    engine = "scipy" if data.startswith(b"CDF") else "h5netcdf"
+    with xr.open_dataset(io.BytesIO(data), engine=engine, decode_times=False) as ds:
+        base_time = float(ds["base_time"].values)
+        time_offset = np.asarray(ds["time_offset"].values, dtype="float64")
+        sfc_temp = np.asarray(ds["sfc_temp"].values, dtype="float64")
+        sfc_rh = np.asarray(ds["sfc_rh"].values, dtype="float64")
+        sfc_pres = np.asarray(ds["sfc_pres"].values, dtype="float64")
+        sfc_wspd = np.asarray(ds["sfc_wspd"].values, dtype="float64")
+        sfc_wdir = np.asarray(ds["sfc_wdir"].values, dtype="float64")
+        lat_raw = np.asarray(ds["lat"].values, dtype="float64")
+        lon_raw = np.asarray(ds["lon"].values, dtype="float64")
 
     per_record_location = lat_raw.ndim > 0
     lat_arr = lat_raw if per_record_location else None

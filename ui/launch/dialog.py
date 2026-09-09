@@ -4,28 +4,29 @@ import hashlib
 import hmac
 import os
 import sys
-import threading
 from pathlib import Path
-from datetime import date, datetime, timezone
+from datetime import datetime, timedelta, timezone
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QToolButton, QFileDialog, QFrame,
     QApplication, QMessageBox, QSizePolicy, QWidget,
     QDateTimeEdit, QSpinBox, QComboBox, QCheckBox, QProgressBar,
-    QCalendarWidget, QListWidget, QListWidgetItem,
+    QCalendarWidget, QListWidget, QListWidgetItem, QTabWidget, QScrollArea,
 )
 from PyQt6.QtCore import (
     Qt, QSettings, QTimer, QSize, QDate, QDateTime, QPointF, QRectF, QObject, QEvent, pyqtSignal,
 )
-from PyQt6.QtGui import QPixmap, QPainter, QIcon, QColor, QPolygonF, QPen
+from PyQt6.QtGui import QPixmap, QPainter, QIcon, QColor, QPolygonF, QPen, QTextCharFormat
 
 import config as _config
 from ui.launch.icons import combo_down_arrow_qss, _svg_pixmap
 from ui.launch.styles import (
-    _BROWSE_ACTION_BTN_STYLE, _DIALOG_STYLE, _ICON_SELECTED_STYLE, _LOG_BTN_STYLE,
+    _DIALOG_STYLE, _ICON_SELECTED_STYLE, _LOG_BTN_STYLE,
     _MODE_BTN_SELECTED_STYLE, _MODE_BTN_STYLE, _UPD_AVAILABLE, _UPD_CHECKING,
     _UPD_CURRENT, _UPD_ERROR, _UPD_SUCCESS, _UPD_WARNING, _YEAR_GRID_STYLE,
 )
+from ui.launch.availability import AvailabilityWorker
+from archive.catalog import ALL_PLATFORMS, CAMPAIGN_YEARS
 from ui.launch.update_dialogs import _CondaUpdateDialog, _LogViewerDialog, UpdateWorker
 
 
@@ -79,31 +80,23 @@ def _calendar_glyph_icon(color: str = "#8E97AB", w: int = 16, h: int = 16) -> QI
     return QIcon(px)
 
 
-class _CatalogQueryWorker(QObject):
-    """Runs one archive.catalog query (list_dates_for_platform or
-    coverage_for_date, both live network calls) on a background thread,
-    matching the QObject + threading.Thread pattern used by every other
-    archive fetcher in this codebase, so the dialog stays responsive
-    while THREDDS is queried."""
-
-    finished = pyqtSignal(object)
-    failed = pyqtSignal(str)
-
-    def __init__(self, fn, *args, parent=None):
+class _AvailabilityCalendar(QCalendarWidget):
+    """Shade available days using Qt's date formats; keep native selection."""
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._fn = fn
-        self._args = args
+        self._known_dates = frozenset()
+        self.setToolTip("Shaded dates: catalog-listed data matching the browse filters. Unshaded dates may be unchecked.")
 
-    def start(self):
-        threading.Thread(target=self._run, daemon=True).start()
-
-    def _run(self):
-        try:
-            result = self._fn(*self._args)
-        except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
-            self.failed.emit(str(exc))
-            return
-        self.finished.emit(result)
+    def set_known_dates(self, dates):
+        dates = frozenset(dates)
+        available = QTextCharFormat()
+        available.setBackground(QColor("#123C50"))
+        available.setForeground(QColor("#9BE8FF"))
+        for d in self._known_dates - dates:
+            self.setDateTextFormat(QDate(d.year, d.month, d.day), QTextCharFormat())
+        for d in dates - self._known_dates:
+            self.setDateTextFormat(QDate(d.year, d.month, d.day), available)
+        self._known_dates = dates
 
 
 class _ClickConsumer(QObject):
@@ -120,7 +113,9 @@ class _ClickConsumer(QObject):
         self._on_click = on_click
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.MouseButtonPress:
+        mouse_activate = event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton
+        key_activate = event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        if mouse_activate or key_activate:
             self._on_click()
             return True
         return False
@@ -143,6 +138,7 @@ class _YearGridPopup(QWidget):
         self.setObjectName("yearGridPopup")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(_YEAR_GRID_STYLE)
+        self._known_years = frozenset()
         self._current_year = current_year
         self._start_year = current_year - 5
         self._buttons: list[QPushButton] = []
@@ -199,11 +195,19 @@ class _YearGridPopup(QWidget):
         self.yearPicked.emit(self._start_year + idx)
         self.hide()
 
+    def set_known_years(self, years):
+        self._known_years = frozenset(years)
+        self._refresh()
+
     def _refresh(self):
         self._range_lbl.setText(f"{self._start_year} – {self._start_year + self._COUNT - 1}")
         for i, btn in enumerate(self._buttons):
             year = self._start_year + i
             btn.setText(str(year))
+            btn.setProperty("available", year in self._known_years)
+            btn.setToolTip("Catalog-listed data" if year in self._known_years else "No dates indexed yet")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
             selected = year == self._current_year
             if btn.property("selected") != selected:
                 btn.setProperty("selected", selected)
@@ -245,16 +249,47 @@ class LaunchDialog(QDialog):
             "auto_obs_ne":       s.value("launch/auto_obs_ne",       False, type=bool),
             "radar_resolution":  s.value("launch/radar_resolution",  -1,    type=int),
         }
-        self._project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self._year_click_filters: list = []  # keep _ClickForwarder instances alive
+        self._project_root = str(Path(__file__).resolve().parents[2])
+        self._year_click_filters: list = []
         self._year_grid_popup: "_YearGridPopup | None" = None
+        self._availability = AvailabilityWorker()
+        self._availability.updated.connect(self._on_availability_updated)
+        self.destroyed.connect(self._availability.close)
+        self._availability_generation = 0
+        self._availability_snapshot = None
+        self._availability_refresh = False
+        self._availability_timer = QTimer(self)
+        self._availability_timer.setSingleShot(True)
+        self._availability_timer.setInterval(250)
+        self._availability_timer.timeout.connect(self._request_availability)
+        self._layout_timer = QTimer(self)
+        self._layout_timer.setSingleShot(True)
+        self._layout_timer.timeout.connect(self._post_layout_adjust)
+        self._restart_timer = QTimer(self)
+        self._restart_timer.setSingleShot(True)
+        self._restart_timer.timeout.connect(self._restart_app)
         self._build_ui(saved)
+        self._select_mode(saved.get("mode", "vehicle"))
+        self._archive_dt_edit.dateChanged.connect(self._schedule_availability)
         self._start_update_check()
 
 
     def _build_ui(self, saved: dict):
-        root = QVBoxLayout(self)
-        root.setContentsMargins(32, 32, 32, 28)
+        frame = QVBoxLayout(self)
+        frame.setContentsMargins(0, 0, 0, 0)
+        frame.setSpacing(0)
+        self._form_scroll = QScrollArea()
+        self._form_scroll.setObjectName("launchFormScroll")
+        self._form_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._form_scroll.setWidgetResizable(True)
+        self._form_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._form = QWidget()
+        self._form.setObjectName("launchForm")
+        self._form.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._form_scroll.setWidget(self._form)
+        frame.addWidget(self._form_scroll)
+        root = QVBoxLayout(self._form)
+        root.setContentsMargins(32, 32, 32, 12)
         root.setSpacing(0)
 
         # title
@@ -444,9 +479,10 @@ class LaunchDialog(QDialog):
         self._archive_dt_edit = QDateTimeEdit()
         self._archive_dt_edit.setDisplayFormat("yyyy-MM-dd  HH:mm:ss")
         self._archive_dt_edit.setCalendarPopup(True)
+        self._archive_dt_edit.setCalendarWidget(_AvailabilityCalendar(self._archive_dt_edit))
         # default to yesterday at 20:00 UTC as a sensible starting point.
         now_utc = datetime.now(timezone.utc)
-        yesterday = now_utc.replace(hour=20, minute=0, second=0, microsecond=0)
+        yesterday = (now_utc - timedelta(days=1)).replace(hour=20, minute=0, second=0, microsecond=0)
         self._archive_dt_edit.setDateTime(
             QDateTime(
                 yesterday.year, yesterday.month, yesterday.day,
@@ -470,9 +506,6 @@ class LaunchDialog(QDialog):
 
         self._archive_section.setVisible(False)
         root.addWidget(self._archive_section)
-
-        # apply saved mode
-        self._select_mode(saved.get("mode", "vehicle"))
 
         root.addSpacing(14)
         div2 = QFrame()
@@ -602,7 +635,14 @@ class LaunchDialog(QDialog):
         if any_data:
             self._toggle_data_section()
 
-        root.addSpacing(20)
+        root.addSpacing(4)
+
+        # Keep launch/update controls reachable while a long form scrolls.
+        self._footer = QWidget()
+        root = QVBoxLayout(self._footer)
+        root.setContentsMargins(32, 14, 32, 20)
+        root.setSpacing(0)
+        frame.addWidget(self._footer)
 
         # launch button
         btn_row = QHBoxLayout()
@@ -640,45 +680,33 @@ class LaunchDialog(QDialog):
         root.addLayout(log_row)
 
         # defer adjustSize until the event loop starts so the full layout is
-        QTimer.singleShot(0, self._post_layout_adjust)
+        self._layout_timer.start(0)
 
 
     def _post_layout_adjust(self):
-        """Resize to content then re-center within the available screen
-        area.
+        """Honor wrapped content height; scroll the form on smaller screens.
 
-        Runs the resize/settle/recenter sequence twice, synchronously,
-        with processEvents() pumped in between rather than deferring the
-        second pass via QTimer.singleShot: a word-wrapped QLabel's
-        heightForWidth is only correct once a layout pass has actually
-        settled at its final width, and calling adjustSize() again
-        immediately (no event processing in between) doesn't help -- Qt
-        hasn't handled the layout-request event from the first call yet,
-        so the second call still sees stale geometry. Confirmed live
-        2026-09-08: right after content that changes both a label's
-        text *and* the dialog's width (e.g. the coverage-check summary),
-        a single pass undersized the dialog every time. A deferred
-        QTimer.singleShot for the second pass was tried first and
-        rejected: it queues a callback that can outlive the dialog it
-        closes over in a tight test loop that constructs many dialogs
-        without an explicit teardown between them, which is exactly this
-        codebase's existing pre-existing flaky-crash pattern (see
-        planning/archive-browse-backlog.md) -- processEvents() inside
-        one synchronous call has the same settling effect without
-        queuing anything that could fire later against a dead object.
-        A word-wrapped QLabel's own settled height also reliably lands
-        a few px under its own heightForWidth() even after that second
-        pass (a further Qt imprecision) -- setting it as an explicit
-        minimum on _browse_coverage_lbl forces the layout to actually
-        honor it, reset to 0 first when empty so this doesn't ratchet
-        upward forever across queries with shrinking result sets."""
-        self.adjustSize()
-        self._recenter()
-        QApplication.processEvents()
-        lbl = getattr(self, "_browse_coverage_lbl", None)
-        if lbl is not None:
-            lbl.setMinimumHeight(lbl.heightForWidth(lbl.width()) if lbl.text() else 0)
-        self.adjustSize()
+        QWidget.adjustSize() caps top-level windows at a fraction of the screen
+        and can squeeze nested layouts below their height-for-width. Compute the
+        form's height explicitly instead of pumping a nested event loop.
+        """
+        self._browse_coverage_lbl.setMinimumHeight(0)
+        self._form.setMinimumHeight(0)
+        layout = self._form.layout()
+        layout.invalidate()
+        layout.activate()
+        width = max(self.minimumWidth(), self._form.minimumSizeHint().width())
+        height = layout.heightForWidth(width)
+        footer_height = self._footer.sizeHint().height()
+        screen = self.screen().availableGeometry()
+        max_height = max(240, screen.height() - 60)
+        scrollbar = self._form_scroll.verticalScrollBar().sizeHint().width() if height + footer_height > max_height else 0
+        self._form.setMinimumHeight(height)
+        self.resize(width + scrollbar, min(height + footer_height, max_height))
+        self.layout().activate()
+        self._form_scroll.widget().layout().activate()
+        lbl = self._browse_coverage_lbl
+        lbl.setMinimumHeight(max(0, lbl.heightForWidth(lbl.width())) if lbl.text() else 0)
         self._recenter()
 
     def _recenter(self):
@@ -703,6 +731,7 @@ class LaunchDialog(QDialog):
         btn.setStyleSheet(
             "QToolButton {"
             "  background-color: #1A1A2E;"
+            "  color: #8E97AB;"
             "  border: 1px solid #1E1E2E;"
             "  border-radius: 6px;"
             "}"
@@ -719,7 +748,7 @@ class LaunchDialog(QDialog):
         """Show a popup calendar anchored under the calendar button,
         pre-selected to the archive field's current date."""
         if self._calendar_popup is None:
-            popup = QCalendarWidget(self)
+            popup = _AvailabilityCalendar(self)
             popup.setWindowFlags(Qt.WindowType.Popup)
             popup.setGridVisible(False)
             popup.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
@@ -729,7 +758,8 @@ class LaunchDialog(QDialog):
             self._style_calendar_nav_icons(popup)
 
         self._calendar_popup.setSelectedDate(self._archive_dt_edit.date())
-        anchor = self.sender()
+        self._calendar_popup.set_known_dates(self._filtered_dates())
+        anchor = self._cal_btn
         pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
         self._calendar_popup.move(pos)
         self._calendar_popup.show()
@@ -743,36 +773,9 @@ class LaunchDialog(QDialog):
             self._calendar_popup.hide()
 
     def _style_calendar_nav_icons(self, calendar: "QCalendarWidget"):
-        """Apply prev/next-month triangle icons to a QCalendarWidget's
-        built-in navigation controls and wire its year control to open
-        the year-grid popup, styled to match this dialog's dark theme.
-        Used for both the archive date field's own calendar and the
-        standalone popup from _build_calendar_button, so the two look
-        identical.
-
-        Root-caused the "must click twice" bug (2026-09-08): the visible
-        "2026" pill in the nav bar is qt_calendar_yearbutton, a QToolButton
-        whose built-in click handler swaps it out for qt_calendar_yearedit
-        (a real editable QSpinBox, hidden until that swap happens -- Qt's
-        own year-editing UI). The first click was triggering THAT native
-        swap-to-editable-field behavior (which looks exactly like "now
-        write in a year"); only the second click landed on the
-        now-revealed spinbox. Styling/intercepting qt_calendar_yearedit
-        (as an earlier version of this method did) was fixing the wrong
-        widget -- it's never what the user's first click actually lands
-        on. The fix here intercepts qt_calendar_yearbutton directly and
-        consumes its mouse press so Qt's internal swap-to-spinbox slot
-        never fires at all, opening the grid on the one, only click.
-
-        Note on scope: this does not add explicit "<<"/">>" year-step
-        buttons into this navigation bar. QCalendarWidget manages that
-        bar's layout internally and assumes a fixed child count/order --
-        inserting a real sibling widget into it (tried and confirmed
-        live, 2026-09-08) corrupts that internal state and crashes the
-        process on the next repaint. The year-grid popup's own prev/next
-        controls (already built) page by a full screen of years instead,
-        which is the same "jump by a bigger unit" idea without touching
-        Qt's internal layout."""
+        """Style existing controls; intercept year activation before Qt reveals
+        its editable spinbox. Never insert widgets in Qt's private nav layout.
+        """
         _prev = calendar.findChild(QToolButton, "qt_calendar_prevmonth")
         _next = calendar.findChild(QToolButton, "qt_calendar_nextmonth")
         if _prev:
@@ -794,7 +797,7 @@ class LaunchDialog(QDialog):
 
         _year_btn = calendar.findChild(QToolButton, "qt_calendar_yearbutton")
         if _year_btn is not None:
-            _consumer = _ClickConsumer(lambda c=calendar, b=_year_btn: self._open_year_grid(c, b))
+            _consumer = _ClickConsumer(lambda c=calendar, b=_year_btn: self._open_year_grid(c, b), calendar)
             _year_btn.installEventFilter(_consumer)
             self._year_click_filters.append(_consumer)
 
@@ -802,7 +805,11 @@ class LaunchDialog(QDialog):
         """Show the year-grid popup anchored under the clicked year
         button, seeded from the calendar's own currently-shown year --
         not the (possibly still-hidden, out-of-sync) year spinbox."""
+        if self._year_grid_popup is not None:
+            self._year_grid_popup.hide()
+            self._year_grid_popup.deleteLater()
         popup = _YearGridPopup(calendar.yearShown(), parent=self)
+        popup.set_known_years(d.year for d in self._filtered_dates())
         popup.yearPicked.connect(lambda year, c=calendar: self._on_year_picked(c, year))
         pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
         popup.move(pos)
@@ -826,252 +833,229 @@ class LaunchDialog(QDialog):
         fully within our control."""
         self._style_calendar_nav_icons(self._archive_dt_edit.calendarWidget())
 
-    # -- Browse available cases (archive.catalog: live, on-demand THREDDS queries) --
+    # -- Archive availability: progressive session metadata, automatic date queries --
 
     def _build_browse_section(self, parent_layout: QVBoxLayout):
-        """A collapsible panel for discovering what dates a data source
-        actually has, and how many sources have data on a given date --
-        every query here hits THREDDS live when the user asks, there is
-        nothing precomputed or cached (see archive/catalog.py)."""
+        summary_row = QHBoxLayout()
+        self._browse_coverage_lbl = QLabel("Availability will be checked when archive mode opens.")
+        self._browse_coverage_lbl.setObjectName("hint")
+        self._browse_coverage_lbl.setWordWrap(True)
+        summary_row.addWidget(self._browse_coverage_lbl, 1)
+        self._availability_refresh_btn = QToolButton()
+        self._availability_refresh_btn.setText("↻")
+        self._availability_refresh_btn.setStyleSheet(self._cal_btn.styleSheet())
+        self._availability_refresh_btn.setFixedSize(28, 28)
+        self._availability_refresh_btn.setAccessibleName("Refresh archive availability")
+        self._availability_refresh_btn.setToolTip("Refresh catalog availability from THREDDS")
+        self._availability_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._availability_refresh_btn.clicked.connect(self._refresh_availability)
+        summary_row.addWidget(self._availability_refresh_btn)
+        parent_layout.addLayout(summary_row)
+        self._browse_coverage_progress = QProgressBar()
+        self._browse_coverage_progress.setObjectName("coverageProgress")
+        self._browse_coverage_progress.setTextVisible(False)
+        self._browse_coverage_progress.setFixedHeight(4)
+        self._browse_coverage_progress.hide()
+        parent_layout.addWidget(self._browse_coverage_progress)
+
         self._browse_toggle_btn = QPushButton("▸  BROWSE AVAILABLE CASES")
         self._browse_toggle_btn.setObjectName("dataToggleBtn")
         self._browse_toggle_btn.setFixedHeight(18)
         self._browse_toggle_btn.clicked.connect(self._toggle_browse_section)
         parent_layout.addWidget(self._browse_toggle_btn)
-
         self._browse_section = QWidget()
+        self._browse_section.setMinimumWidth(360)
         bs = QVBoxLayout(self._browse_section)
         bs.setContentsMargins(0, 8, 0, 0)
         bs.setSpacing(6)
 
-        from archive.catalog import CAMPAIGN_YEARS, platforms_by_family
-
         filter_row = QHBoxLayout()
-        filter_row.setSpacing(6)
         self._browse_campaign_combo = QComboBox()
-        self._browse_campaign_combo.setEditable(False)
-        self._browse_campaign_combo.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._browse_campaign_combo.addItem("Any campaign", None)
+        self._browse_campaign_combo.addItem("Any campaign years", None)
+        self._browse_campaign_combo.setToolTip("Filters by campaign years only; dates may belong to other campaigns in the same year.")
         for name in CAMPAIGN_YEARS:
             self._browse_campaign_combo.addItem(name, name)
-        self._browse_campaign_combo.currentIndexChanged.connect(self._on_browse_campaign_changed)
-        filter_row.addWidget(self._browse_campaign_combo, 1)
-
         self._browse_year_combo = QComboBox()
-        self._browse_year_combo.setEditable(False)
-        self._browse_year_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self._populate_browse_year_combo(None)
-        filter_row.addWidget(self._browse_year_combo, 1)
+        for combo in (self._browse_campaign_combo, self._browse_year_combo):
+            combo.setCursor(Qt.CursorShape.PointingHandCursor)
+            filter_row.addWidget(combo, 1)
         bs.addLayout(filter_row)
-
-        platform_row = QHBoxLayout()
-        platform_row.setSpacing(6)
         self._browse_platform_combo = QComboBox()
-        self._browse_platform_combo.setEditable(False)
         self._browse_platform_combo.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._browse_platform_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        for family, platforms in platforms_by_family().items():
-            for p in sorted(platforms, key=lambda x: x.display_name):
-                self._browse_platform_combo.addItem(f"{family} — {p.display_name}", p)
-        self._browse_platform_combo.currentIndexChanged.connect(self._on_browse_platform_changed)
-        self._on_browse_platform_changed()  # seed the tooltip for the initial selection
-        platform_row.addWidget(self._browse_platform_combo, 1)
-
-        self._browse_find_btn = QPushButton("Find dates")
-        self._browse_find_btn.setStyleSheet(_BROWSE_ACTION_BTN_STYLE)
-        self._browse_find_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._browse_find_btn.setMinimumWidth(88)
-        self._browse_find_btn.clicked.connect(self._on_find_dates_clicked)
-        platform_row.addWidget(self._browse_find_btn)
-        bs.addLayout(platform_row)
-
-        self._browse_status_lbl = QLabel("")
+        self._browse_platform_combo.setMinimumContentsLength(24)
+        self._browse_platform_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self._browse_platform_combo.addItem("All instruments", None)
+        for p in sorted(ALL_PLATFORMS, key=lambda p: (p.family, p.display_name)):
+            self._browse_platform_combo.addItem(f"{p.family} — {p.display_name}", p)
+        bs.addWidget(self._browse_platform_combo)
+        self._browse_status_lbl = QLabel()
         self._browse_status_lbl.setObjectName("hint")
         self._browse_status_lbl.setWordWrap(True)
         bs.addWidget(self._browse_status_lbl)
-
         self._browse_dates_list = QListWidget()
         self._browse_dates_list.setObjectName("browseDatesList")
-        self._browse_dates_list.setFixedHeight(120)
-        self._browse_dates_list.setVisible(False)
-        self._browse_dates_list.itemDoubleClicked.connect(self._on_browse_date_chosen)
-        bs.addWidget(self._browse_dates_list)
-
-        bs.addSpacing(2)
-        cov_div = QFrame()
-        cov_div.setFrameShape(QFrame.Shape.HLine)
-        cov_div.setStyleSheet("background-color: #1E1E2E;")
-        cov_div.setFixedHeight(1)
-        bs.addWidget(cov_div)
-        bs.addSpacing(2)
-
-        self._browse_coverage_btn = QPushButton("Check coverage for the date above")
-        self._browse_coverage_btn.setStyleSheet(_BROWSE_ACTION_BTN_STYLE)
-        self._browse_coverage_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._browse_coverage_btn.clicked.connect(self._on_check_coverage_clicked)
-        bs.addWidget(self._browse_coverage_btn)
-
-        # indeterminate "wheel" -- shown only while a coverage check is
-        # actually running, so it reads as "still looking" the same way
-        # a spinner would, without a custom animation to maintain
-        self._browse_coverage_progress = QProgressBar()
-        self._browse_coverage_progress.setObjectName("coverageProgress")
-        self._browse_coverage_progress.setRange(0, 0)
-        self._browse_coverage_progress.setTextVisible(False)
-        self._browse_coverage_progress.setFixedHeight(4)
-        self._browse_coverage_progress.setVisible(False)
-        bs.addWidget(self._browse_coverage_progress)
-
-        self._browse_coverage_lbl = QLabel("")
-        self._browse_coverage_lbl.setObjectName("hint")
-        self._browse_coverage_lbl.setWordWrap(True)
-        bs.addWidget(self._browse_coverage_lbl)
-
-        self._browse_section.setVisible(False)
+        self._browse_results = QTabWidget()
+        self._browse_results.setObjectName("browseResults")
+        self._browse_results.setFixedHeight(140)
+        self._browse_dates_list.itemClicked.connect(self._on_browse_date_chosen)
+        self._browse_dates_list.itemActivated.connect(self._on_browse_date_chosen)
+        self._browse_results.addTab(self._browse_dates_list, "Dates")
+        self._browse_sources_list = QListWidget()
+        self._browse_sources_list.setObjectName("browseDatesList")
+        self._browse_results.addTab(self._browse_sources_list, "Selected date · instruments")
+        bs.addWidget(self._browse_results)
+        note = QLabel("Shaded calendar dates and cyan years mark catalog-listed data matching these filters. "
+                      "Unmarked dates may be unchecked. Radar coverage is not indexed yet.")
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        bs.addWidget(note)
+        self._browse_section.hide()
         parent_layout.addWidget(self._browse_section)
+        self._browse_campaign_combo.currentIndexChanged.connect(self._on_browse_campaign_changed)
+        self._browse_year_combo.currentIndexChanged.connect(self._render_availability)
+        self._browse_platform_combo.currentIndexChanged.connect(self._render_availability)
 
     def _toggle_browse_section(self):
-        visible = not self._browse_section.isVisible()
+        visible = self._browse_section.isHidden()
         self._browse_section.setVisible(visible)
         self._browse_toggle_btn.setText("▾  BROWSE AVAILABLE CASES" if visible else "▸  BROWSE AVAILABLE CASES")
-        if self.isVisible():
-            QTimer.singleShot(0, self._post_layout_adjust)
+        self._layout_timer.start(0)
 
-    def _populate_browse_year_combo(self, campaign: "str | None"):
-        from archive.catalog import CAMPAIGN_YEARS
-
+    def _populate_browse_year_combo(self, campaign):
+        self._browse_year_combo.blockSignals(True)
         self._browse_year_combo.clear()
         self._browse_year_combo.addItem("Any year", None)
-        if campaign:
-            years = CAMPAIGN_YEARS.get(campaign, ())
-        else:
-            # Not campaign-scoped: real archived data goes back to 1999
-            # (a handful of early FOFS/CLAMPS shakedown files) -- confirmed
-            # live 2026-09-08 that limiting this list to the union of
-            # CAMPAIGN_YEARS (2009+) hid real, findable data for platforms
-            # with no campaign association (e.g. probe9's 2009-2010
-            # VORTEX2-era history, mg1-3/noxp_scout's 2015 history). This
-            # is a plain year range to filter by, not a claim every one of
-            # these years has data for every platform -- "Find dates" and
-            # "Check coverage" still do the real live THREDDS check.
-            years = range(1999, datetime.now().year + 2)
+        years = CAMPAIGN_YEARS.get(campaign, ()) if campaign else range(1999, datetime.now().year + 2)
         for year in years:
             self._browse_year_combo.addItem(str(year), year)
+        self._browse_year_combo.blockSignals(False)
 
     def _on_browse_campaign_changed(self):
         self._populate_browse_year_combo(self._browse_campaign_combo.currentData())
+        self._render_availability()
 
-    def _on_browse_platform_changed(self):
-        """Full selection text as a tooltip -- a safety net for anyone on
-        a narrower screen/font where the combo itself still elides it."""
-        self._browse_platform_combo.setToolTip(self._browse_platform_combo.currentText())
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._schedule_availability()
 
-    def _on_find_dates_clicked(self):
-        from archive.catalog import list_dates_for_platform
+    def hideEvent(self, event):
+        self._availability_generation += 1
+        self._availability_timer.stop()
+        self._layout_timer.stop()
+        self._availability.cancel()
+        super().hideEvent(event)
 
-        platform = self._browse_platform_combo.currentData()
-        if platform is None:
+    def _schedule_availability(self):
+        self._availability_generation += 1
+        self._availability.cancel()
+        self._availability_timer.stop()
+        if self._selected_mode == "archive":
+            self._render_availability()
+            if self.isVisible():
+                self._availability_timer.start()
+
+    def _refresh_availability(self):
+        self._availability_refresh = True
+        self._availability_snapshot = None
+        self._schedule_availability()
+
+    def _request_availability(self):
+        if self.isVisible() and self._selected_mode == "archive":
+            self._availability.request(self._availability_generation, self._availability_refresh)
+            self._availability_refresh = False
+
+    def _on_availability_updated(self, generation, snapshot):
+        if generation != self._availability_generation or self._selected_mode != "archive":
             return
-        self._browse_find_btn.setEnabled(False)
-        self._browse_dates_list.setVisible(False)
-        self._browse_status_lbl.setText(f"Checking THREDDS for {platform.family} — {platform.display_name}…")
-        if self.isVisible():
-            QTimer.singleShot(0, self._post_layout_adjust)
+        self._availability_snapshot = snapshot
+        self._render_availability()
 
-        worker = _CatalogQueryWorker(list_dates_for_platform, platform, parent=self)
-        worker.finished.connect(self._on_dates_found)
-        worker.failed.connect(self._on_find_dates_failed)
-        self._browse_worker = worker  # keep a reference so it isn't garbage-collected mid-query
-        worker.start()
-
-    def _on_dates_found(self, dates: list):
-        self._browse_find_btn.setEnabled(True)
+    def _filtered_dates(self):
+        snapshot = self._availability_snapshot
+        if snapshot is None:
+            return frozenset()
+        platform = self._browse_platform_combo.currentData()
+        result = snapshot.platforms.get(platform.platform_id) if platform else None
+        dates = result.dates if result else (frozenset() if platform else snapshot.dates)
         year = self._browse_year_combo.currentData()
-        if year is not None:
-            dates = [d for d in dates if d.year == year]
+        campaign = self._browse_campaign_combo.currentData()
+        return frozenset(d for d in dates if (year is None or d.year == year)
+                         and (campaign is None or d.year in CAMPAIGN_YEARS[campaign]))
 
-        if not dates:
-            self._browse_status_lbl.setText("No dates found for this platform (and filter, if set).")
-            self._browse_dates_list.setVisible(False)
-        else:
-            self._browse_status_lbl.setText(f"{len(dates)} date(s) found — double-click one to use it:")
+    def _render_availability(self):
+        snapshot = self._availability_snapshot
+        target = self._archive_dt_edit.date().toPyDate()
+        dates = self._filtered_dates()
+        self._archive_dt_edit.calendarWidget().set_known_dates(dates)
+        if self._calendar_popup is not None:
+            self._calendar_popup.set_known_dates(dates)
+        years = {d.year for d in dates}
+        if self._year_grid_popup is not None:
+            self._year_grid_popup.set_known_years(years)
+        for i in range(1, self._browse_year_combo.count()):
+            year = self._browse_year_combo.itemData(i)
+            self._browse_year_combo.setItemData(i, QColor("#00CFFF" if year in years else "#E8EAF0"), Qt.ItemDataRole.ForegroundRole)
+        self._browse_platform_combo.setToolTip(self._browse_platform_combo.currentText())
+        # Preserve scroll position and selection when only coverage progress changed.
+        listed = tuple(self._browse_dates_list.item(i).data(Qt.ItemDataRole.UserRole)
+                       for i in range(self._browse_dates_list.count()))
+        ordered = tuple(sorted(dates, reverse=True))
+        if listed != ordered:
+            scroll = self._browse_dates_list.verticalScrollBar().value()
             self._browse_dates_list.clear()
-            for d in reversed(dates):  # most recent first
-                item = QListWidgetItem(d.strftime("%Y-%m-%d"))
+            for d in ordered:
+                item = QListWidgetItem(d.isoformat())
                 item.setData(Qt.ItemDataRole.UserRole, d)
                 self._browse_dates_list.addItem(item)
-            self._browse_dates_list.setVisible(True)
-        if self.isVisible():
-            QTimer.singleShot(0, self._post_layout_adjust)
+                if d == target:
+                    self._browse_dates_list.setCurrentItem(item)
+            self._browse_dates_list.verticalScrollBar().setValue(scroll)
 
-    def _on_browse_date_chosen(self, item: "QListWidgetItem"):
-        picked = item.data(Qt.ItemDataRole.UserRole)
-        current_time = self._archive_dt_edit.time()
-        self._archive_dt_edit.setDateTime(QDateTime(QDate(picked.year, picked.month, picked.day), current_time))
-        self._browse_status_lbl.setText(f"Archive start time set to {picked.strftime('%Y-%m-%d')}.")
-
-    def _on_check_coverage_clicked(self):
-        from archive.catalog import coverage_for_date, ALL_PLATFORMS
-
-        target = self._archive_dt_edit.date()
-        target_date = date(target.year(), target.month(), target.day())
-        self._browse_coverage_btn.setEnabled(False)
-        self._browse_coverage_progress.setVisible(True)
-        self._browse_coverage_lbl.setStyleSheet("")  # clear any prior found/empty color
-        self._browse_coverage_lbl.setText(
-            f"Checking all {len(ALL_PLATFORMS)} known platforms for {target_date.strftime('%Y-%m-%d')}… "
-            f"this queries THREDDS live and can take a minute."
-        )
-        if self.isVisible():
-            QTimer.singleShot(0, self._post_layout_adjust)
-
-        worker = _CatalogQueryWorker(coverage_for_date, target_date, parent=self)
-        worker.finished.connect(self._on_coverage_result)
-        worker.failed.connect(self._on_coverage_failed)
-        self._coverage_worker = worker
-        worker.start()
-
-    def _on_coverage_result(self, result: dict):
-        from archive.catalog import ALL_PLATFORMS
-
-        self._browse_coverage_btn.setEnabled(True)
-        self._browse_coverage_progress.setVisible(False)
-        present = {pid for pid, ok in result.items() if ok}
-        by_family: dict[str, list[str]] = {}
+        target_row = ordered.index(target) if target in dates else -1
+        if self._browse_dates_list.currentRow() != target_row:
+            self._browse_dates_list.setCurrentRow(target_row)
+        self._browse_status_lbl.setText(f"{len(dates)} known dates in {len(years)} years. Select a date to explore.")
+        self._browse_sources_list.clear()
+        present, unknown = [], []
         for p in ALL_PLATFORMS:
-            if p.platform_id in present:
-                by_family.setdefault(p.family, []).append(p.display_name)
-
-        target = self._archive_dt_edit.date()
-        if present:
-            summary = (
-                f"Found! {len(present)} of {len(ALL_PLATFORMS)} platforms have data "
-                f"for {target.toString('yyyy-MM-dd')}:\n"
-            )
-            summary += "\n".join(
-                f"{fam}: {', '.join(names)}" for fam, names in by_family.items()
-            )
-            self._browse_coverage_lbl.setStyleSheet("color: #4ADE80;")  # matches _UPD_SUCCESS green
+            result = snapshot.platforms.get(p.platform_id) if snapshot else None
+            if result and target in result.dates:
+                present.append(p)
+                item = QListWidgetItem(f"{p.family} — {p.display_name}" + (" (partial)" if not result.complete else ""))
+                item.setToolTip("\n".join(result.errors) if result.errors else "Files listed for this date; contents have not been validated.")
+                self._browse_sources_list.addItem(item)
+            if result is None or not result.complete:
+                unknown.append(p)
+        for p in unknown:
+            if p in present:
+                continue
+            result = snapshot.platforms.get(p.platform_id) if snapshot else None
+            item = QListWidgetItem(f"{'Incomplete' if result and result.errors else 'Checking'} — {p.family} — {p.display_name}")
+            item.setForeground(QColor("#8E97AB"))
+            item.setToolTip("\n".join(result.errors) if result and result.errors else "Catalog scan has not finished for this instrument.")
+            self._browse_sources_list.addItem(item)
+        self._browse_results.setTabText(1, f"Selected date · {len(present)} instruments")
+        running = snapshot is None or snapshot.checked < snapshot.total
+        self._browse_coverage_progress.setVisible(running)
+        self._browse_coverage_progress.setRange(0, snapshot.total if snapshot else 0)
+        self._browse_coverage_progress.setValue(snapshot.checked if snapshot else 0)
+        text = f"{target.isoformat()} · {len(present)} instruments with listed data"
+        if running:
+            text += f"\nIndexing catalogs{f' · {snapshot.checked}/{snapshot.total}' if snapshot else '…'}"
+        elif unknown:
+            text += f"\nAvailability incomplete for {len(unknown)} instruments. Use ↻ to retry."
         else:
-            summary = f"No data found for {target.toString('yyyy-MM-dd')} on any known platform."
-            self._browse_coverage_lbl.setStyleSheet("")
-        self._browse_coverage_lbl.setText(summary)
-        if self.isVisible():
-            QTimer.singleShot(0, self._post_layout_adjust)
+            text += "\nCatalog check complete. Calendar markers are ready."
+        self._browse_coverage_lbl.setText(text)
+        self._browse_coverage_lbl.setStyleSheet("color: #4ADE80;" if present else "")
+        errors = [error for result in snapshot.platforms.values() for error in result.errors] if snapshot else []
+        self._browse_coverage_lbl.setToolTip("\n".join(errors) if errors else "Catalog listings indicate files, not verified contents or full-day coverage.")
+        self._layout_timer.start(0)
 
-    def _on_find_dates_failed(self, message: str):
-        self._browse_find_btn.setEnabled(True)
-        self._browse_status_lbl.setText(f"Query failed: {message}")
-        if self.isVisible():
-            QTimer.singleShot(0, self._post_layout_adjust)
-
-    def _on_coverage_failed(self, message: str):
-        self._browse_coverage_btn.setEnabled(True)
-        self._browse_coverage_progress.setVisible(False)
-        self._browse_coverage_lbl.setStyleSheet("")
-        self._browse_coverage_lbl.setText(f"Query failed: {message}")
-        if self.isVisible():
-            QTimer.singleShot(0, self._post_layout_adjust)
+    def _on_browse_date_chosen(self, item):
+        picked = item.data(Qt.ItemDataRole.UserRole)
+        self._archive_dt_edit.setDate(QDate(picked.year, picked.month, picked.day))
 
     def _set_fields_locked(self, locked: bool):
         self._vid_input.setReadOnly(locked)
@@ -1101,7 +1085,7 @@ class LaunchDialog(QDialog):
         self._archive_section.setVisible(archive_mode)
         if hasattr(self, "_data_section"):
             self._data_toggle_btn.setVisible(not archive_mode)
-            if archive_mode and self._data_section.isVisible():
+            if archive_mode and not self._data_section.isHidden():
                 self._data_section.setVisible(False)
                 self._data_toggle_btn.setText("▸  DATA CONFIGURATION")
 
@@ -1115,20 +1099,22 @@ class LaunchDialog(QDialog):
             self._passphrase_label.setText(lbl)
         self._passphrase_input.clear()
         if self.isVisible():
-            self._post_layout_adjust()
+            self._layout_timer.start(0)
+
+        self._schedule_availability()
 
     def _on_admin_toggled(self, checked: bool):
         self._admin_passphrase_row.setVisible(checked)
         if not checked:
             self._admin_passphrase_input.clear()
         if self.isVisible():
-            self._post_layout_adjust()
+            self._layout_timer.start(0)
 
     def _toggle_data_section(self):
-        visible = not self._data_section.isVisible()
+        visible = self._data_section.isHidden()
         self._data_section.setVisible(visible)
         self._data_toggle_btn.setText("▾  DATA CONFIGURATION" if visible else "▸  DATA CONFIGURATION")
-        QTimer.singleShot(0, self.adjustSize)
+        self._layout_timer.start(0)
 
     def _toggle_layer(self, key: str):
         self._selected_layers.discard(key) if key in self._selected_layers else self._selected_layers.add(key)
@@ -1214,11 +1200,11 @@ class LaunchDialog(QDialog):
                 self._update_btn.setText(f"⚠   DEPS CHANGED — RUN:\n{_cmd}\nTHEN RESTART")
                 self._update_btn.setStyleSheet(_UPD_WARNING)
                 self._update_btn.setWordWrap(True)
-                QTimer.singleShot(0, self._post_layout_adjust)
+                self._layout_timer.start(0)
         elif success:
             self._update_btn.setText("✓   UPDATED — RESTARTING...")
             self._update_btn.setStyleSheet(_UPD_SUCCESS)
-            QTimer.singleShot(800, self._restart_app)
+            self._restart_timer.start(800)
         else:
             self._update_btn.setText("UPDATE FAILED")
             self._update_btn.setStyleSheet(_UPD_ERROR)
@@ -1253,13 +1239,13 @@ class LaunchDialog(QDialog):
                 self._update_btn.setText(f"⚠   DEPS CHANGED — RUN:\n{_cmd}\nTHEN RESTART")
                 self._update_btn.setStyleSheet(_UPD_WARNING)
                 self._update_btn.setWordWrap(True)
-                QTimer.singleShot(0, self._post_layout_adjust)
+                self._layout_timer.start(0)
             return
 
         if success:
             self._update_btn.setText("✓   UPDATED — RESTARTING...")
             self._update_btn.setStyleSheet(_UPD_SUCCESS)
-            QTimer.singleShot(800, self._restart_app)
+            self._restart_timer.start(800)
         else:
             # show error and fall back to manual instructions
             QMessageBox.warning(
@@ -1273,7 +1259,7 @@ class LaunchDialog(QDialog):
             self._update_btn.setText(f"⚠   DEPS CHANGED — RUN:\n{_cmd}\nTHEN RESTART")
             self._update_btn.setStyleSheet(_UPD_WARNING)
             self._update_btn.setWordWrap(True)
-            QTimer.singleShot(0, self._post_layout_adjust)
+            self._layout_timer.start(0)
 
     def _restart_app(self):
         os.execv(sys.executable, [sys.executable] + sys.argv)

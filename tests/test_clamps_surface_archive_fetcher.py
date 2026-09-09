@@ -198,3 +198,24 @@ def test_parse_clamps_surface_netcdf_suppresses_wind_direction_when_not_trusted(
     assert untrusted[0].wind_dir_deg is None
     # wind speed doesn't depend on heading and stays populated either way
     assert untrusted[0].wind_speed_ms == 3.0
+
+
+def test_classic_netcdf_met_tower_is_read_without_netcdf4_dependency(tmp_path):
+    path = tmp_path / "classic.cdf"
+    # A real NETCDF3_CLASSIC file, not just a .cdf extension on an HDF5 file.
+    dataset = xr.Dataset({
+        "base_time": ((), np.int32(datetime(2024, 4, 27, tzinfo=timezone.utc).timestamp())),
+        "time_offset": ("time", [0., 60.]),
+        "sfc_temp": ("time", [25., 26.]), "sfc_rh": ("time", [50., 60.]),
+        "sfc_pres": ("time", [1000., 1001.]), "sfc_wspd": ("time", [3., 4.]),
+        "sfc_wdir": ("time", [180., 190.]),
+        "lat": ("time", [35., 35.1]), "lon": ("time", [-97., -97.1]),
+    })
+    dataset.to_netcdf(path, engine="scipy", format="NETCDF3_CLASSIC")
+    data = path.read_bytes()
+    assert data.startswith(b"CDF")
+    observations = parse_clamps_surface_netcdf(data, "CLAMPS1")
+    assert len(observations) == 2
+    assert observations[1].temperature_c == 26.
+    assert observations[1].lat == 35.1
+    assert observations[1].timestamp == datetime(2024, 4, 27, 0, 1, tzinfo=timezone.utc)

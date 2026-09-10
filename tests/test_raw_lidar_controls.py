@@ -59,20 +59,16 @@ def test_status_when_nothing_has_data():
     assert controls._btn_view.isEnabled() is False
 
 
-def test_switching_instrument_refreshes_scan_modes_and_emits_source_selected():
+def test_discovery_selects_the_instrument_that_has_data():
     controls = RawLidarControls()
     controls.set_sources(list(KNOWN_RAW_LIDAR_SOURCES))
     clamps1_ppi = next(s for s in KNOWN_RAW_LIDAR_SOURCES if s.instrument == "CLAMPS1" and s.product == "ppi")
     asset = LidarAsset(clamps1_ppi, "clampsdlppiC1.b1.20260608.000000.cdf", "catalog")
     controls.set_assets_for_all_sources({clamps1_ppi.platform_id: [asset]})
 
-    selected = []
-    controls.source_selected.connect(selected.append)
-
-    clamps1_index = controls._source_combo.findData("CLAMPS1")
-    controls._source_combo.setCurrentIndex(clamps1_index)
-
-    assert selected == [clamps1_ppi.platform_id]
+    assert controls._source_combo.count() == 1
+    assert controls.current_instrument() == "CLAMPS1"
+    assert controls.current_source() == clamps1_ppi
     assert controls._asset_combo.count() == 1
     assert controls._btn_view.isEnabled() is True
 
@@ -157,3 +153,29 @@ def test_switching_off_a_mappable_source_clears_the_map_toggle():
 
     assert controls._btn_map.isChecked() is False
     assert (clamps1_ppi.platform_id, asset, False) in events
+
+
+def test_roster_hides_absent_instruments_but_preserves_unknown_sources():
+    controls = RawLidarControls()
+    controls.set_sources(KNOWN_RAW_LIDAR_SOURCES)
+    mobile = KNOWN_RAW_LIDAR_SOURCES[0]
+    unknown = next(s for s in KNOWN_RAW_LIDAR_SOURCES if s.instrument == 'CLAMPS1')
+    asset = LidarAsset(mobile, 'a.cdf', 'catalog')
+    controls.set_assets_for_all_sources({mobile.platform_id: [asset], unknown.platform_id: None})
+    assert controls._source_combo.count() == 2
+    assert controls._source_combo.findData('DLTRUCK1-DL2') == -1
+    assert 'unavailable' in controls._source_combo.itemText(1)
+    assert 'orientation unverified' in controls._map_reason.text()
+
+
+def test_multiple_files_for_a_scan_mode_remain_selectable():
+    controls = RawLidarControls()
+    source = KNOWN_RAW_LIDAR_SOURCES[0]
+    controls.set_sources([source])
+    assets = [LidarAsset(source, name, 'catalog') for name in ('first.cdf', 'second.cdf')]
+    controls.set_assets_for_all_sources({source.platform_id: assets})
+    requested = []
+    controls.quicklook_requested.connect(lambda pid, asset: requested.append(asset))
+    controls._asset_combo.setCurrentIndex(1)
+    controls._btn_view.click()
+    assert requested == [assets[1]]

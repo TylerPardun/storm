@@ -93,6 +93,10 @@ class RawLidarControls(QWidget):
         # as a placeholder since discovery runs automatically once archive
         # mode starts (main_window._begin_archive_startup), not on open.
         col.addWidget(self._status_label)
+        self._map_reason = QLabel("Choose a scan to view map availability.")
+        self._map_reason.setStyleSheet("color: #8E97AB; font-size: 10px;")
+        self._map_reason.setWordWrap(True)
+        col.addWidget(self._map_reason)
 
         outer.addWidget(self._drawer)
 
@@ -148,16 +152,37 @@ class RawLidarControls(QWidget):
         discovery pass across every known (instrument, scan mode) source
         for the archive date."""
         self._assets_by_source = dict(assets_by_source)
+        selected = self.current_instrument()
         instruments_with_data = {
-            source.instrument
-            for sources in self._sources_by_instrument.values()
-            for source in sources
-            if source.platform_id in self._assets_by_source
+            instrument for instrument, sources in self._sources_by_instrument.items()
+            if any(self._assets_by_source.get(source.platform_id) for source in sources)
         }
+        unresolved = {
+            instrument for instrument, sources in self._sources_by_instrument.items()
+            if any(source.platform_id in self._assets_by_source and self._assets_by_source[source.platform_id] is None for source in sources)
+        }
+        self._source_combo.blockSignals(True)
+        self._source_combo.clear()
+        for instrument in self._sources_by_instrument:
+            if instrument in instruments_with_data or instrument in unresolved:
+                suffix = " (unavailable)" if instrument not in instruments_with_data else ""
+                self._source_combo.addItem(instrument + suffix, instrument)
+        index = self._source_combo.findData(selected)
+        if index >= 0:
+            self._source_combo.setCurrentIndex(index)
+        elif instruments_with_data:
+            first = next(i for i in self._sources_by_instrument if i in instruments_with_data)
+            self._source_combo.setCurrentIndex(self._source_combo.findData(first))
+        self._source_combo.blockSignals(False)
         if instruments_with_data:
-            self.set_status(f"Data available: {', '.join(sorted(instruments_with_data))}")
+            message = f"Data available: {', '.join(sorted(instruments_with_data))}"
+            if unresolved:
+                message += " · some sources unavailable"
+            self.set_status(message)
+        elif unresolved:
+            self.set_status("Availability incomplete. Some sources could not be checked.")
         else:
-            self.set_status("No raw lidar data found for any known instrument on this date.")
+            self.set_status("No raw lidar data found for this date.")
         self._refresh_scan_mode_combo()
 
     def _refresh_scan_mode_combo(self) -> None:
@@ -174,10 +199,11 @@ class RawLidarControls(QWidget):
         for source in self._sources_by_instrument.get(instrument, []):
             assets = self._assets_by_source.get(source.platform_id)
             if assets:
-                # one file per (instrument, scan mode, day) is the norm; if
-                # more ever show up, the first is a reasonable default --
-                # nothing in this file name is meaningful to a user anyway.
-                self._asset_combo.addItem(source.product.upper(), (source, assets[0]))
+                for index, asset in enumerate(assets):
+                    label = source.product.upper()
+                    if len(assets) > 1:
+                        label += f" · file {index + 1}/{len(assets)}"
+                    self._asset_combo.addItem(label, (source, asset))
         self._asset_combo.blockSignals(False)
         self._btn_view.setEnabled(self._asset_combo.count() > 0)
         self._on_scan_mode_changed(self._asset_combo.currentIndex())
@@ -193,6 +219,12 @@ class RawLidarControls(QWidget):
         source = self.current_source()
         can_map = source is not None and not source.mobile and source.product in ("ppi", "csm")
         self._btn_map.setEnabled(can_map)
+        self._map_reason.setText(
+            "MAP: stationary scan" if can_map else
+            "MAP unavailable: mobile orientation unverified" if source and source.mobile else
+            "MAP unavailable for this scan mode" if source else
+            "Choose an available scan."
+        )
         if source is not None:
             self.source_selected.emit(source.platform_id)
 

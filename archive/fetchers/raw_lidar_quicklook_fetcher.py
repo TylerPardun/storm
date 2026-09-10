@@ -57,17 +57,18 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
     def _do_fetch(self, archive_date: datetime) -> None:
         """The real discovery logic, directly callable (no thread) for tests."""
         day = archive_date.date() if isinstance(archive_date, datetime) else archive_date
-        results: dict[str, list] = {}
+        results: dict[str, list | None] = {}
         errors: list[str] = []
         for source in KNOWN_RAW_LIDAR_SOURCES:
             try:
                 assets = discover_raw_lidar(source, day)
             except Exception as exc:  # noqa: BLE001
+                results[source.platform_id] = None
                 errors.append(f"{source.platform_id}: {exc}")
                 continue
             if assets:
                 results[source.platform_id] = assets
-        if errors and not results:
+        if errors:
             self.error.emit("; ".join(errors))
         self.assets_ready.emit(results)
 

@@ -164,3 +164,43 @@ def test_superseded_render_cannot_inject_and_pending_time_is_rendered():
     overlay.inject.assert_not_called()
     window._render_lidar_overlay.assert_called_once()
     assert not window._lidar_overlay_render_in_flight
+
+
+def test_instrument_location_expires_across_gaps_and_uses_latest_position():
+    from ui.map.lidar_overlay import lidar_site_at
+    rays = _ppi_rays()
+    rays.latitude[-1] = 35
+    site = lidar_site_at(rays, _WHEN)
+    assert site == {'instrument': 'CLAMPS1', 'lat': 35.0, 'lon': -97.0}
+    assert lidar_site_at(rays, _WHEN + timedelta(minutes=2)) is None
+
+
+def test_sector_and_lidar_projection_share_north_clockwise_bearings():
+    from core.scan_sector import _project
+    from pyproj import Geod
+    geod = Geod(ellps='WGS84')
+    for az in (240, 270, 300):
+        lat, lon = _project(38.94633, -97.214, az, 8000)
+        bearing, _, distance = geod.inv(-97.214, 38.94633, lon, lat)
+        assert bearing % 360 == pytest.approx(az, abs=.2)
+        assert distance == pytest.approx(8000, abs=25)
+
+
+def test_all_native_fields_render_with_their_own_units():
+    rays = _ppi_rays(field='backscatter', units='km^-1 sr^-1')
+    _, _, metadata = render_lidar_to_png(rays, _WHEN, 'backscatter', 256)
+    assert metadata['field'] == 'backscatter'
+    assert metadata['units'] == 'km^-1 sr^-1'
+    assert metadata['vmin'] < metadata['vmax']
+
+
+def test_declared_fixed_site_persists_between_scans_but_not_outside_file():
+    from ui.map.lidar_overlay import lidar_site_at
+    rays = _ppi_rays()
+    rays.time_epoch[:-1] -= 600
+    rays.provenance['metadata'] = {'Site_latitude': '34.9822433', 'Site_longitude': '-97.5200901'}
+    site = lidar_site_at(rays, _WHEN - timedelta(minutes=2))
+    assert site['lat'] == pytest.approx(34.9822433)
+    assert lidar_site_at(rays, _WHEN + timedelta(minutes=2)) is None
+    rays.source = _clamps_source(mobile=True)
+    assert lidar_site_at(rays, _WHEN - timedelta(minutes=2)) is None

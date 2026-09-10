@@ -478,6 +478,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._lidar_overlay_platform_id = None
         self._lidar_overlay_rays = None
         self._lidar_overlay_field = None
+        self._lidar_selected_rays = None
+        self._lidar_site = None
         self._lidar_overlay_render_in_flight = False
         self._lidar_overlay_pending = False
         if feature_flags.is_enabled("raw_lidar_quicklook"):
@@ -1454,6 +1456,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.btn_raw_lidar.toggled.connect(self._start_layout_pulse)
             self.raw_lidar_controls.quicklook_requested.connect(self._on_raw_lidar_quicklook_requested)
             self.raw_lidar_controls.map_overlay_requested.connect(self._on_raw_lidar_map_overlay_requested)
+            self.raw_lidar_controls.field_selected.connect(self._on_raw_lidar_field_selected)
+            self.raw_lidar_controls.locate_requested.connect(self._on_raw_lidar_locate)
+            self.raw_lidar_controls.source_selected.connect(self._on_raw_lidar_source_selected)
 
         if self._archive and feature_flags.is_enabled("archive_asos"):
             # No drawer -- nothing to pick from a list, just "draw a box,
@@ -1806,7 +1811,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         return div
 
     def closeEvent(self, event):
-        self._lidar_overlay_generation += 1
+        self._lidar_overlay_generation = getattr(self, "_lidar_overlay_generation", 0) + 1
         self._lidar_overlay_platform_id = None
         self._lidar_overlay_rays = None
         self._lidar_overlay_pending = False
@@ -4198,6 +4203,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _on_archive_raw_lidar_rays_ready(self, platform_id: str, rays) -> None:
         self.status_msg_label.setText(f"Raw lidar: {platform_id} loaded")
+        if self.raw_lidar_controls.set_loaded_fields(rays):
+            self._lidar_selected_rays = rays
+            self._update_raw_lidar_site()
+            self._layout_overlays()
 
         if platform_id == self._lidar_overlay_platform_id and rays.provenance.get("url") == self._lidar_overlay_asset_url:
             self._lidar_overlay_rays = rays
@@ -4213,6 +4222,35 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     # -- CLAMPS raw-lidar map overlay (positioned PPI/CSM rays) ----------
 
+    def _on_raw_lidar_source_selected(self, _platform_id):
+        self._lidar_selected_rays = None
+        self._lidar_site = None
+        self.map_widget.set_lidar_site(None)
+
+    def _on_raw_lidar_field_selected(self, field):
+        self._lidar_overlay_field = field
+        self._lidar_overlay_generation += 1
+        self._render_lidar_overlay()
+
+    def _update_raw_lidar_site(self):
+        from ui.map.lidar_overlay import lidar_site_at
+        rays = self._lidar_selected_rays
+        if rays is None:
+            return
+        site = lidar_site_at(rays, self._time_ctrl.current_time)
+        if site != self._lidar_site:
+            self._lidar_site = site
+            self.map_widget.set_lidar_site(site)
+            self.raw_lidar_controls._btn_locate.setVisible(site is not None)
+            self._layout_overlays()
+
+    def _on_raw_lidar_locate(self):
+        from ui.map.lidar_overlay import lidar_site_at
+        rays = self._lidar_selected_rays
+        site = lidar_site_at(rays, self._time_ctrl.current_time) if rays is not None else None
+        if site:
+            self.map_widget.fly_to(site['lat'], site['lon'], zoom=11)
+
     def _on_raw_lidar_map_overlay_requested(self, platform_id: str, asset, enabled: bool) -> None:
         self._lidar_overlay_generation += 1
         self._lidar_overlay_asset_url = asset.url if enabled else None
@@ -4223,13 +4261,19 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._lidar_overlay_platform_id = None
             return
         self._lidar_overlay_platform_id = platform_id
-        self._lidar_overlay_field = None   # re-pick a default for the new source
+        self._lidar_overlay_field = self.raw_lidar_controls._field_combo.currentData()
+        cached = self._lidar_selected_rays
+        if cached is not None and cached.provenance.get("url") == asset.url:
+            self._lidar_overlay_rays = cached
+            self._render_lidar_overlay()
+            return
         self.status_msg_label.setText(f"Raw lidar: loading {asset.source.product.upper()} for map overlay…")
         if not self._archive_raw_lidar.load(platform_id, asset):
             self.status_msg_label.setText("Raw lidar: load already in progress")
             self.raw_lidar_controls._btn_map.setChecked(False)
 
     def _on_time_changed_update_lidar_overlay(self, _t) -> None:
+        self._update_raw_lidar_site()
         self._lidar_overlay_generation += 1
         if self._lidar_overlay_platform_id is not None and self._lidar_overlay_rays is not None:
             self._render_lidar_overlay()
@@ -4267,7 +4311,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             log.error("Raw lidar overlay render failed: %s", exc)
             self._lidar_overlay_render_ready.emit({"error": str(exc), "generation": generation})
             return
-        self._lidar_overlay_render_ready.emit({"png": png, "bounds": bounds, "generation": generation})
+        self._lidar_overlay_render_ready.emit({"png": png, "bounds": bounds, "generation": generation, "metadata": metadata})
 
     def _on_lidar_overlay_render_ready(self, result: dict) -> None:
         self._lidar_overlay_render_in_flight = False
@@ -4284,6 +4328,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                     use_scheme_handler=False,
                 )
             self._lidar_overlay.inject(result["png"], result["bounds"])
+            self.raw_lidar_controls.set_map_scale(result["metadata"])
+            self._layout_overlays()
         if self._lidar_overlay_pending:
             self._lidar_overlay_pending = False
             self._render_lidar_overlay()

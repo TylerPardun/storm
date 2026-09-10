@@ -179,3 +179,26 @@ def test_multiple_files_for_a_scan_mode_remain_selectable():
     controls._asset_combo.setCurrentIndex(1)
     controls._btn_view.click()
     assert requested == [assets[1]]
+
+
+def test_fields_come_from_selected_file_and_stale_load_cannot_replace_them():
+    from types import SimpleNamespace
+    controls = RawLidarControls()
+    source = next(s for s in KNOWN_RAW_LIDAR_SOURCES if s.product == 'csm')
+    asset = LidarAsset(source, 'current.cdf', 'catalog')
+    controls.set_sources([source])
+    controls.set_assets_for_all_sources({source.platform_id: [asset]})
+    rays = SimpleNamespace(provenance={'url': asset.url}, fields={
+        'intensity': {'units': 'unitless'}, 'velocity': {'units': 'm/s'},
+        'backscatter': {'units': 'km^-1 sr^-1'}})
+    selected = []
+    controls.field_selected.connect(selected.append)
+    assert controls.set_loaded_fields(rays)
+    assert selected == ['velocity']
+    controls._field_combo.setCurrentIndex(0)
+    assert selected[-1] == 'intensity'
+    controls.set_map_scale({'field': 'intensity', 'vmin': 1, 'vmax': 2})
+    assert controls._scale_label.text() == '1 … 2'
+    rays.provenance = {'url': 'old-file'}
+    assert not controls.set_loaded_fields(rays)
+    assert controls._field_combo.currentData() == 'intensity'

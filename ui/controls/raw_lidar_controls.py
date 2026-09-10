@@ -29,6 +29,8 @@ class RawLidarControls(QWidget):
         the mobile azimuth reference before plotting measured gates.
     """
 
+    field_selected = pyqtSignal(str)
+    locate_requested = pyqtSignal()
     source_selected = pyqtSignal(str)
     quicklook_requested = pyqtSignal(str, object)
     map_overlay_requested = pyqtSignal(str, object, bool)
@@ -36,6 +38,7 @@ class RawLidarControls(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._animation = None
+        self._availability_status = "Searching known instruments for this date…"
         self._assets_by_source: dict[str, list] = {}
         self._sources_by_instrument: dict[str, list] = {}
         self._map_target = None   # (RawLidarSource, LidarAsset) the MAP button currently represents
@@ -59,7 +62,24 @@ class RawLidarControls(QWidget):
         self._source_combo = QComboBox()
         self._source_combo.currentIndexChanged.connect(self._on_instrument_changed)
         source_row.addWidget(self._source_combo, stretch=1)
+        self._btn_locate = QPushButton("LOCATE")
+        self._btn_locate.setToolTip("Center on lidar")
+        self._btn_locate.hide()
+        self._btn_locate.clicked.connect(self.locate_requested.emit)
+        source_row.addWidget(self._btn_locate)
         col.addLayout(source_row)
+
+        self._field_row = QWidget()
+        field_layout = QHBoxLayout(self._field_row)
+        field_layout.setContentsMargins(0, 0, 0, 0)
+        field_layout.addWidget(QLabel("Map field"))
+        self._field_combo = QComboBox()
+        self._field_combo.currentIndexChanged.connect(self._on_field_changed)
+        field_layout.addWidget(self._field_combo, stretch=1)
+        self._scale_label = QLabel()
+        field_layout.addWidget(self._scale_label)
+        self._field_row.hide()
+        col.addWidget(self._field_row)
 
         asset_row = QHBoxLayout()
         asset_row.addWidget(QLabel("Scan Mode"))
@@ -171,7 +191,7 @@ class RawLidarControls(QWidget):
             self._source_combo.setCurrentIndex(self._source_combo.findData(first))
         self._source_combo.blockSignals(False)
         if instruments_with_data:
-            message = f"Data available: {', '.join(sorted(instruments_with_data))}"
+            message = f"Available this date: {', '.join(sorted(instruments_with_data))}"
             if unresolved:
                 message += " · some sources unavailable"
             self.set_status(message)
@@ -179,6 +199,7 @@ class RawLidarControls(QWidget):
             self.set_status("Availability incomplete. Some sources could not be checked.")
         else:
             self.set_status("No raw lidar data found for this date.")
+        self._availability_status = self._status_label.text()
         self._refresh_scan_mode_combo()
 
     def _refresh_scan_mode_combo(self) -> None:
@@ -212,6 +233,10 @@ class RawLidarControls(QWidget):
         # overlay target before re-deriving state for the new selection.
         if self._btn_map.isChecked():
             self._btn_map.setChecked(False)
+        self.set_status(self._availability_status)
+        self._field_row.hide()
+        self._btn_locate.hide()
+        self._scale_label.clear()
         source = self.current_source()
         can_map = source is not None and source.product in ("ppi", "csm")
         self._btn_map.setEnabled(can_map)
@@ -238,3 +263,33 @@ class RawLidarControls(QWidget):
         entry = self._asset_combo.currentData()
         if source is not None and entry is not None:
             self.quicklook_requested.emit(source.platform_id, entry[1])
+
+    def set_loaded_fields(self, rays) -> bool:
+        entry = self._asset_combo.currentData()
+        if not entry or rays.provenance.get("url") != entry[1].url:
+            return False
+        self._field_combo.blockSignals(True)
+        self._field_combo.clear()
+        for name, field in rays.fields.items():
+            label = name.replace("_", " ").capitalize()
+            units = field.get("units", "")
+            self._field_combo.addItem(f"{label} ({units})" if units else label, name)
+        index = self._field_combo.findData("velocity")
+        self._field_combo.setCurrentIndex(max(0, index))
+        self._field_combo.blockSignals(False)
+        self._field_row.setVisible(bool(rays.fields) and entry[0].product in ("ppi", "csm"))
+        self._on_field_changed()
+        site_name = rays.provenance.get("metadata", {}).get("Site_description")
+        if site_name:
+            self.set_status(str(site_name))
+        return True
+
+    def _on_field_changed(self, _index=None):
+        self._scale_label.clear()
+        name = self._field_combo.currentData()
+        if name:
+            self.field_selected.emit(name)
+
+    def set_map_scale(self, metadata):
+        if metadata['field'] == self._field_combo.currentData():
+            self._scale_label.setText(f"{metadata['vmin']:.3g} … {metadata['vmax']:.3g}")

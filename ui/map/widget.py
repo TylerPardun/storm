@@ -196,6 +196,30 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
     def remove_vehicle(self, vehicle_id: str):
         self.run_js(f"stormRemoveVehicle('{vehicle_id}');")
 
+    def set_lidar_site(self, site: dict | None):
+        """Selected raw-lidar origin, separate from surface-observation vehicles."""
+        features = [] if site is None else [{
+            "type": "Feature", "geometry": {"type": "Point", "coordinates": [site['lon'], site['lat']]},
+            "properties": {"label": site['instrument']},
+        }]
+        data = json.dumps({"type": "FeatureCollection", "features": features})
+        self.run_js(f"""(function() {{
+            if (typeof map === 'undefined' || !map.isStyleLoaded()) return;
+            const data = {data};
+            if (map.getSource('raw-lidar-site')) {{
+                map.getSource('raw-lidar-site').setData(data);
+            }} else {{
+                map.addSource('raw-lidar-site', {{type: 'geojson', data: data}});
+                map.addLayer({{id: 'raw-lidar-site-dot', type: 'circle', source: 'raw-lidar-site',
+                    paint: {{'circle-radius': 5, 'circle-color': '#00CFFF',
+                        'circle-stroke-color': '#101020', 'circle-stroke-width': 2}}}});
+                map.addLayer({{id: 'raw-lidar-site-label', type: 'symbol', source: 'raw-lidar-site',
+                    layout: {{'text-field': ['get', 'label'], 'text-size': 11,
+                        'text-offset': [0, 1.4], 'text-allow-overlap': true}},
+                    paint: {{'text-color': '#00CFFF', 'text-halo-color': '#101020', 'text-halo-width': 1.5}}}});
+            }}
+        }})();""")
+
     def set_satellite_frame(self, b64: str, west: float, south: float,
                             east: float, north: float):
         self.run_js(

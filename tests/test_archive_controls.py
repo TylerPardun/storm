@@ -16,7 +16,7 @@ def _controls():
     return app, controller, ArchiveControls(controller)
 
 
-def test_normal_archive_controls_use_minute_and_ten_second_steps():
+def test_normal_archive_controls_use_minute_steps():
     _, controller, controls = _controls()
 
     controls._btn_start.click()
@@ -24,25 +24,72 @@ def test_normal_archive_controls_use_minute_and_ten_second_steps():
     assert controller.current_time.minute == 59
 
     controls._btn_end.click()
-    controls._btn_back.click()
-    assert controller.current_time.second == 50
-
-    controls._btn_fwd.click()
-    assert controller.current_time.second == 0
+    assert controller.current_time == datetime(
+        2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc
+    )
 
 
-def test_precision_archive_controls_use_ten_and_one_second_steps():
+def test_precision_archive_controls_use_ten_second_steps():
     _, controller, controls = _controls()
     controls.set_precision_mode(True)
 
     controls._btn_start.click()
-    controls._btn_back.click()
     assert controller.current_time == datetime(
-        2026, 4, 16, 11, 59, 49, tzinfo=timezone.utc
+        2026, 4, 16, 11, 59, 50, tzinfo=timezone.utc
     )
 
-    controls._btn_fwd.click()
     controls._btn_end.click()
     assert controller.current_time == datetime(
         2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc
+    )
+
+
+def test_scan_step_buttons_jump_to_nearest_available_scan():
+    """_btn_back/_btn_fwd jump to the nearest indexed radar scan, not a
+    fixed time offset -- and that's true whether or not precision mode is
+    on, since scan availability has nothing to do with dense-obs playback."""
+    _, controller, controls = _controls()
+    controls.set_available_scan_times([
+        "2026-04-16T11:45:00Z",
+        "2026-04-16T11:52:00Z",
+        "2026-04-16T12:03:00Z",
+        "2026-04-16T12:10:00Z",
+    ])
+
+    controls._btn_back.click()
+    assert controller.current_time == datetime(
+        2026, 4, 16, 11, 52, 0, tzinfo=timezone.utc
+    )
+
+    controls._btn_fwd.click()
+    controls._btn_fwd.click()
+    assert controller.current_time == datetime(
+        2026, 4, 16, 12, 10, 0, tzinfo=timezone.utc
+    )
+
+    # already at the last scan -- no scan after it, so no-op.
+    controls._btn_fwd.click()
+    assert controller.current_time == datetime(
+        2026, 4, 16, 12, 10, 0, tzinfo=timezone.utc
+    )
+
+
+def test_scan_step_buttons_noop_without_a_loaded_index():
+    _, controller, controls = _controls()
+    start = controller.current_time
+
+    controls._btn_back.click()
+    controls._btn_fwd.click()
+
+    assert controller.current_time == start
+
+
+def test_scan_step_buttons_unaffected_by_precision_mode():
+    _, controller, controls = _controls()
+    controls.set_available_scan_times(["2026-04-16T11:52:00Z"])
+    controls.set_precision_mode(True)
+
+    controls._btn_back.click()
+    assert controller.current_time == datetime(
+        2026, 4, 16, 11, 52, 0, tzinfo=timezone.utc
     )

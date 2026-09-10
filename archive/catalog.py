@@ -1,4 +1,4 @@
-"""Session-only THREDDS date index. Listings establish availability, not data quality.
+"""Cached THREDDS date index. Listings establish availability, not data quality.
 
 Scan registered instrument catalogs once, retain their dates in memory, and reuse
 completed listings when the user changes dates. Failures remain unknown; an
@@ -7,6 +7,8 @@ unmarked calendar date is never proof that no observations exist.
 from __future__ import annotations
 
 import re
+import json
+import logging
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -76,6 +78,8 @@ _LATEST_OBSERVED_YEAR = {
     'NOXP-VORTEX2_2009': 2009,
     'NOXP-VORTEX2_2010': 2010,
     'NOXP-2022': 2022,
+    'NOXP-2015': 2015, 'NOXP-2013': 2013, 'NOXP-2011': 2011, 'NOXP-2010': 2010,
+    'NOXP-Colorado': 2011, 'NOXP-Netcdf': 2011, 'NOXP-Reeves': 2011,
 }
 
 
@@ -101,11 +105,14 @@ _NOXP_CAMPAIGN_ROOTS: dict[str, str] = {
 }
 
 # Catalog pages already fetched are memoized on this NoxpArchive instance
-# and reused across scans (including after an explicit refresh clears
-# AvailabilityIndex._results), so a re-scan spends its budget only on
-# genuinely new/pending subcatalogs, not the ones already visited.
+# and reused across date selections. Explicit refresh invalidates both the
+# date results and the underlying catalog memo.
 _NOXP_CACHE_DIR = Path.home() / ".cache" / "storm" / "noxp"
-_NOXP_SCAN_BUDGET = 30
+_NOXP_SCAN_BUDGET = 2  # Pages per branch, not scientific file downloads.
+_NOXP_STARTUP_BUDGET = 10  # Shared network-request cap across all NOXP roots.
+_CACHE_TTL_SECONDS = 24 * 60 * 60
+_DATE_CACHE_PATH = Path.home() / '.cache' / 'storm' / 'archive-dates.json'
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -206,10 +213,12 @@ class RecursiveCatalogSpec:
 
 
 class _CatalogLinks(HTMLParser):
-    def __init__(self, spec):
+    def __init__(self, spec, *, dates_only=False):
         super().__init__()
         self.spec = spec
         self.filenames = set()
+        self.date_stamps = set()
+        self._dates_only = dates_only
 
     def handle_starttag(self, tag, attrs):
         if tag.lower() != "a":
@@ -226,10 +235,15 @@ class _CatalogLinks(HTMLParser):
         if path.startswith(prefix):
             name = path[len(prefix):]
             if "/" not in name and name.endswith(self.spec.suffix):
-                self.filenames.add(name)
+                if self._dates_only:
+                    match = _DATE_RE.search(name)
+                    if match:
+                        self.date_stamps.add(match[1])
+                else:
+                    self.filenames.add(name)
 
 
-def catalogs_for_platform(platform: KnownPlatform) -> tuple[CatalogSpec, ...]:
+def catalogs_for_platform(platform: KnownPlatform) -> tuple[CatalogSpec | RecursiveCatalogSpec, ...]:
     key = platform.key
     root = "FRDD/CLAMPS"
     if platform.family == "FOFS Mobile Mesonet":
@@ -270,6 +284,7 @@ class AvailabilitySnapshot:
     platforms: dict[str, PlatformAvailability]
     checked: int
     total: int
+    cached: bool = False
 
     @property
     def dates(self):
@@ -277,34 +292,103 @@ class AvailabilitySnapshot:
 
 
 class AvailabilityIndex:
-    """Owned by one worker thread. Cache metadata, including failed attempts,
-    until explicit refresh. Date changes never trigger repeated failed requests.
+    """Owned by one worker thread. Reuse successful disk listings for 24 hours.
+    Date changes reuse session results; explicit refresh rechecks upstream.
     """
-    def __init__(self, platforms=None, fetch=None, pace=0.2, noxp=None):
+    def __init__(self, platforms=None, fetch=None, pace=0.2, noxp=None, cache_path=None, now=None):
         self.platforms = tuple(ALL_PLATFORMS if platforms is None else platforms)
         self._specs = {p.platform_id: catalogs_for_platform(p) for p in self.platforms}
         self._results = {}
+        self._cached_dates = {}
+        self._cache_records = {}
+        self._cache_backed = set()
+        self._budget_limited = set()
+        self._clock = now or time.time
+        # Injected/test inventories are isolated unless given an explicit cache.
+        self._cache_path = Path(cache_path) if cache_path is not None else (_DATE_CACHE_PATH if platforms is None and fetch is None else None)
         self._latest_seen = {}
         self._fetch = fetch or _fetch_catalog_html
         self._pace = pace
         # Own one NoxpArchive so its internal per-URL catalog memo survives
-        # across scans (including after clear()), and so a recursive crawl
+        # across date selections, and so a recursive crawl
         # uses the same (possibly test-monkeypatched) fetch function as
         # every other spec, rather than NoxpArchive's own default.
         self._noxp = noxp or NoxpArchive(_NOXP_CACHE_DIR, fetch_catalog=self._fetch)
+        self._read_cache()
+
+    def _read_cache(self):
+        if self._cache_path is None or not self._cache_path.exists():
+            return
+        try:
+            if self._cache_path.stat().st_size > 16 * 1024 * 1024:
+                return
+            payload = json.loads(self._cache_path.read_text())
+            if not isinstance(payload, dict) or payload.get('version') != 1:
+                return
+            records = payload.get('catalogs', {})
+            if not isinstance(records, dict):
+                return
+            for spec in {s for specs in self._specs.values() for s in specs}:
+                record = records.get(spec.url)
+                if not record:
+                    continue
+                dates = frozenset(date.fromisoformat(d) for d in record['dates'])
+                self._cached_dates[spec] = dates
+                self._cache_records[spec.url] = record
+                self._cache_backed.add(spec)
+                if dates:
+                    self._latest_seen[spec] = max(dates).year
+                age = self._clock() - float(record['checked_at'])
+                if 0 <= age < _CACHE_TTL_SECONDS and (not record.get('error') or record.get('budget_limited')):
+                    self._results[spec] = (dates, record.get('error', ''))
+        except (OSError, ValueError, TypeError, KeyError):
+            log.warning('Ignoring unreadable archive date cache')
+
+    def _write_cache(self, spec):
+        if self._cache_path is None:
+            return
+        dates, error = self._results[spec]
+        # Failures retain previously known dates without declaring them current.
+        if error:
+            dates = dates | self._cached_dates.get(spec, frozenset())
+            self._results[spec] = (dates, error)
+        self._cache_records[spec.url] = dict(dates=sorted(d.isoformat() for d in dates),
+                                            error=error, budget_limited=spec in self._budget_limited, checked_at=self._clock())
+        self._cached_dates[spec] = dates
+        if not error:
+            self._cache_backed.discard(spec)
+        import tempfile
+        temporary = None
+        try:
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode='w', dir=self._cache_path.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump({'version': 1, 'catalogs': self._cache_records}, stream)
+            temporary.replace(self._cache_path)
+        except OSError as exc:
+            log.warning('Could not save archive date cache: %s', exc)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
 
     def clear(self):
         self._results.clear()
+        self._budget_limited.clear()
+        self._cache_backed.update(self._cached_dates)
+        # Refresh must really recheck upstream catalogs, not replay stale HTML.
+        if isinstance(self._noxp, NoxpArchive):
+            self._noxp.clear_catalog_cache()
 
     def snapshot(self):
         platforms = {}
         for pid, specs in self._specs.items():
             results = [self._results[s] for s in specs if s in self._results]
             platforms[pid] = PlatformAvailability(
-                frozenset(d for dates, _ in results for d in dates), len(results), len(specs),
+                frozenset(d for spec in specs for d in self._results.get(spec, (self._cached_dates.get(spec, ()), ''))[0]), len(results), len(specs),
                 tuple(error for _, error in results if error),
             )
-        return AvailabilitySnapshot(platforms, len(self._results), len({s for specs in self._specs.values() for s in specs}))
+        return AvailabilitySnapshot(platforms, len(self._results), len({s for specs in self._specs.values() for s in specs}), bool(self._cache_backed))
 
     def _scan_order(self):
         """Recent sources first, then older ones; round-robin tied sources so
@@ -316,13 +400,14 @@ class AvailabilityIndex:
             hint = _LATEST_OBSERVED_YEAR.get(platform.platform_id, 2026 if platform.family == 'CLAMPS Raw Lidar' else date.max.year)
             for position, spec in enumerate(self._specs[platform.platform_id]):
                 year = spec.year or self._latest_seen.get(spec, hint)
-                priority = (-year, position)
+                priority = (-year, isinstance(spec, RecursiveCatalogSpec), position)
                 priorities[spec] = min(priorities.get(spec, priority), priority)
         return sorted(priorities, key=priorities.get)
 
     def scan(self, cancel: Event):
         _check_cancel(cancel)
         yield self.snapshot()
+        noxp_remaining = _NOXP_STARTUP_BUDGET
         for spec in self._scan_order():
             _check_cancel(cancel)
             if spec in self._results:
@@ -331,7 +416,15 @@ class AvailabilityIndex:
                 raise ScanCancelled()
             try:
                 if isinstance(spec, RecursiveCatalogSpec):
-                    inventory = self._noxp.discover(cancel=cancel, budget=_NOXP_SCAN_BUDGET, catalog_root=spec.url)
+                    if noxp_remaining <= 0:
+                        self._budget_limited.add(spec)
+                        self._results[spec] = (self._cached_dates.get(spec, frozenset()),
+                                               "Additional NOXP dates require on-demand radar discovery; startup budget reached.")
+                        self._write_cache(spec)
+                        yield self.snapshot()
+                        continue
+                    inventory = self._noxp.discover(cancel=cancel, budget=min(_NOXP_SCAN_BUDGET, noxp_remaining), catalog_root=spec.url)
+                    noxp_remaining -= inventory.requests_made
                     # NOXP filenames don't reliably carry an 8-digit YYYYMMDD
                     # substring (Sigmet names use YYMMDDHHMMSS) -- the generic
                     # _dates_from_filenames regex silently misses them.
@@ -343,20 +436,22 @@ class AvailabilityIndex:
                     # complete/final listing. Surface it via the existing
                     # errors channel (still real dates, just not the whole
                     # story yet) so PlatformAvailability.complete stays
-                    # honest; a later explicit refresh resumes cheaply via
-                    # NoxpArchive's own catalog memo, not from scratch.
+                    # honest. More complete case discovery belongs to the on-demand
+                    # radar controls, not an unbounded startup operation.
                     errors = tuple(inventory.errors)
+                    if inventory.pending and not errors:
+                        self._budget_limited.add(spec)
                     if inventory.pending:
                         errors = errors + (
                             f"{spec.url}: {inventory.pending} subcatalog(s) not yet scanned "
-                            f"this budget -- dates shown are partial, refresh to continue",
+                            f"this budget -- dates shown are partial; NOXP controls discover additional files on demand",
                         )
                     self._results[spec] = (dates, "; ".join(errors))
                 else:
                     html = self._fetch(spec.url, cancel)
-                    parser = _CatalogLinks(spec)
+                    parser = _CatalogLinks(spec, dates_only=True)
                     parser.feed(html)
-                    dates = frozenset(_dates_from_filenames(parser.filenames))
+                    dates = frozenset(_dates_from_filenames(parser.date_stamps))
                     self._results[spec] = (dates, "")
                 if dates:
                     self._latest_seen[spec] = max(dates).year
@@ -365,6 +460,7 @@ class AvailabilityIndex:
             except Exception as exc:
                 self._results[spec] = (frozenset(), f"{spec.url}: {exc}")
             _check_cancel(cancel)
+            self._write_cache(spec)
             yield self.snapshot()
 
 

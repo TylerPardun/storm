@@ -187,6 +187,7 @@ QCalendarWidget QAbstractItemView {
     background-color: #0D0D1A;
     alternate-background-color: #0A0A0F;
     color: #E8EAF0;
+    font-size: 12px;
     selection-background-color: #00CFFF;
     selection-color: #0A0A0F;
     gridline-color: #1E1E2E;

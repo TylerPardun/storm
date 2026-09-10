@@ -328,7 +328,7 @@ class AnnotationTools(QWidget):
 
         self._btn_refresh = QToolButton()
         self._btn_refresh.setText("↻\nRefresh")
-        self._btn_refresh.setToolTip("Re-fetch current.json from the API")
+        self._btn_refresh.setToolTip("Refresh annotations")
         self._btn_refresh.setFixedHeight(38)
         self._btn_refresh.setMinimumWidth(64)
         self._btn_refresh.setStyleSheet("""

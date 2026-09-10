@@ -1,7 +1,14 @@
 """Floating drawer for archive-mode CLAMPS raw-lidar browsing: pick a
-known source (site + product), then a discovered file, then open its
-quicklook. Mirrors MesoanalysisControls'/NoxpControls' collapsible-drawer
-shell (ui/controls/mesoanalysis_controls.py, ui/controls/noxp_controls.py)."""
+known instrument (physical lidar unit), then a scan mode it actually has
+data for, then open its quicklook. Mirrors MesoanalysisControls'/
+NoxpControls' collapsible-drawer shell (ui/controls/mesoanalysis_controls.py,
+ui/controls/noxp_controls.py).
+
+KNOWN_RAW_LIDAR_SOURCES registers up to 4 scan-mode variants (csm/ppi/fp/
+other) per physical instrument, so a single deployed lidar can produce
+several RawLidarSource entries for one day -- grouping by instrument here
+keeps the top-level picker at "how many lidars were actually out," not
+"how many scan-mode files exist," which is what it looked like before."""
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve
@@ -13,17 +20,26 @@ from PyQt6.QtWidgets import (
 class RawLidarControls(QWidget):
     """Signals
     -------
-    source_selected(str)       platform_id (a KNOWN_RAW_LIDAR_SOURCES entry)
+    source_selected(str)       platform_id of the selected (instrument, scan
+                                mode) pair, once it has data for this date
     quicklook_requested(str, object)   platform_id, LidarAsset
+    map_overlay_requested(str, object, bool)
+        platform_id, LidarAsset, enabled -- user (un)checked MAP. Only
+        offered for stationary (non-mobile) PPI/CSM sources, since those
+        are the only ones with real, trustworthy scan geometry to
+        georeference (see raw_lidar_scan_to_map_scan's docstring).
     """
 
     source_selected = pyqtSignal(str)
     quicklook_requested = pyqtSignal(str, object)
+    map_overlay_requested = pyqtSignal(str, object, bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._animation = None
         self._assets_by_source: dict[str, list] = {}
+        self._sources_by_instrument: dict[str, list] = {}
+        self._map_target = None   # (RawLidarSource, LidarAsset) the MAP button currently represents
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -40,23 +56,33 @@ class RawLidarControls(QWidget):
         col.setSpacing(5)
 
         source_row = QHBoxLayout()
-        source_row.addWidget(QLabel("Source"))
+        source_row.addWidget(QLabel("Lidar"))
         self._source_combo = QComboBox()
-        self._source_combo.currentIndexChanged.connect(self._on_source_changed)
+        self._source_combo.currentIndexChanged.connect(self._on_instrument_changed)
         source_row.addWidget(self._source_combo, stretch=1)
         col.addLayout(source_row)
 
         asset_row = QHBoxLayout()
-        asset_row.addWidget(QLabel("File"))
+        asset_row.addWidget(QLabel("Scan Mode"))
         self._asset_combo = QComboBox()
+        self._asset_combo.currentIndexChanged.connect(self._on_scan_mode_changed)
         asset_row.addWidget(self._asset_combo, stretch=1)
         self._btn_view = QPushButton("VIEW QUICKLOOK")
         self._btn_view.clicked.connect(self._on_view_clicked)
         self._btn_view.setEnabled(False)
         asset_row.addWidget(self._btn_view)
+
+        self._btn_map = QPushButton("MAP")
+        self._btn_map.setCheckable(True)
+        self._btn_map.setEnabled(False)
+        self._btn_map.setToolTip(
+            "Map scan · stationary CLAMPS PPI/CSM only"
+        )
+        self._btn_map.toggled.connect(self._on_map_toggled)
+        asset_row.addWidget(self._btn_map)
         col.addLayout(asset_row)
 
-        self._status_label = QLabel("Searching known sources for this date…")
+        self._status_label = QLabel("Searching known instruments for this date…")
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet("color: #6E7A8F; font-size: 10px;")
         # A genuinely-empty word-wrapped QLabel's sizeHint is unstable
@@ -93,46 +119,99 @@ class RawLidarControls(QWidget):
         self._animation = anim
 
     def set_sources(self, sources) -> None:
-        """sources: iterable of RawLidarSource (KNOWN_RAW_LIDAR_SOURCES)."""
+        """sources: iterable of RawLidarSource (KNOWN_RAW_LIDAR_SOURCES),
+        grouped here by instrument -- see module docstring."""
+        self._sources_by_instrument = {}
+        for source in sources:
+            self._sources_by_instrument.setdefault(source.instrument, []).append(source)
+
         self._source_combo.blockSignals(True)
         self._source_combo.clear()
-        for source in sources:
-            self._source_combo.addItem(source.platform_id, source)
+        for instrument in self._sources_by_instrument:
+            self._source_combo.addItem(instrument, instrument)
         self._source_combo.blockSignals(False)
 
-    def current_source(self):
+    def current_instrument(self) -> str | None:
         return self._source_combo.currentData()
+
+    def current_source(self):
+        """The currently selected (instrument, scan mode) RawLidarSource,
+        or None if the current instrument has no data on this date."""
+        entry = self._asset_combo.currentData()
+        return entry[0] if entry else None
 
     def set_status(self, text: str) -> None:
         self._status_label.setText(str(text or ""))
 
     def set_assets_for_all_sources(self, assets_by_source: dict) -> None:
         """assets_by_source: platform_id -> list[LidarAsset], from one
-        discovery pass across every known source for the archive date."""
+        discovery pass across every known (instrument, scan mode) source
+        for the archive date."""
         self._assets_by_source = dict(assets_by_source)
-        self.set_status(
-            f"{len(self._assets_by_source)} of {self._source_combo.count()} source(s) have data on this date"
-        )
-        self._refresh_asset_combo()
+        instruments_with_data = {
+            source.instrument
+            for sources in self._sources_by_instrument.values()
+            for source in sources
+            if source.platform_id in self._assets_by_source
+        }
+        if instruments_with_data:
+            self.set_status(f"Data available: {', '.join(sorted(instruments_with_data))}")
+        else:
+            self.set_status("No raw lidar data found for any known instrument on this date.")
+        self._refresh_scan_mode_combo()
 
-    def _refresh_asset_combo(self) -> None:
-        source = self.current_source()
+    def _refresh_scan_mode_combo(self) -> None:
+        # any instrument switch invalidates whatever MAP was pointing at --
+        # uncheck first (with the *old* combo selection still in place) so
+        # _on_map_toggled reports the source actually being turned off,
+        # not whatever the combo happens to land on after repopulating.
+        if self._btn_map.isChecked():
+            self._btn_map.setChecked(False)
+
+        instrument = self.current_instrument()
         self._asset_combo.blockSignals(True)
         self._asset_combo.clear()
-        assets = self._assets_by_source.get(source.platform_id, []) if source is not None else []
-        for asset in assets:
-            self._asset_combo.addItem(asset.filename, asset)
+        for source in self._sources_by_instrument.get(instrument, []):
+            assets = self._assets_by_source.get(source.platform_id)
+            if assets:
+                # one file per (instrument, scan mode, day) is the norm; if
+                # more ever show up, the first is a reasonable default --
+                # nothing in this file name is meaningful to a user anyway.
+                self._asset_combo.addItem(source.product.upper(), (source, assets[0]))
         self._asset_combo.blockSignals(False)
         self._btn_view.setEnabled(self._asset_combo.count() > 0)
+        self._on_scan_mode_changed(self._asset_combo.currentIndex())
 
-    def _on_source_changed(self, _index: int) -> None:
-        self._refresh_asset_combo()
+    def _on_instrument_changed(self, _index: int) -> None:
+        self._refresh_scan_mode_combo()
+
+    def _on_scan_mode_changed(self, _index: int) -> None:
+        # same reasoning as _refresh_scan_mode_combo: drop any active
+        # overlay target before re-deriving state for the new selection.
+        if self._btn_map.isChecked():
+            self._btn_map.setChecked(False)
         source = self.current_source()
+        can_map = source is not None and not source.mobile and source.product in ("ppi", "csm")
+        self._btn_map.setEnabled(can_map)
         if source is not None:
             self.source_selected.emit(source.platform_id)
 
+    def _on_map_toggled(self, checked: bool) -> None:
+        if checked:
+            source = self.current_source()
+            entry = self._asset_combo.currentData()
+            if source is None or entry is None:
+                return
+            self._map_target = (source, entry[1])
+            self.map_overlay_requested.emit(source.platform_id, entry[1], True)
+            return
+        if self._map_target is not None:
+            source, asset = self._map_target
+            self.map_overlay_requested.emit(source.platform_id, asset, False)
+        self._map_target = None
+
     def _on_view_clicked(self) -> None:
         source = self.current_source()
-        asset = self._asset_combo.currentData()
-        if source is not None and asset is not None:
-            self.quicklook_requested.emit(source.platform_id, asset)
+        entry = self._asset_combo.currentData()
+        if source is not None and entry is not None:
+            self.quicklook_requested.emit(source.platform_id, entry[1])

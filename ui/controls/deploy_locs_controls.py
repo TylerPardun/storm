@@ -17,9 +17,9 @@ METRICS = [
 ]
 
 _METRIC_TOOLTIPS = {
-    "rank_abi": "Annular Blockage Index — ranks deployment quality based on radar beam blockage",
-    "rank_aoi": "Areal Occultation Index — ranks deployment quality based on occultation by terrain",
-    "rqi":      "Road Quality Index — continuous road surface quality score (0–1)",
+    "rank_abi": "Annular Blockage Index · beam-blockage rank (1 best)",
+    "rank_aoi": "Areal Occultation Index · terrain-blockage rank (1 best)",
+    "rqi":      "Road Quality Index · 0–1 (1 best)",
 }
 
 _LEGENDS = {

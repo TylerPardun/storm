@@ -133,7 +133,7 @@ class MesoanalysisControls(QWidget):
 
         self._refresh_btn = QPushButton("REFRESH")
         self._refresh_btn.setFixedSize(_PRODUCT_BUTTON_WIDTH, _CONTROL_HEIGHT)
-        self._refresh_btn.setToolTip("Clear and refresh mesoanalysis products")
+        self._refresh_btn.setToolTip("Refresh mesoanalysis")
         self._refresh_btn.clicked.connect(self._on_refresh_clicked)
         grid.addWidget(self._refresh_btn, 4, 5, Qt.AlignmentFlag.AlignHCenter)
 

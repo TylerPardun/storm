@@ -70,6 +70,16 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         self._scheme_handler = StormSchemeHandler(
             TILES_PATH, STATIC_PATH, build_map_html()
         )
+        # QWebEngineProfile.defaultProfile() is a process-wide singleton, not
+        # per-window -- a second install for the same scheme without first
+        # removing the previous MapWidget's handler is a silent no-op (Qt
+        # just logs "URL scheme handler already installed for the scheme:
+        # storm" and keeps the old one). That's exactly what happens on a
+        # "change day" session restart: the new window's page then loads
+        # storm:// content through the prior (now-closing) window's handler,
+        # which is why the map goes blank. shutdown() below removes this
+        # instance's handler on the way out so the next MapWidget can install
+        # cleanly -- see MainWindow.closeEvent.
         QWebEngineProfile.defaultProfile().installUrlSchemeHandler(
             b"storm", self._scheme_handler
         )
@@ -115,6 +125,17 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         self.loadFinished.connect(self._on_page_load_finished)
 
         QTimer.singleShot(0, self._load_map)
+
+    def shutdown(self) -> None:
+        """Release this instance's storm:// registration on the process-wide
+        default profile. Must run before a replacement MapWidget is built in
+        the same process (see the note in __init__) -- call from
+        MainWindow.closeEvent, not __del__ (Qt teardown order there is not
+        guaranteed to still have a usable profile)."""
+        if SAFE_MAP_MODE or getattr(self, "_scheme_handler", None) is None:
+            return
+        from PyQt6.QtWebEngineCore import QWebEngineProfile
+        QWebEngineProfile.defaultProfile().removeUrlSchemeHandler(self._scheme_handler)
 
     def javaScriptConsoleMessage(self, level, message, line, source):
         # emit all JS console messages to stdout for debugging (includes errors/warnings/info)
@@ -372,7 +393,10 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         import os, struct, threading as _threading
 
         if shp_base is None:
-            base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'cwa_shp', 'w_16ap26'))
+            # ui/map/widget.py -> ../.. lands at the STORM app root, where
+            # cwa_shp/ actually lives (was one level short, silently
+            # resolving to ui/cwa_shp/ which doesn't exist).
+            base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'cwa_shp', 'w_16ap26'))
         else:
             base = shp_base
         shp_path = base if base.lower().endswith('.shp') else base + '.shp'
@@ -384,7 +408,8 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
                     shp_data = f.read()
                 with open(dbf_path, 'rb') as f:
                     dbf_data = f.read()
-            except Exception:
+            except Exception as exc:
+                log.warning("load_cwa_shapefile: could not read %s / %s: %s", shp_path, dbf_path, exc)
                 return
 
             # minimal SHP parser (Polygon type 5) — adapted from archive fetcher.

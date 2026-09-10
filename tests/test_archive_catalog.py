@@ -242,3 +242,93 @@ def test_refresh_updates_recency_hints_from_live_dates_without_skipping_sources(
     index.clear()
     assert '/mg1/' in index._scan_order()[0].url
     assert list(index.scan(Event()))[-1].checked == 4
+
+
+def test_date_cache_shades_immediately_and_avoids_repeat_requests(tmp_path):
+    platform = _fofs()
+    path = tmp_path / 'dates.json'
+    calls = []
+    def fetch(url, _):
+        calls.append(url)
+        spec = next(s for s in cat.catalogs_for_platform(platform) if s.url == url)
+        return _page(spec, '20260517' + ('.txt' if '/raw/' in url else '.nc'))
+    first = cat.AvailabilityIndex([platform], fetch, pace=0, cache_path=path, now=lambda: 1000.)
+    list(first.scan(Event()))
+    calls.clear()
+    second = cat.AvailabilityIndex([platform], fetch, pace=0, cache_path=path, now=lambda: 1100.)
+    assert second.snapshot().dates == {date(2026, 5, 17)}
+    assert second.snapshot().cached
+    list(second.scan(Event()))
+    assert calls == []
+    second.clear()
+    list(second.scan(Event()))
+    assert len(calls) == 2  # Explicit refresh bypasses the TTL.
+
+
+def test_expired_cache_remains_visible_but_failed_refresh_is_not_complete(tmp_path):
+    platform = _fofs()
+    path = tmp_path / 'dates.json'
+    def fetch(url, _):
+        spec = next(s for s in cat.catalogs_for_platform(platform) if s.url == url)
+        return _page(spec, '20260517' + ('.txt' if '/raw/' in url else '.nc'))
+    first = cat.AvailabilityIndex([platform], fetch, pace=0, cache_path=path, now=lambda: 1000.)
+    list(first.scan(Event()))
+    def fail(*args):
+        raise TimeoutError('offline')
+    second = cat.AvailabilityIndex([platform], fail, pace=0, cache_path=path,
+                                   now=lambda: 1000. + cat._CACHE_TTL_SECONDS + 1)
+    assert second.snapshot().dates == {date(2026, 5, 17)}
+    assert second.snapshot().checked == 0
+    result = list(second.scan(Event()))[-1]
+    assert result.dates == {date(2026, 5, 17)}
+    assert not result.platforms[platform.platform_id].complete
+
+
+@pytest.mark.parametrize("content", ["{not json", "[]", '{"version":1,"catalogs":[]}'])
+def test_corrupt_date_cache_cannot_block_discovery(tmp_path, content):
+    path = tmp_path / 'dates.json'
+    path.write_text(content)
+    index = cat.AvailabilityIndex([_fofs()], lambda *a: '', pace=0, cache_path=path)
+    assert index.snapshot().checked == 0
+    assert not index.snapshot().dates
+    assert list(index.scan(Event()))[-1].checked == 2
+
+
+def test_noxp_startup_has_one_shared_budget_not_thirty_requests_per_branch():
+    platforms = [p for p in cat.ALL_PLATFORMS if p.family == 'NOXP Radar']
+    class BudgetNoxp:
+        def __init__(self): self.budgets = []
+        def discover(self, *, cancel, budget, catalog_root):
+            self.budgets.append(budget)
+            return RadarInventory(requests_made=budget, pending=50)
+    noxp = BudgetNoxp()
+    index = cat.AvailabilityIndex(platforms, lambda *a: '', pace=0, noxp=noxp)
+    result = list(index.scan(Event()))[-1]
+    assert sum(noxp.budgets) <= cat._NOXP_STARTUP_BUDGET
+    assert max(noxp.budgets) <= 2
+    assert result.checked == result.total
+    assert all(not v.complete for v in result.platforms.values())
+
+
+def test_warm_partial_radar_dates_need_no_network_but_stay_partial(tmp_path):
+    platform = _noxp_platform()
+    inventory = RadarInventory(assets=[_asset('NOX100430145529.RAW8K8H',
+        datetime(2010, 4, 30, 14, 55, 29, tzinfo=timezone.utc))], requests_made=2, pending=50)
+    noxp = _FakeNoxp(inventory)
+    path = tmp_path / 'dates.json'
+    first = cat.AvailabilityIndex([platform], lambda *a: '', pace=0, noxp=noxp, cache_path=path)
+    list(first.scan(Event()))
+    noxp.calls.clear()
+    second = cat.AvailabilityIndex([platform], lambda *a: '', pace=0, noxp=noxp, cache_path=path)
+    result = list(second.scan(Event()))[-1]
+    assert noxp.calls == []
+    assert result.dates == {date(2010, 4, 30)}
+    assert result.cached and not result.platforms[platform.platform_id].complete
+
+
+def test_calendar_parser_keeps_one_presence_token_per_day_not_all_files():
+    spec = cat.CatalogSpec('FRDD/CLAMPS/example', '.cdf')
+    parser = cat._CatalogLinks(spec, dates_only=True)
+    parser.feed(_page(spec, 'r.20260517.000000.cdf', 'r.20260517.120000.cdf', 'r.20260518.000000.cdf'))
+    assert parser.filenames == set()
+    assert parser.date_stamps == {'20260517', '20260518'}

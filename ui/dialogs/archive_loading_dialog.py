@@ -17,8 +17,9 @@ QLabel#title {
     letter-spacing: 2px;
 }
 QLabel#subtitle {
-    color: #5A5B6A;
-    font-size: 10px;
+    color: #8E97AB;
+    font-size: 12px;
+    font-weight: 600;
     letter-spacing: 1px;
 }
 QLabel#status {

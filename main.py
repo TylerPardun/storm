@@ -405,83 +405,114 @@ def main() -> None:
         sys.exit(0)
 
 
-    # show the launch dialog for mode selection and password verification
-    monitor      = False
-    viewer       = False
-    archive_time = None   # datetime | None
-
-    dialog = LaunchDialog()
-
-    # if the dialog is not accepted
-    if dialog.exec() != QDialog.DialogCode.Accepted:
-        # exit
-        sys.exit(0)
-
-    # get the vehicle ID
-    config.VEHICLE_ID = _normalize_vehicle_id(dialog.vehicle_id())
-
-    # get the vehicle icon type selected by the user
-    config.VEHICLE_ICON = dialog.vehicle_icon()
-
-    # get the directory for real-time observation files (if any)
-    config.OBS_FILE_DIR      = dialog.data_dir()
-    config.OBS_FILE_GPS_MODE = dialog.gps_file_mode()
-
-    # get mode from the dialog
-    monitor      = dialog.monitor()
-    viewer       = dialog.viewer()
-    archive_time = dialog.archive_start_time()   # None unless archive mode
-    runtime_flags.FLAGS.admin_mode = dialog.admin_mode()
-
-    # apply radar render resolution from the launch dialog
-    _dlg_res = dialog.radar_resolution()
-    if _dlg_res > 0:
-        set_render_grid_size(_dlg_res)
-        set_adaptive_render_grid(False)
-
     from ui.app.main_window import MainWindow  # noqa: PLC0415
 
-    _warn_missing_files()
+    # Session loop: normally runs once. Loops back to the launch dialog,
+    # without tearing down the QApplication or process, when the user exits
+    # an archive session via the DAY button (or aborts the loading dialog) —
+    # see MainWindow.closeEvent / session_aborted. app.exec() is safe to
+    # call repeatedly in sequence; each call blocks until the matching
+    # app.quit() (ours, on session_aborted, or the real one on a normal quit).
+    while True:
+        # show the launch dialog for mode selection and password verification
+        dialog = LaunchDialog()
 
-    from ui.dialogs.loading_dialog import LoadingDialog  # noqa: PLC0415
-    loading_dialog = LoadingDialog()
-    loading_dialog.show()
-    app.processEvents()  # Force the dialog to render immediately
+        # if the dialog is not accepted
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            # exit
+            sys.exit(0)
 
-    # create the main window
-    window = MainWindow(
-        debug=args.debug,
-        monitor=monitor,
-        viewer=viewer,
-        archive_time=archive_time,
-    )
+        # get the vehicle ID
+        config.VEHICLE_ID = _normalize_vehicle_id(dialog.vehicle_id())
 
-    # close loading dialog once main window is ready
-    loading_dialog.close()
-    loading_dialog = None
+        # get the vehicle icon type selected by the user
+        config.VEHICLE_ICON = dialog.vehicle_icon()
 
-    # define the JS console message handler
-    js_log = logging.getLogger("storm.js")
+        # get the directory for real-time observation files (if any)
+        config.OBS_FILE_DIR      = dialog.data_dir()
+        config.OBS_FILE_GPS_MODE = dialog.gps_file_mode()
 
-    # if the map widget has a page
-    if hasattr(window.map_widget, "page"):
+        # get mode from the dialog
+        monitor      = dialog.monitor()
+        viewer       = dialog.viewer()
+        archive_time = dialog.archive_start_time()   # None unless archive mode
+        runtime_flags.FLAGS.admin_mode = dialog.admin_mode()
+
+        # apply radar render resolution from the launch dialog
+        _dlg_res = dialog.radar_resolution()
+        if _dlg_res > 0:
+            set_render_grid_size(_dlg_res)
+            set_adaptive_render_grid(False)
+
+        _warn_missing_files()
+
+        from ui.dialogs.loading_dialog import LoadingDialog  # noqa: PLC0415
+        loading_dialog = LoadingDialog()
+        loading_dialog.show()
+        app.processEvents()  # Force the dialog to render immediately
+
+        # create the main window
+        window = MainWindow(
+            debug=args.debug,
+            monitor=monitor,
+            viewer=viewer,
+            archive_time=archive_time,
+        )
+
+        # close loading dialog once main window is ready
+        loading_dialog.close()
+        loading_dialog = None
+
         # define the JS console message handler
-        def handle_js_message(level, message, line, source):
-            js_log.debug("JS [%s:%s] %s", source, line, message)
+        js_log = logging.getLogger("storm.js")
 
-        # set the JS console message handler
-        window.map_widget.page().javaScriptConsoleMessage = handle_js_message
+        # if the map widget has a page
+        if hasattr(window.map_widget, "page"):
+            # define the JS console message handler
+            def handle_js_message(level, message, line, source):
+                js_log.debug("JS [%s:%s] %s", source, line, message)
 
-    window.show()
+            # set the JS console message handler
+            window.map_widget.page().javaScriptConsoleMessage = handle_js_message
 
-    # if a truck replay file is specified
-    if args.truck_replay_file:
-        # start the truck replay
-        _start_truck_replay(window=window, file_path=args.truck_replay_file, interval_ms = max(50, args.truck_replay_interval_ms),
-                            restamp=args.truck_replay_restamp)
+        window.show()
 
-    # run the application
-    sys.exit(app.exec())
+        # if a truck replay file is specified
+        if args.truck_replay_file:
+            # start the truck replay
+            _start_truck_replay(window=window, file_path=args.truck_replay_file, interval_ms = max(50, args.truck_replay_interval_ms),
+                                restamp=args.truck_replay_restamp)
+
+        # session_aborted means "show the launch dialog again", not "quit" —
+        # closeEvent() itself decides which one this run is.
+        session_ending = {"restart": False}
+
+        def _on_session_aborted():
+            session_ending["restart"] = True
+            app.quit()
+
+        window.session_aborted.connect(_on_session_aborted)
+
+        # run the application — blocks until app.quit() fires, whether from
+        # a real quit (closeEvent's else-branch) or the handler above.
+        app.exec()
+
+        if not session_ending["restart"]:
+            # real quit: exit exactly like the pre-session-loop code did,
+            # with no explicit window cleanup. QtWebEngine requires its
+            # QWebEngineView/Page to actually be destroyed (not just
+            # deleteLater-scheduled) before the process tears down its
+            # profile, or it logs "Release of profile requested but
+            # WebEnginePage still not deleted" and can hang requiring a
+            # force-quit. deleteLater() alone doesn't run here -- there's no
+            # event loop left to process it before sys.exit -- so don't
+            # call it on this path.
+            sys.exit(0)
+
+        # restarting: deleteLater() here is safe because the LaunchDialog's
+        # own exec() below is a nested event loop that will actually flush
+        # the deferred deletion before the next MainWindow gets built.
+        window.deleteLater()
 
 # function to start a truck replay
 def _start_truck_replay(window, file_path: str, interval_ms: int, restamp: bool = False) -> None:

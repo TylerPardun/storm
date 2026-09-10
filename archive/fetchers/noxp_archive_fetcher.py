@@ -42,6 +42,7 @@ class RadarInventory:
     errors: list[str] = field(default_factory=list)
     excluded: list[str] = field(default_factory=list)
     catalogs_checked: int = 0
+    requests_made: int = 0
     pending: int = 0
     scope: str = 'Supported moment products; filename dates are discovery hints'
 
@@ -142,6 +143,9 @@ class NoxpArchive:
         self.fetch_catalog = fetch_catalog or _fetch_catalog_html
         self._catalogs = {}
 
+    def clear_catalog_cache(self):
+        self._catalogs.clear()
+
     def discover(self, target: date | None = None, *, cancel=None, budget=80, progress=None, catalog_root=None):
         """Union supported files; retain unknown/budget-limited states.
 
@@ -206,6 +210,7 @@ class NoxpArchive:
                     raise
                 result.errors.append(f'{url}: {exc}')
         result.pending = len(queue)
+        result.requests_made = requests
         return result
 
     def resolve(self, asset, cancel):
@@ -218,11 +223,17 @@ class NoxpArchive:
         return matches[0]
 
     def load(self, asset: RadarAsset, *, cancel=None):
+        from core.mem_probe import peak_rss_mb, log_delta
+        from time import perf_counter
+        t0 = perf_counter()
+        rss_before = peak_rss_mb()
         cancel = cancel or Event()
         url = self.resolve(asset, cancel)
         path, provenance = download_asset(url, self.cache_dir, cancel, asset.name)
         volume = read_noxp(path, asset.format)
         volume.provenance.update(provenance, catalog_url=asset.catalog_url)
+        log_delta(f"NoxpArchive.load {asset.name}", rss_before, peak_rss_mb(),
+                   (perf_counter() - t0) * 1000.0)
         return volume
 
 

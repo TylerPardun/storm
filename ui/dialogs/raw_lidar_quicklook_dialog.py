@@ -110,12 +110,12 @@ class RawLidarQuicklookDialog(QDialog):
 
         self._btn_save_png = QToolButton()
         self._btn_save_png.setText("SAVE")
-        self._btn_save_png.setToolTip("Save this quicklook as a PNG")
+        self._btn_save_png.setToolTip("Save PNG")
         self._btn_save_png.setStyleSheet(_EXPORT_BTN_QSS)
         self._btn_save_png.clicked.connect(lambda: save_widget_png(self, "storm_raw_lidar", "Save Raw Lidar PNG"))
         self._btn_copy_png = QToolButton()
         self._btn_copy_png.setText("COPY")
-        self._btn_copy_png.setToolTip("Copy this quicklook PNG to the clipboard")
+        self._btn_copy_png.setToolTip("Copy PNG")
         self._btn_copy_png.setStyleSheet(_EXPORT_BTN_QSS)
         self._btn_copy_png.clicked.connect(lambda: copy_widget_png(self, "storm_raw_lidar"))
         header.addWidget(self._btn_save_png)
@@ -177,6 +177,7 @@ class RawLidarQuicklookDialog(QDialog):
 
         ax.set_ylabel(f"{rays.distance_kind} (m)", color=_TEXT, fontsize=9)
         ax.set_xlabel("Time (UTC)", color=_TEXT, fontsize=9)
+        ax.set_ylim(0, 6000)   # boundary-layer focus; raw lidar can report well above this
         ax.tick_params(colors=_TEXT, labelsize=8)
         for spine in ax.spines.values():
             spine.set_color(_BORDER)

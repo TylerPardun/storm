@@ -1,14 +1,14 @@
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
-    QToolButton, QComboBox, QFrame,
-    QDialog, QPushButton, QDateTimeEdit,
+    QToolButton, QComboBox, QFrame, QSlider, QMessageBox,
+    QDialog, QPushButton, QTimeEdit,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTime
 from PyQt6.QtGui import QKeySequence, QShortcut
 
 try:
@@ -43,13 +43,15 @@ class ArchiveControls(QWidget):
     product_changed(str) — user changed Level-2 product
     """
 
-    tilt_changed    = pyqtSignal(int)
-    product_changed = pyqtSignal(str)
+    tilt_changed         = pyqtSignal(int)
+    product_changed      = pyqtSignal(str)
+    change_day_requested = pyqtSignal()   # user confirmed exiting this session to pick a new day
 
     def __init__(self, time_controller: TimeController, parent=None):
         super().__init__(parent)
         self._tc = time_controller
         self._session_date: Optional[datetime] = None
+        self._scan_times: list[datetime] = []
 
         self.setObjectName("archiveControls")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -120,15 +122,29 @@ class ArchiveControls(QWidget):
 
         root.addLayout(row1)
 
+        # scrubber — seconds since midnight UTC of the session date. Dragging
+        # only updates the time label (cheap); the actual seek (which fans
+        # out to every fetcher's on_time_changed) only fires on release, so
+        # scrubbing never floods the archive fetchers with intermediate seeks.
+        self._slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider.setRange(0, 86399)
+        self._slider.setTickInterval(3600)   # one tick per hour
+        self._slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._slider.setTracking(False)
+        self._slider.setFixedHeight(18)
+        self._slider.sliderMoved.connect(self._on_slider_preview)
+        self._slider.valueChanged.connect(self._on_slider_committed)
+        root.addWidget(self._slider)
+
         row2 = QHBoxLayout()
         row2.setSpacing(5)
         row2.setContentsMargins(0, 0, 0, 0)
 
         self._btn_start = self._ctrl_btn("-1m", "Step back 1 minute")
-        self._btn_back  = self._ctrl_btn("-10", "Step back 10 seconds (Left or A)")
+        self._btn_back  = self._ctrl_btn("⏮", "Previous radar scan (Left / A)")
         self._btn_play  = self._ctrl_btn("▶",  "Play / pause (Space)")
         self._btn_play.setCheckable(True)
-        self._btn_fwd   = self._ctrl_btn("+10", "Step forward 10 seconds (Right or D)")
+        self._btn_fwd   = self._ctrl_btn("⏭", "Next radar scan (Right / D)")
         self._btn_end   = self._ctrl_btn("+1m", "Step forward 1 minute")
 
         for btn in (self._btn_start, self._btn_back, self._btn_play,
@@ -154,14 +170,30 @@ class ArchiveControls(QWidget):
 
         row2.addWidget(self._vdiv())
 
-        jump_btn = self._ctrl_btn("JUMP", "Jump to a specific time")
+        jump_btn = self._ctrl_btn("JUMP", "Jump to a specific time (this day only)")
         jump_btn.setFixedWidth(44)
         jump_btn.setStyleSheet(jump_btn.styleSheet() or "")
         jump_btn.clicked.connect(self._show_jump_dialog)
         row2.addWidget(jump_btn)
 
+        row2.addWidget(self._vdiv())
+
+        change_day_btn = self._ctrl_btn("EXIT", "Exit this session and pick a different day")
+        change_day_btn.setFixedWidth(40)
+        change_day_btn.setStyleSheet(
+            "QToolButton { color: #F87171; border: 1px solid rgba(248, 113, 113, 0.4); "
+            "border-radius: 4px; } "
+            "QToolButton:hover { background-color: rgba(248, 113, 113, 0.12); }"
+        )
+        change_day_btn.clicked.connect(self._on_change_day_clicked)
+        row2.addWidget(change_day_btn)
+
         root.addLayout(row2)
         self._precision_mode = False
+
+        # populate the slider/labels from wherever the clock actually starts,
+        # rather than leaving them at placeholder text until the first step.
+        self._on_time_changed(self._tc.current_time)
 
     def _ctrl_btn(self, text: str, tooltip: str) -> QToolButton:
         btn = QToolButton()
@@ -190,6 +222,16 @@ class ArchiveControls(QWidget):
             f"color: {color}; font-size: 9px; font-weight: 600; letter-spacing: 0.4px;"
         )
 
+    def set_available_scan_times(self, iso_times: list[str]) -> None:
+        """Record the current radar station's scan index (ISO UTC strings,
+        already chronological -- see ArchiveRadarFetcher.index_loaded) so
+        the scan-step buttons and Jump dialog can target real scan times
+        instead of arbitrary seconds. Re-fires whenever the station or day
+        changes, replacing the previous list."""
+        self._scan_times = [
+            datetime.fromisoformat(t.replace("Z", "+00:00")) for t in iso_times
+        ]
+
     def set_obs_status(self, text: str, active: bool = False) -> None:
         self._obs_status.setText(text)
         color = "#39D98A" if active else "#8E97AB"
@@ -198,15 +240,14 @@ class ArchiveControls(QWidget):
         )
 
     def set_precision_mode(self, enabled: bool) -> None:
-        """Use one-second playback navigation when dense observations are available."""
+        """Use one-second playback navigation when dense observations are
+        available. Only the +/-1m fine-tune buttons change meaning here --
+        the scan-step buttons (_btn_back/_btn_fwd) always mean "nearest
+        radar scan," precision mode or not."""
         self._precision_mode = enabled
         self._btn_start.setText("-10")
-        self._btn_back.setText("-1")
-        self._btn_fwd.setText("+1")
         self._btn_end.setText("+10")
         self._btn_start.setToolTip("Step back 10 seconds")
-        self._btn_back.setToolTip("Step back 1 second (Left or A)")
-        self._btn_fwd.setToolTip("Step forward 1 second (Right or D)")
         self._btn_end.setToolTip("Step forward 10 seconds")
         self._speed_label.setVisible(not enabled)
         self._speed_combo.setVisible(not enabled)
@@ -246,6 +287,31 @@ class ArchiveControls(QWidget):
 
     def _on_time_changed(self, t: datetime) -> None:
         self._update_time_display(t)
+        # reflect the new position on the slider without re-triggering a seek
+        self._slider.blockSignals(True)
+        self._slider.setValue(self._tc.seconds_since_midnight())
+        self._slider.blockSignals(False)
+
+    def _on_slider_preview(self, value: int) -> None:
+        """Live label update while dragging — no fetcher calls until release."""
+        midnight = self._tc.current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        self._update_time_display(midnight + timedelta(seconds=value))
+
+    def _on_slider_committed(self, value: int) -> None:
+        self._tc.pause()
+        self._tc.set_seconds_since_midnight(value)
+
+    def _on_change_day_clicked(self) -> None:
+        reply = QMessageBox.question(
+            self, "Change Day",
+            "Exit this archive session and return to the launch screen to pick "
+            "a different day?\n\nCurrent playback position will be lost.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._tc.pause()
+            self.change_day_requested.emit()
 
     def _on_playing_changed(self, playing: bool) -> None:
         self._btn_play.blockSignals(True)
@@ -257,10 +323,28 @@ class ArchiveControls(QWidget):
         self._tc.set_speed_by_index(idx)
 
     def _on_step_back(self) -> None:
-        self._tc.step(-1 if self._precision_mode else -10)
+        self._jump_to_scan(-1)
 
     def _on_step_forward(self) -> None:
-        self._tc.step(1 if self._precision_mode else 10)
+        self._jump_to_scan(1)
+
+    def _jump_to_scan(self, direction: int) -> None:
+        """Jump to the nearest available radar scan before (-1) or after
+        (+1) the current archive time. No-op if the scan index hasn't
+        loaded yet (e.g. still fetching, or no station selected)."""
+        if not self._scan_times:
+            return
+        current = self._tc.current_time
+        if direction < 0:
+            candidates = [t for t in self._scan_times if t < current]
+            target = candidates[-1] if candidates else None
+        else:
+            candidates = [t for t in self._scan_times if t > current]
+            target = candidates[0] if candidates else None
+        if target is None:
+            return
+        self._tc.pause()
+        self._tc.set_time(target)
 
     def _on_skip_start(self) -> None:
         self._tc.step(-10 if self._precision_mode else -60)
@@ -269,8 +353,9 @@ class ArchiveControls(QWidget):
         self._tc.step(10 if self._precision_mode else 60)
 
     def _show_jump_dialog(self) -> None:
-        dlg = _JumpToTimeDialog(self._tc.current_time, self)
+        dlg = _JumpToTimeDialog(self._tc.current_time, self._scan_times, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._tc.pause()
             self._tc.set_time(dlg.chosen_time())
 
 
@@ -355,8 +440,15 @@ class ArchiveControls(QWidget):
 
 
 class _JumpToTimeDialog(QDialog):
-    def __init__(self, current_time: datetime, parent=None):
+    """Time-of-day only — deliberately has no date field. The archive session
+    is scoped to a single day (every fetcher was indexed for current_time's
+    date at construction), so there's no other day this dialog could jump to
+    without leaving the fetchers pointed at stale data. Use the DAY button
+    to actually change days."""
+
+    def __init__(self, current_time: datetime, scan_times: "list[datetime] | None" = None, parent=None):
         super().__init__(parent)
+        self._session_date = current_time.date()
         self.setWindowTitle("Jump to Time")
         self.setWindowFlags(
             Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint
@@ -365,13 +457,20 @@ class _JumpToTimeDialog(QDialog):
         self.setStyleSheet("""
             QDialog { background-color: #0A0A0F; }
             QLabel  { color: #8E97AB; font-size: 11px; background: transparent; }
-            QDateTimeEdit {
+            QTimeEdit, QComboBox {
                 background-color: #1A1A2E;
                 border: 1px solid #1E1E2E;
                 border-radius: 6px;
                 color: #E8EAF0;
                 font-size: 13px;
                 padding: 6px 10px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1A1A2E;
+                color: #E8EAF0;
+                selection-background-color: #00CFFF;
+                selection-color: #0A0A0F;
+                outline: none;
             }
             QPushButton {
                 background-color: #00CFFF;
@@ -385,22 +484,32 @@ class _JumpToTimeDialog(QDialog):
             QPushButton:hover { background-color: #33D9FF; }
         """)
 
-        from PyQt6.QtCore import QDateTime
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 16)
         layout.setSpacing(10)
 
-        layout.addWidget(QLabel("Enter UTC time:"))
+        # scroll through actual radar scan times when we have them -- faster
+        # and less error-prone than typing a time that may fall in a gap
+        # between scans. Manual entry below still works for times that
+        # aren't tied to a scan (e.g. a specific vehicle/report time).
+        same_day_scans = sorted(t for t in (scan_times or []) if t.date() == self._session_date)
+        self._scan_combo = None
+        if same_day_scans:
+            layout.addWidget(QLabel("Scroll to a radar scan:"))
+            self._scan_combo = QComboBox()
+            for t in same_day_scans:
+                self._scan_combo.addItem(t.strftime("%H:%M:%S"), userData=t)
+            nearest = min(same_day_scans, key=lambda t: abs(t - current_time))
+            self._scan_combo.setCurrentIndex(same_day_scans.index(nearest))
+            self._scan_combo.currentIndexChanged.connect(self._on_scan_picked)
+            layout.addWidget(self._scan_combo)
 
-        self._dt_edit = QDateTimeEdit()
-        self._dt_edit.setDisplayFormat("yyyy-MM-dd  HH:mm:ss")
-        self._dt_edit.setCalendarPopup(True)
-        qt_dt = QDateTime(
-            current_time.year, current_time.month, current_time.day,
-            current_time.hour, current_time.minute, current_time.second,
-        )
-        self._dt_edit.setDateTime(qt_dt)
-        layout.addWidget(self._dt_edit)
+        layout.addWidget(QLabel(f"Or enter a UTC time ({self._session_date.isoformat()}):"))
+
+        self._t_edit = QTimeEdit()
+        self._t_edit.setDisplayFormat("HH:mm:ss")
+        self._t_edit.setTime(QTime(current_time.hour, current_time.minute, current_time.second))
+        layout.addWidget(self._t_edit)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -409,14 +518,19 @@ class _JumpToTimeDialog(QDialog):
         btn_row.addWidget(ok_btn)
         layout.addLayout(btn_row)
 
+    def _on_scan_picked(self, idx: int) -> None:
+        t = self._scan_combo.itemData(idx)
+        if t is not None:
+            self._t_edit.setTime(QTime(t.hour, t.minute, t.second))
+
     def chosen_time(self) -> datetime:
-        qt_dt = self._dt_edit.dateTime()
+        qt_t = self._t_edit.time()
         return datetime(
-            qt_dt.date().year(),
-            qt_dt.date().month(),
-            qt_dt.date().day(),
-            qt_dt.time().hour(),
-            qt_dt.time().minute(),
-            qt_dt.time().second(),
+            self._session_date.year,
+            self._session_date.month,
+            self._session_date.day,
+            qt_t.hour(),
+            qt_t.minute(),
+            qt_t.second(),
             tzinfo=timezone.utc,
         )

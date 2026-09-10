@@ -2,7 +2,9 @@
 import base64
 import hashlib
 import hmac
+import logging
 import os
+import random
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -80,23 +82,106 @@ def _calendar_glyph_icon(color: str = "#8E97AB", w: int = 16, h: int = 16) -> QI
     return QIcon(px)
 
 
+class _CircularProgress(QWidget):
+    """Small circular progress ring for the archive catalog scan.
+
+    The scan already had a progress bar (_browse_coverage_progress), but it
+    lives inside the collapsible "browse" drawer, which starts collapsed --
+    easy to never see, which reads as "nothing is happening" even though
+    AvailabilityIndex.scan() (archive/catalog.py) is genuinely progressive,
+    most-recent-year first. This sits next to the date picker instead, so
+    the scan being in progress is visible without expanding anything.
+    """
+
+    def __init__(self, parent=None, diameter: int = 20):
+        super().__init__(parent)
+        self._diameter = diameter
+        self.setFixedSize(diameter, diameter)
+        self._value = 0
+        self._maximum = 0
+
+    def setRange(self, minimum: int, maximum: int) -> None:
+        self._maximum = max(0, maximum)
+        self.update()
+
+    def setValue(self, value: int) -> None:
+        self._value = value
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(2, 2, -2, -2)
+
+        track = QPen(QColor("#2A2A3E"))
+        track.setWidth(3)
+        painter.setPen(track)
+        painter.drawArc(rect, 0, 360 * 16)
+
+        fraction = (self._value / self._maximum) if self._maximum else 0.0
+        arc = QPen(QColor("#00CFFF"))
+        arc.setWidth(3)
+        arc.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(arc)
+        # 12 o'clock start, clockwise sweep (Qt angles are counterclockwise
+        # from 3 o'clock in 1/16ths of a degree, hence the negative span).
+        painter.drawArc(rect, 90 * 16, -round(360 * 16 * fraction))
+        painter.end()
+
+
 class _AvailabilityCalendar(QCalendarWidget):
-    """Shade available days using Qt's date formats; keep native selection."""
+    """Paint availability beneath readable dates, with a distinct selection."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._known_dates = frozenset()
-        self.setToolTip("Shaded dates: catalog-listed data matching the browse filters. Unshaded dates may be unchecked.")
+        self.setMinimumSize(322, 260)
+        self.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        weekday = QTextCharFormat()
+        weekday.setForeground(QColor("#8E97AB"))
+        for day in Qt.DayOfWeek:
+            self.setWeekdayTextFormat(day, weekday)
 
     def set_known_dates(self, dates):
-        dates = frozenset(dates)
-        available = QTextCharFormat()
-        available.setBackground(QColor("#123C50"))
-        available.setForeground(QColor("#9BE8FF"))
-        for d in self._known_dates - dates:
-            self.setDateTextFormat(QDate(d.year, d.month, d.day), QTextCharFormat())
-        for d in dates - self._known_dates:
-            self.setDateTextFormat(QDate(d.year, d.month, d.day), available)
-        self._known_dates = dates
+        self._known_dates = frozenset(dates)
+        self.updateCells()
+
+    def paintCell(self, painter, rect, date):
+        # Draw each cell once: tinting after Qt's native paintCell washes
+        # out both the numeral and the selection. Inset tiles also keep
+        # consecutive available days from merging into one solid block.
+        current_month = date.year() == self.yearShown() and date.month() == self.monthShown()
+        enabled = self.isEnabled() and self.minimumDate() <= date <= self.maximumDate()
+        available = date.toPyDate() in self._known_dates
+        selected = date == self.selectedDate() and enabled
+        background = "#0D0D1A"
+        foreground = "#E8EAF0" if current_month else "#8E97AB"
+        border = None
+        if not enabled:
+            foreground = "#606879"
+        elif selected:
+            background, foreground = "#00CFFF", "#0A0A0F"
+        elif available:
+            background = "#123C50" if current_month else "#142936"
+            foreground = "#F0F8FF" if current_month else "#A6B6C8"
+            border = "#28627A" if current_month else "#24404F"
+        if enabled and not selected and date == QDate.currentDate():
+            border = "#8E97AB"
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(rect, QColor("#0D0D1A"))
+        tile = QRectF(rect).adjusted(2, 2, -2, -2)
+        painter.setPen(QPen(QColor(border), 1) if border else Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(background))
+        painter.drawRoundedRect(tile, 4, 4)
+        font = painter.font()
+        font.setPixelSize(12)
+        font.setBold(selected or (available and enabled))
+        painter.setFont(font)
+        painter.setPen(QColor(foreground))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(date.day()))
+        painter.restore()
 
 
 class _ClickConsumer(QObject):
@@ -205,7 +290,7 @@ class _YearGridPopup(QWidget):
             year = self._start_year + i
             btn.setText(str(year))
             btn.setProperty("available", year in self._known_years)
-            btn.setToolTip("Catalog-listed data" if year in self._known_years else "No dates indexed yet")
+            btn.setToolTip("Dates with data" if year in self._known_years else "No dates found yet")
             btn.style().unpolish(btn)
             btn.style().polish(btn)
             selected = year == self._current_year
@@ -493,6 +578,10 @@ class LaunchDialog(QDialog):
         dt_row.setSpacing(6)
         dt_row.addWidget(self._archive_dt_edit, 1)
         dt_row.addWidget(self._build_calendar_button())
+        self._archive_scan_progress = _CircularProgress(self)
+        self._archive_scan_progress.setToolTip("Finding dates…")
+        self._archive_scan_progress.hide()
+        dt_row.addWidget(self._archive_scan_progress)
         av_layout.addLayout(dt_row)
         self._init_calendar_icons()
 
@@ -500,6 +589,22 @@ class LaunchDialog(QDialog):
         arc_hint.setObjectName("hint")
         arc_hint.setWordWrap(True)
         av_layout.addWidget(arc_hint)
+
+        self._surprise_btn = QPushButton("SURPRISE ME")
+        self._surprise_btn.setToolTip(
+            "Choose a random date with data"
+        )
+        self._surprise_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._surprise_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #1A1A2E; color: #8E97AB;"
+            "  border: 1px solid #1E1E2E; border-radius: 6px;"
+            "  font-size: 11px; font-weight: 700; padding: 6px 10px;"
+            "}"
+            "QPushButton:hover { border-color: #00CFFF; color: #00CFFF; background-color: #0D1A2E; }"
+        )
+        self._surprise_btn.clicked.connect(self._on_surprise_me_clicked)
+        av_layout.addWidget(self._surprise_btn)
 
         av_layout.addSpacing(8)
         self._build_browse_section(av_layout)
@@ -725,7 +830,7 @@ class LaunchDialog(QDialog):
         btn = QToolButton()
         btn.setIcon(_calendar_glyph_icon())
         btn.setIconSize(QSize(16, 16))
-        btn.setToolTip("Pick a date from the calendar")
+        btn.setToolTip("Choose date")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFixedSize(32, 32)
         btn.setStyleSheet(
@@ -771,6 +876,27 @@ class LaunchDialog(QDialog):
         self._archive_dt_edit.setDateTime(QDateTime(qdate, current_time))
         if self._calendar_popup is not None:
             self._calendar_popup.hide()
+
+    def _on_surprise_me_clicked(self):
+        """Jump to a random date that actually has catalog data -- the same
+        pool the calendar shading draws from (AvailabilitySnapshot.dates,
+        unfiltered by the browse section's platform/year/campaign pickers,
+        since "surprise me" should draw from everything, not whatever
+        narrow filter happens to be set)."""
+        snapshot = self._availability_snapshot
+        dates = snapshot.dates if snapshot is not None else frozenset()
+        if not dates:
+            QMessageBox.information(
+                self, "Still Looking",
+                "Still discovering available dates in the background -- give it "
+                "a few seconds and try again.",
+            )
+            return
+        chosen = random.choice(sorted(dates))
+        current_time = self._archive_dt_edit.time()
+        self._archive_dt_edit.setDateTime(
+            QDateTime(QDate(chosen.year, chosen.month, chosen.day), current_time)
+        )
 
     def _style_calendar_nav_icons(self, calendar: "QCalendarWidget"):
         """Style existing controls; intercept year activation before Qt reveals
@@ -846,7 +972,7 @@ class LaunchDialog(QDialog):
         self._availability_refresh_btn.setStyleSheet(self._cal_btn.styleSheet())
         self._availability_refresh_btn.setFixedSize(28, 28)
         self._availability_refresh_btn.setAccessibleName("Refresh archive availability")
-        self._availability_refresh_btn.setToolTip("Refresh catalog availability from THREDDS")
+        self._availability_refresh_btn.setToolTip("Refresh available dates")
         self._availability_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._availability_refresh_btn.clicked.connect(self._refresh_availability)
         summary_row.addWidget(self._availability_refresh_btn)
@@ -872,7 +998,7 @@ class LaunchDialog(QDialog):
         filter_row = QHBoxLayout()
         self._browse_campaign_combo = QComboBox()
         self._browse_campaign_combo.addItem("Any campaign years", None)
-        self._browse_campaign_combo.setToolTip("Filters by campaign years only; dates may belong to other campaigns in the same year.")
+        self._browse_campaign_combo.setToolTip("Filter by campaign year; other campaigns may appear.")
         for name in CAMPAIGN_YEARS:
             self._browse_campaign_combo.addItem(name, name)
         self._browse_year_combo = QComboBox()
@@ -906,7 +1032,7 @@ class LaunchDialog(QDialog):
         self._browse_results.addTab(self._browse_sources_list, "Selected date · instruments")
         bs.addWidget(self._browse_results)
         note = QLabel("Shaded calendar dates and cyan years mark catalog-listed data matching these filters. "
-                      "Unmarked dates may be unchecked. Radar coverage is not indexed yet.")
+                      "Unmarked dates may be unchecked. NOXP startup discovery is limited; use archive radar controls for more files.")
         note.setObjectName("hint")
         note.setWordWrap(True)
         bs.addWidget(note)
@@ -968,6 +1094,17 @@ class LaunchDialog(QDialog):
     def _on_availability_updated(self, generation, snapshot):
         if generation != self._availability_generation or self._selected_mode != "archive":
             return
+        # Keep diagnostics in the log rather than expanding hover labels.
+        previous = self._availability_snapshot
+        previous_errors = {
+            (pid, error)
+            for pid, result in previous.platforms.items()
+            for error in result.errors
+        } if previous else set()
+        for pid, result in snapshot.platforms.items():
+            for error in result.errors:
+                if (pid, error) not in previous_errors:
+                    logging.getLogger(__name__).warning("Archive availability [%s]: %s", pid, error)
         self._availability_snapshot = snapshot
         self._render_availability()
 
@@ -1023,7 +1160,7 @@ class LaunchDialog(QDialog):
             if result and target in result.dates:
                 present.append(p)
                 item = QListWidgetItem(f"{p.family} — {p.display_name}" + (" (partial)" if not result.complete else ""))
-                item.setToolTip("\n".join(result.errors) if result.errors else "Files listed for this date; contents have not been validated.")
+                item.setToolTip("Files listed; search incomplete." if not result.complete else "Files listed; data not yet checked.")
                 self._browse_sources_list.addItem(item)
             if result is None or not result.complete:
                 unknown.append(p)
@@ -1033,24 +1170,35 @@ class LaunchDialog(QDialog):
             result = snapshot.platforms.get(p.platform_id) if snapshot else None
             item = QListWidgetItem(f"{'Incomplete' if result and result.errors else 'Checking'} — {p.family} — {p.display_name}")
             item.setForeground(QColor("#8E97AB"))
-            item.setToolTip("\n".join(result.errors) if result and result.errors else "Catalog scan has not finished for this instrument.")
+            item.setToolTip("Search incomplete. Refresh to retry." if result and result.errors else "Still checking this instrument…")
             self._browse_sources_list.addItem(item)
-        self._browse_results.setTabText(1, f"Selected date · {len(present)} instruments")
+        self._browse_results.setTabText(1, "Selected date")
         running = snapshot is None or snapshot.checked < snapshot.total
         self._browse_coverage_progress.setVisible(running)
         self._browse_coverage_progress.setRange(0, snapshot.total if snapshot else 0)
         self._browse_coverage_progress.setValue(snapshot.checked if snapshot else 0)
-        text = f"{target.isoformat()} · {len(present)} instruments with listed data"
+        self._archive_scan_progress.setVisible(running)
+        self._archive_scan_progress.setRange(0, snapshot.total if snapshot else 0)
+        self._archive_scan_progress.setValue(snapshot.checked if snapshot else 0)
+        self._archive_scan_progress.setToolTip(
+            f"Finding dates · {snapshot.checked}/{snapshot.total} catalogs" if snapshot else "Finding dates…"
+        )
+        text = f"{target.isoformat()} · " + ("Data listed" if present else "No data found yet" if running or unknown else "No files listed in checked catalogs")
+        if snapshot and snapshot.cached:
+            text += " · cached listings"
         if running:
             text += f"\nIndexing catalogs{f' · {snapshot.checked}/{snapshot.total}' if snapshot else '…'}"
         elif unknown:
-            text += f"\nAvailability incomplete for {len(unknown)} instruments. Use ↻ to retry."
+            text += "\nAvailability incomplete: some sources remain unchecked or partial. Use ↻ to refresh."
         else:
-            text += "\nCatalog check complete. Calendar markers are ready."
+            text += "\nCatalog check complete. Calendar shading is ready."
         self._browse_coverage_lbl.setText(text)
         self._browse_coverage_lbl.setStyleSheet("color: #4ADE80;" if present else "")
-        errors = [error for result in snapshot.platforms.values() for error in result.errors] if snapshot else []
-        self._browse_coverage_lbl.setToolTip("\n".join(errors) if errors else "Catalog listings indicate files, not verified contents or full-day coverage.")
+        self._browse_coverage_lbl.setToolTip(
+            "Some sources are unchecked or partial." if unknown
+            else "Files listed; coverage may vary within each day." if present
+            else "No files listed for this date."
+        )
         self._layout_timer.start(0)
 
     def _on_browse_date_chosen(self, item):

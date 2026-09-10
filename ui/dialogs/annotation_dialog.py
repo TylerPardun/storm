@@ -242,7 +242,7 @@ class AnnotationEditDialog(QDialog):
 
         if annotation.type_key != "fork":
             btn_move = QPushButton("Move")
-            btn_move.setToolTip("Drag this annotation to a new location")
+            btn_move.setToolTip("Move annotation")
             btn_move.clicked.connect(self._on_move)
             btn_row.addWidget(btn_move)
 

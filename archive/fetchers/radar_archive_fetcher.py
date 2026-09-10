@@ -1,5 +1,6 @@
 
 import atexit
+import gzip
 import io
 import logging
 import os
@@ -7,6 +8,7 @@ import shutil
 import tempfile
 import threading
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -84,6 +86,17 @@ class ArchiveRadarFetcher(QObject):
         self._tmpdir = tempfile.mkdtemp(prefix="storm_radar_")
         atexit.register(shutil.rmtree, self._tmpdir, True)
 
+        # bounded pool for fetch+decode -- _maintain_buffer can want up to
+        # BUFFER_BEFORE+BUFFER_AFTER+1 (9) scans fetched at once when the
+        # buffer first fills or shifts; each fetch+decode was measured
+        # pushing peak process RSS by 400MB-1GB (MetPy parses every tilt/
+        # moment in the file, not just the one being displayed), so letting
+        # all 9 run concurrently was the dominant driver of the archive-mode
+        # memory blowup. Capping this bounds the worst-case overlap instead.
+        self._fetch_executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="wsr88d-fetch-decode"
+        )
+
         # maps scan_time → path of the raw .dat file in _tmpdir (None = fetch pending).
         self._raw_cache: dict[datetime, Optional[str]] = {}
         # maps scan_time → parsed metpy Level2File (binary structure only,
@@ -105,6 +118,15 @@ class ArchiveRadarFetcher(QObject):
     @property
     def station(self) -> str:
         return self._station
+
+    def shutdown(self) -> None:
+        """Stop background work and drop the tmp dir. Call this when the
+        owning session is ending (e.g. MainWindow.closeEvent) -- the fetch
+        pool's worker threads are non-daemon and won't stop on their own,
+        and without this every "change day" round-trip would leave both a
+        stray thread pool and an orphaned tmp dir behind."""
+        self._fetch_executor.shutdown(wait=False, cancel_futures=True)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def set_station(self, station: str) -> None:
         self._station = station.upper()
@@ -250,10 +272,7 @@ class ArchiveRadarFetcher(QObject):
             self._raw_cache[scan_time] = None
 
         self.loading_changed.emit(True)
-        t = threading.Thread(
-            target=self._fetch_raw_then_decode, args=(scan_time,), daemon=True
-        )
-        t.start()
+        self._fetch_executor.submit(self._fetch_raw_then_decode, scan_time)
 
     def _ensure_decoded(self, scan_time: datetime) -> None:
         cache_key = self._decode_key(scan_time)
@@ -264,7 +283,7 @@ class ArchiveRadarFetcher(QObject):
                 return
             self._pending_decodes.add(cache_key)
         self.loading_changed.emit(True)
-        threading.Thread(target=self._decode_cached_scan, args=(scan_time,), daemon=True).start()
+        self._fetch_executor.submit(self._decode_cached_scan, scan_time)
 
     def _fetch_raw_then_decode(self, scan_time: datetime) -> None:
         cache_key = self._decode_key(scan_time)
@@ -345,13 +364,20 @@ class ArchiveRadarFetcher(QObject):
             f"{scan_time.strftime('%Y/%m/%d')}/{self._station}/"
             f"{self._station}{scan_time.strftime('%Y%m%d_%H%M%S')}"
         )
-        # try V06 first, then V03.
-        for suffix in ("_V06", "_V03", ""):
+        # try V06 first, then V03; the bucket was reorganized in 2025 to
+        # store objects gzip-compressed with a ".gz" suffix on the key, so
+        # also try gzip-suffixed variants of each.
+        for suffix in ("_V06", "_V03", "", "_V06.gz", "_V03.gz", ".gz"):
             url = f"{_S3_BASE}/{prefix}{suffix}"
             try:
                 resp = requests.get(url, timeout=60, stream=True)
                 if resp.status_code == 200:
                     data = resp.content
+                    # S3 doesn't set Content-Encoding for these objects, so
+                    # requests won't auto-decompress -- detect gzip by magic
+                    # bytes regardless of which suffix matched.
+                    if data[:2] == b"\x1f\x8b":
+                        data = gzip.decompress(data)
                     log.debug(
                         "ArchiveRadarFetcher: downloaded %s (%.1f MB)",
                         url.split("/")[-1], len(data) / 1e6,
@@ -379,6 +405,10 @@ class ArchiveRadarFetcher(QObject):
     def _decode(self, scan_time: datetime, file_bytes: bytes) -> Optional[Level2RadarScan]:
         """Decode a Level-2 file with MetPy and return a Level2RadarScan."""
         from pyproj import Proj, Transformer
+        from core.mem_probe import peak_rss_mb, log_delta
+        import time as _time
+        _t0 = _time.perf_counter()
+        _rss_before = peak_rss_mb()
 
         f = self._get_parsed(scan_time, file_bytes)
 
@@ -487,6 +517,8 @@ class ArchiveRadarFetcher(QObject):
         lons, lats = xform.transform(x_km, y_km)
 
         meta = L2_PRODUCTS[product]
+        log_delta(f"ArchiveRadarFetcher._decode {self._station} {scan_time}",
+                   _rss_before, peak_rss_mb(), (_time.perf_counter() - _t0) * 1000.0)
         return Level2RadarScan(
             site=self._station,
             product=meta["label"].split("(")[-1].rstrip(")"),

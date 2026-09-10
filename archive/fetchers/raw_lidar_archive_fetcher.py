@@ -17,6 +17,10 @@ from archive.fetchers.noxp_archive_fetcher import download_asset
 @dataclass(frozen=True)
 class RawLidarSource:
     platform_id: str
+    instrument: str   # the physical lidar unit, e.g. "DLTRUCK1-DL1" -- one
+                       # instrument produces up to 4 platform_id entries
+                       # below (one per scan-mode product), which is why a
+                       # single deployed lidar can show as several "sources".
     platform_dir: str
     datastream: str
     product: str
@@ -28,7 +32,7 @@ class RawLidarSource:
 
 
 KNOWN_RAW_LIDAR_SOURCES = tuple(
-    RawLidarSource(f'{platform}-{product.upper()}', directory, f'{prefix}dl{product}{unit}.b1', product, mobile)
+    RawLidarSource(f'{platform}-{product.upper()}', platform, directory, f'{prefix}dl{product}{unit}.b1', product, mobile)
     for platform, directory, prefix, unit, mobile in (
         ('DLTRUCK1-DL1', 'dltruck/dltruck1', 'dltruck', 'DL1', True),
         ('DLTRUCK1-DL2', 'dltruck/dltruck1', 'dltruck', 'DL2', True),
@@ -105,6 +109,83 @@ class RawLidarRays:
                     position_sources={str(v): int(np.count_nonzero(self.coordinate_source == v)) for v in np.unique(self.coordinate_source)},
                     georeferenced_rays=int(np.count_nonzero(self.ground_geometry_valid)),
                     warnings=self.warnings, provenance=self.provenance)
+
+
+def raw_lidar_scan_to_map_scan(rays: RawLidarRays, when: datetime, field_name: str,
+                                window_seconds: int = 90):
+    """Slice one PPI/CSM-style scan out of RawLidarRays around `when` and
+    georeference it into a core.radar_scan.RadarScan the existing map
+    overlay pipeline (ui/map/radar_overlay.py) already knows how to render.
+
+    Stationary CLAMPS sites only -- see RawLidarRays.ground_geometry_valid's
+    own comment: the mobile DL Truck's heading/motion correction is
+    unverified, so its scan azimuths cannot be trusted as true geographic
+    bearings yet. Raises ValueError rather than silently rendering
+    unverified or insufficient geometry (matches noxp_volume_to_scan's
+    convention in noxp_radar_archive_fetcher.py).
+    """
+    from pyproj import Proj, Transformer
+
+    if rays.source.mobile:
+        raise ValueError(
+            'Cannot map-render a mobile-platform scan -- DL Truck heading/motion '
+            'correction is unverified, so its azimuths are not trustworthy geographic bearings'
+        )
+    if field_name not in rays.fields:
+        raise ValueError(f'Field {field_name!r} not present (have: {sorted(rays.fields)})')
+
+    idx = rays.rays_at(when, window_seconds)
+    if idx.size < 8:
+        raise ValueError(f'Only {idx.size} ray(s) in the last {window_seconds}s -- not enough for a scan')
+
+    az, el = rays.azimuth_deg[idx], rays.elevation_deg[idx]
+    lat, lon = rays.latitude[idx], rays.longitude[idx]
+    good = np.isfinite(az) & np.isfinite(el) & np.isfinite(lat) & np.isfinite(lon)
+    if good.sum() < 8:
+        raise ValueError('Not enough rays with finite azimuth/elevation/position for this window')
+    idx, az, el = idx[good], az[good], el[good]
+
+    lat0 = float(np.nanmedian(lat[good]))
+    lon0 = float(np.nanmedian(lon[good]))
+
+    az_rad = np.deg2rad(az)
+    el_rad = np.deg2rad(el)
+    # flat-earth ground-range projection -- fine at these ranges (a few km).
+    ground_range_m = np.cos(el_rad)[:, None] * rays.distance_m[None, :]
+    x_m = np.sin(az_rad)[:, None] * ground_range_m
+    y_m = np.cos(az_rad)[:, None] * ground_range_m
+
+    aeqd = Proj(proj='aeqd', lat_0=lat0, lon_0=lon0, datum='WGS84', units='m')
+    xform = Transformer.from_proj(aeqd, Proj('epsg:4326'), always_xy=True)
+    lons, lats = xform.transform(x_m, y_m)
+
+    order = np.argsort(az)
+    lons, lats = lons[order], lats[order]
+    data = np.ma.filled(rays.fields[field_name]['data'][idx][order], np.nan).astype(np.float32)
+
+    is_velocity = 'vel' in field_name.lower()
+    if is_velocity:
+        vmax = float(np.nanpercentile(np.abs(data), 98)) if np.isfinite(data).any() else 20.0
+        vmax = max(vmax, 1.0)
+        vmin, colormap = -vmax, 'nws_vel'
+    else:
+        finite = data[np.isfinite(data)]
+        vmin = float(np.nanpercentile(finite, 2)) if finite.size else 0.0
+        vmax = float(np.nanpercentile(finite, 98)) if finite.size else 1.0
+        colormap = 'nws_ref'
+
+    from core.radar_scan import RadarScan
+    return RadarScan(
+        site=rays.source.instrument,
+        product=field_name,
+        scan_time=when,
+        data=data,
+        lats=lats.astype(np.float32),
+        lons=lons.astype(np.float32),
+        vmin=vmin, vmax=vmax,
+        units=rays.fields[field_name].get('units', ''),
+        colormap=colormap,
+    )
 
 
 def _values(variable):

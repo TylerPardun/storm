@@ -16,8 +16,21 @@ import matplotlib.image as mimg
 from scipy.ndimage import map_coordinates
 
 from core.radar_scan import RadarScan
+from core.mem_probe import peak_rss_mb, log_delta
 
 log = logging.getLogger(__name__)
+
+# --- memory safety gate (temporary diagnostic instrumentation) -------------
+# On an 8 GB machine, ARCHIVE_SUPERRES_GRID_SIZE (4096px) renders are the
+# prime suspect for the reported ~8 GB session that forced a restart: a
+# 4096x4096 grid is ~28x the cells of the normal 768px playback grid, and
+# each render allocates several float64 arrays that size. Tier-1/live/NOXP
+# renders (<=1536px) are never gated -- only the super-res tier is, and only
+# once peak RSS actually gets close to the ceiling. Once tripped, stays
+# tripped for the rest of the process (no cooldown/reset logic to get wrong).
+_SUPERRES_SAFETY_RSS_CEILING_MB = 6144.0   # ~75% of this machine's 8 GB
+_SUPERRES_GATE_MIN_GRID = 2048             # only gates render calls at/above this size
+_superres_gate_tripped = False
 
 # output grid resolution for polar→Cartesian reprojection.
 RENDER_GRID_SIZE = 768
@@ -28,6 +41,13 @@ ADAPTIVE_DOWN_MS = 280.0
 ADAPTIVE_UP_MS = 130.0
 ADAPTIVE_DOWN_SCANS = 2
 ADAPTIVE_UP_SCANS = 4
+
+# Archive-only "super-res" tier (see ui/app/main_window.py's debounced Tier-2
+# render). Deliberately separate from RENDER_GRID_SIZE/MAX_RENDER_GRID_SIZE
+# above, which live mode's adaptive algorithm owns — these constants must
+# never feed back into that path.
+ARCHIVE_SUPERRES_GRID_SIZE = 4096       # matches MESO-VIEW's default output_size_px
+ARCHIVE_SUPERRES_CROP_RADIUS_M = 300_000.0  # 300 km half-width; ~146 m/px at 4096px
 
 
 # function to set the render grid size (used on startup)
@@ -374,23 +394,60 @@ def render_scan_to_png(
     scan: RadarScan,
     grid_size: int,
     mask_scan: RadarScan | None = None,
+    crop_radius_m: float | None = None,
 ) -> tuple[bytes, list, float]:
     """
     Convert a RadarScan to a PNG.  Fully thread-safe — takes all inputs
     as parameters and creates its own ScalarMappable; never touches shared state.
 
+    crop_radius_m: when given, the output covers a fixed square of this
+    half-width (in Web Mercator meters) centered on the scan's own radar
+    lat/lon, instead of the full scan extent. None (default) preserves the
+    original full-extent behavior for every existing caller.
+
     Returns:
         (png_bytes, [west, south, east, north], elapsed_ms)
     """
+    global _superres_gate_tripped
     IMG = grid_size
     t0 = perf_counter()
+    rss_before = peak_rss_mb()
+
+    if IMG >= _SUPERRES_GATE_MIN_GRID:
+        if _superres_gate_tripped:
+            raise RuntimeError(
+                f"super-res render skipped: memory safety gate already tripped "
+                f"this session (grid={IMG})"
+            )
+        if rss_before >= _SUPERRES_SAFETY_RSS_CEILING_MB:
+            _superres_gate_tripped = True
+            log.warning(
+                "[memprobe] SAFETY GATE TRIPPED: peak RSS %.0f MB >= %.0f MB ceiling -- "
+                "disabling the %dpx super-res tier for the rest of this session",
+                rss_before, _SUPERRES_SAFETY_RSS_CEILING_MB, IMG,
+            )
+            raise RuntimeError(
+                f"super-res render skipped: peak RSS {rss_before:.0f} MB >= "
+                f"{_SUPERRES_SAFETY_RSS_CEILING_MB:.0f} MB safety ceiling"
+            )
 
     # build the output PNG grid uniform in Web Mercator so MapLibre's image
-    all_x, all_y = _lonlat_to_merc(scan.lons, scan.lats)
-    x_min = float(np.nanmin(all_x))
-    x_max = float(np.nanmax(all_x))
-    y_min = float(np.nanmin(all_y))
-    y_max = float(np.nanmax(all_y))
+    if crop_radius_m is not None:
+        radar_lat = float(scan.lats[:, 0].mean())
+        radar_lon = float(scan.lons[:, 0].mean())
+        cx, cy = _lonlat_to_merc(radar_lon, radar_lat)
+        cx = float(cx)
+        cy = float(cy)
+        x_min = cx - crop_radius_m
+        x_max = cx + crop_radius_m
+        y_min = cy - crop_radius_m
+        y_max = cy + crop_radius_m
+    else:
+        all_x, all_y = _lonlat_to_merc(scan.lons, scan.lats)
+        x_min = float(np.nanmin(all_x))
+        x_max = float(np.nanmax(all_x))
+        y_min = float(np.nanmin(all_y))
+        y_max = float(np.nanmax(all_y))
 
     out_x = np.linspace(x_min, x_max, IMG)
     out_y = np.linspace(y_max, y_min, IMG)   # rows top→bottom
@@ -422,6 +479,11 @@ def render_scan_to_png(
         elapsed_ms,
         IMG,
     )
+    log_delta(
+        f"render_scan_to_png grid={IMG} site={getattr(scan, 'site', '?')} "
+        f"t={getattr(scan, 'scan_time', '?')}",
+        rss_before, peak_rss_mb(), elapsed_ms,
+    )
 
     lon_w, lat_s = _merc_to_lonlat(np.array(x_min), np.array(y_min))
     lon_e, lat_n = _merc_to_lonlat(np.array(x_max), np.array(y_max))
@@ -446,9 +508,23 @@ class RadarOverlay(QObject):
     LAYER_ID  = "radar-overlay"
     SOURCE_ID = "radar-image"
 
-    def __init__(self, map_widget, parent=None):
+    def __init__(self, map_widget, parent=None, layer_id: str | None = None,
+                 source_id: str | None = None, use_scheme_handler: bool = True):
+        """layer_id/source_id let a second, independent overlay (e.g. a
+        CLAMPS lidar layer) coexist with the primary radar one instead of
+        fighting over the same MapLibre source. use_scheme_handler=False
+        keeps this instance off the scheme handler's single shared PNG slot
+        (storm://app/radar/overlay.png) -- that slot is radar's; a second
+        overlay writing to it would have each overlay's hide()/inject()
+        clobber the other's image, so a secondary overlay always injects
+        via a plain base64 data URL instead."""
         super().__init__(parent)
         self._map = map_widget
+        if layer_id is not None:
+            self.LAYER_ID = layer_id
+        if source_id is not None:
+            self.SOURCE_ID = source_id
+        self._use_scheme_handler = use_scheme_handler
         self._active = False
         self._hidden = False
         self._current_scan: Optional[RadarScan] = None
@@ -499,7 +575,7 @@ class RadarOverlay(QObject):
                     var src = map.getSource("{self.SOURCE_ID}");
                     if (src && src.updateImage) {{
                         var tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
-                        var coords = window._radar_last_coords || [[0,0],[0,0],[0,0],[0,0]];
+                        var coords = (window._stormLastCoords && window._stormLastCoords["{self.SOURCE_ID}"]) || [[0,0],[0,0],[0,0],[0,0]];
                         src.updateImage({{url: tinyPng, coordinates: coords}});
                     }}
                 }}
@@ -510,7 +586,7 @@ class RadarOverlay(QObject):
 
         # clear the Python-side scheme handler
         try:
-            scheme_handler = getattr(self._map, "scheme_handler", None)
+            scheme_handler = getattr(self._map, "scheme_handler", None) if self._use_scheme_handler else None
             if scheme_handler is not None:
                 import base64
                 tiny = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=")
@@ -520,14 +596,18 @@ class RadarOverlay(QObject):
 
         if transient:
             try:
-                self._map.run_js("if (typeof window !== 'undefined') window._stormRadarSuspend = true;")
+                self._map.run_js(
+                    "if (typeof window !== 'undefined') { "
+                    "window._stormRadarSuspend = window._stormRadarSuspend || {}; "
+                    f'window._stormRadarSuspend["{self.SOURCE_ID}"] = true; }}'
+                )
             except Exception:
                 pass
 
     def inject(self, png_bytes: bytes, bounds: list):
         """Inject a pre-rendered PNG into the map."""
         import time
-        scheme_handler = getattr(self._map, "scheme_handler", None)
+        scheme_handler = getattr(self._map, "scheme_handler", None) if self._use_scheme_handler else None
         if scheme_handler is not None:
             scheme_handler.set_radar_png(png_bytes)
             ts = int(time.monotonic() * 1000) & 0xFFFFFF  # cache-bust token
@@ -668,12 +748,14 @@ class RadarOverlay(QObject):
           try {{
               const imageUrl = "{image_url}";
               const coords   = {coords_js};
-              window._radar_last_coords = coords;
+              window._stormLastCoords = window._stormLastCoords || {{}};
+              window._stormLastCoords["{self.SOURCE_ID}"] = coords;
+              window._stormRadarSuspend = window._stormRadarSuspend || {{}};
 
-              if (window._stormRadarSuspend && !{str(restore_opacity).lower()}) {{
+              if (window._stormRadarSuspend["{self.SOURCE_ID}"] && !{str(restore_opacity).lower()}) {{
                   return;
               }}
-              window._stormRadarSuspend = false;
+              window._stormRadarSuspend["{self.SOURCE_ID}"] = false;
 
               if (typeof map !== 'undefined') {{
                   if (map.getSource("{self.SOURCE_ID}")) {{

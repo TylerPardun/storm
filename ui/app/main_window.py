@@ -174,8 +174,14 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     _render_ready = pyqtSignal(object)
     # emitted from the archive-render thread when an archive scan PNG is ready.
     _archive_render_ready = pyqtSignal(object)
+    # emitted from the archive super-res render thread when a debounced
+    # high-resolution PNG is ready (Tier 2 — see _submit_archive_superres_render).
+    _archive_superres_ready = pyqtSignal(object)
     # emitted from the NOXP render thread when a rendered sweep PNG is ready.
     _noxp_render_ready = pyqtSignal(object)
+    # emitted from the raw-lidar map-overlay render thread when a scan PNG
+    # is ready (stationary CLAMPS PPI/CSM only -- see raw_lidar_scan_to_map_scan).
+    _lidar_overlay_render_ready = pyqtSignal(object)
     # emitted when the user aborts an archive loading session.
     session_aborted = pyqtSignal()
 
@@ -385,6 +391,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_controls.set_obs_status(
             "OBS: probing" if runtime_flags.FLAGS.admin_mode else "OBS: MQTT"
         )
+        self._archive_controls.change_day_requested.connect(self._on_change_day_requested)
         self._archive_controls.show()
 
         # mqtt reader — vehicles, annotations, cones, drawings.
@@ -462,6 +469,15 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         # archive date; on-demand load of one selected file).
         self._archive_raw_lidar = None
         self._raw_lidar_dialog = None
+        self._raw_lidar_quicklook_requested_platform_id = None
+        # map-overlay state (stationary CLAMPS PPI/CSM only — see
+        # RawLidarControls' MAP button and _render_lidar_overlay below).
+        self._lidar_overlay = None
+        self._lidar_overlay_platform_id = None
+        self._lidar_overlay_rays = None
+        self._lidar_overlay_field = None
+        self._lidar_overlay_render_in_flight = False
+        self._lidar_overlay_pending = False
         if feature_flags.is_enabled("raw_lidar_quicklook"):
             from archive.fetchers.raw_lidar_quicklook_fetcher import ArchiveRawLidarQuicklookFetcher
             self._archive_raw_lidar = ArchiveRawLidarQuicklookFetcher(parent=self)
@@ -471,6 +487,16 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 lambda msg: self.status_msg_label.setText(f"Raw lidar: {msg}")
             )
             self._archive_raw_lidar.fetch(self._archive_time)
+            self._time_ctrl.time_changed.connect(self._on_time_changed_update_lidar_overlay)
+            # The quicklook dialog is a Qt.WindowType.Window parented to
+            # this MainWindow -- on macOS that combination can leave it
+            # behind the main window (not closed, just occluded) after the
+            # app loses and regains focus, which looks like the window
+            # vanished. Re-raise it whenever the app comes back to the
+            # foreground rather than relying on the user reopening it.
+            QApplication.instance().applicationStateChanged.connect(
+                self._on_app_state_changed_raise_raw_lidar
+            )
 
         # ASOS historical surface observations (bbox-draw, replays with the
         # archive clock -- the archive-mode counterpart to live mode's
@@ -533,6 +559,23 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_render_in_flight = False
         self._archive_render_ready.connect(self._on_archive_render_ready)
         self._noxp_render_ready.connect(self._on_noxp_render_ready)
+        self._lidar_overlay_render_ready.connect(self._on_lidar_overlay_render_ready)
+
+        # Tier 2: debounced archive "super-res" render (see ui/map/radar_overlay's
+        # ARCHIVE_SUPERRES_GRID_SIZE). Runs on its own single-worker pool so a
+        # slow ~4096px render can never block/delay the fast Tier-1 preview
+        # above, which stays responsive during active scrubbing.
+        from ui.app.radar_superres_cache import RadarSuperresCache
+        self._archive_superres_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="archive-radar-superres"
+        )
+        self._archive_superres_cache = RadarSuperresCache(capacity=12)
+        self._archive_superres_timer = QTimer(self)
+        self._archive_superres_timer.setSingleShot(True)
+        self._archive_superres_timer.setInterval(500)
+        self._archive_superres_timer.timeout.connect(self._on_archive_superres_timer_fired)
+        self._archive_superres_ready.connect(self._on_archive_superres_ready)
+        self._archive_superres_pending = None
 
         # wire time controller to archive fetchers.
         self._time_ctrl.time_changed.connect(self._archive_mqtt.on_time_changed)
@@ -540,8 +583,14 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._time_ctrl.time_changed.connect(self._archive_satellite.on_time_changed)
         self._time_ctrl.time_changed.connect(self._archive_sounding.on_time_changed)
 
-        # show loading dialog while initial data fetches run.
-        loading_tasks = ["Vehicle tracks", "Radar index", "Hazard data", "Satellite index"]
+        # show loading dialog while initial data fetches run. Ordered to match
+        # actual completion order, not just alphabetically/arbitrarily: Hazard
+        # and Satellite are fast independent checks, Mesonets is a slower
+        # network fetch, and Radar can only start once Mesonets has picked a
+        # station (see _try_auto_select_radar_station) -- so Radar always
+        # finishes last. Listing them in that order keeps the checkmarks
+        # cascading top-to-bottom instead of appearing out of sequence.
+        loading_tasks = ["SPC & NWS", "Satellite", "Mesonets", "Radar"]
         self._archive_loading = ArchiveLoadingDialog(
             session_label=self._archive_time.strftime("%Y-%m-%d  %H:%M UTC"),
             tasks=loading_tasks,
@@ -556,7 +605,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         # track completion of loading tasks.
         def _check_mqtt_loaded():
             if self._archive_mqtt._loaded:
-                self._archive_loading.set_task_done("Vehicle tracks")
+                self._archive_loading.set_task_done("Mesonets")
                 self._start_archive_vehicle_obs()
                 self._try_auto_select_radar_station()
             else:
@@ -564,12 +613,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         def _check_hazard_loaded():
             if self._archive_hazard._watches_loaded:
-                self._archive_loading.set_task_done("Hazard data")
+                self._archive_loading.set_task_done("SPC & NWS")
             else:
                 QTimer.singleShot(500, _check_hazard_loaded)
 
         self._archive_satellite.error.connect(
-            lambda _: self._archive_loading.set_task_error("Satellite index")
+            lambda _: self._archive_loading.set_task_error("Satellite")
             if self._archive_loading.isVisible() else None
         )
         self._archive_satellite.error.connect(self._on_archive_satellite_error)
@@ -578,7 +627,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             if not self._archive_loading.isVisible():
                 return
             if "conus" in self._archive_satellite._indexed_modes:
-                self._archive_loading.set_task_done("Satellite index")
+                self._archive_loading.set_task_done("Satellite")
             else:
                 QTimer.singleShot(1000, _check_satellite_indexed)
 
@@ -599,6 +648,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.hazard_controls.spc_watches_toggled.connect(self._on_archive_watches_toggled)
         self.hazard_controls.spc_mds_toggled.connect(self._on_archive_mds_toggled)
         self.hazard_controls.nws_warnings_toggled.connect(self._on_archive_nws_toggled)
+        # CWA boundaries are a static local shapefile (see _on_cwa_toggled) --
+        # nothing archive/live-specific about them, but this connection only
+        # ever got wired in the live-mode startup path (_init_hazards), so
+        # the CWA toggle silently did nothing in archive mode.
+        self.hazard_controls.cwa_toggled.connect(self._on_cwa_toggled)
         self.hazard_controls.fetch_requested.connect(self._archive_hazard.refresh_now)
         self.map_widget.feature_clicked.connect(self._on_spc_feature_clicked)
 
@@ -694,11 +748,16 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._layout_overlays()
 
     def _try_auto_select_radar_station(self) -> None:
-        """Pick the nearest NEXRAD station from vehicle positions, or fall back
-        to the home location when no MQTT data is available."""
+        """Pick the nearest NEXRAD station to where the deployment actually
+        was at the requested archive start time, or fall back to the home
+        location when no MQTT data is available. Deliberately uses the
+        position nearest self._archive_time rather than the day's first GPS
+        fix -- a deployment can stage from a base far from the actual storm
+        intercept, so the day's first position is a poor proxy for where
+        the probes ended up."""
         if not hasattr(self, "_archive_mqtt"):
             return
-        positions = self._archive_mqtt.first_vehicle_positions()
+        positions = self._archive_mqtt.vehicle_positions_near(self._archive_time)
         if positions:
             _, lat, lon = positions[0]
             site = self._nearest_nexrad(lat, lon, archive=True)
@@ -748,6 +807,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_render_generation += 1
         self._archive_pending_render_scan = None
         self._archive_render_in_flight = False
+        self._archive_superres_timer.stop()
+        self._archive_superres_pending = None
 
         if self._archive_radar is not None:
             for sig in (
@@ -770,6 +831,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             parent=self,
         )
         self._archive_radar.scan_ready.connect(self._on_archive_radar_scan)
+        if hasattr(self, "_archive_controls"):
+            self._archive_radar.index_loaded.connect(self._archive_controls.set_available_scan_times)
         self._archive_radar.loading_changed.connect(
             lambda loading: (
                 self.status_msg_label.setText(f"Radar: loading {station}…" if loading else ""),
@@ -786,16 +849,16 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 lambda _: loading.set_status("Fetching first radar scan…")
             )
             self._archive_radar.scan_ready.connect(
-                lambda _: loading.set_task_done("Radar index")
+                lambda _: loading.set_task_done("Radar")
             )
             self._archive_radar.error.connect(
-                lambda _: loading.set_task_error("Radar index")
+                lambda _: loading.set_task_error("Radar")
             )
             _radar_timeout = QTimer(self)
             _radar_timeout.setSingleShot(True)
             _radar_timeout.setInterval(45_000)
             _radar_timeout.timeout.connect(
-                lambda: loading.set_task_done("Radar index")
+                lambda: loading.set_task_done("Radar")
                 if loading.isVisible() else None
             )
             _radar_timeout.start()
@@ -878,8 +941,70 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                     self._archive_controls.set_radar_status(
                         f"Radar: {scan.pyart_field} {scan.tilt_deg:.1f}deg {scan.scan_time.strftime('%H:%MZ')}"
                     )
+                # Tier 2: (re)start the debounced super-res upgrade for this frame.
+                # Any earlier pending fire is implicitly superseded — QTimer.start()
+                # on a running single-shot timer restarts its countdown.
+                self._archive_superres_pending = (
+                    self._archive_render_generation, self._archive_radar.station, scan,
+                )
+                self._archive_superres_timer.start()
         if self._archive_pending_render_scan is not None:
             self._submit_pending_archive_render()
+
+    def _on_archive_superres_timer_fired(self) -> None:
+        """Tier 2: the archive clock has been settled for the debounce window —
+        serve the cached super-res PNG if we have one, else render one in the
+        background. Never touches the Tier-1 pipeline above."""
+        pending = getattr(self, "_archive_superres_pending", None)
+        if pending is None:
+            return
+        gen, station, scan = pending
+        if gen != self._archive_render_generation or station != self._archive_radar.station:
+            return  # station switched since this frame settled — stale
+
+        from ui.map.radar_overlay import ARCHIVE_SUPERRES_GRID_SIZE, ARCHIVE_SUPERRES_CROP_RADIUS_M
+        key = self._archive_superres_cache.make_key(
+            station, scan.pyart_field, scan.tilt_deg, scan.scan_time
+        )
+        cached = self._archive_superres_cache.get(key)
+        if cached is not None:
+            png, bounds = cached
+            self._radar_overlay.inject(png, bounds)
+            return
+
+        self._archive_superres_executor.submit(
+            self._bg_render_archive_superres, gen, station, scan, key,
+            ARCHIVE_SUPERRES_GRID_SIZE, ARCHIVE_SUPERRES_CROP_RADIUS_M,
+        )
+
+    def _bg_render_archive_superres(
+        self, gen: int, station: str, scan, key: tuple, grid_size: int, crop_radius_m: float,
+    ) -> None:
+        """Runs in the archive-superres thread pool — NOT on the main thread."""
+        from ui.map.radar_overlay import render_scan_to_png
+        try:
+            png, bounds, _ = render_scan_to_png(scan, grid_size, crop_radius_m=crop_radius_m)
+        except Exception as exc:
+            log.error("Archive radar super-res render failed: %s", exc)
+            return
+        self._archive_superres_ready.emit({
+            "gen": gen, "station": station, "scan": scan, "key": key,
+            "png": png, "bounds": bounds,
+        })
+
+    def _on_archive_superres_ready(self, result: dict) -> None:
+        """Runs on the main thread — caches and injects the super-res PNG,
+        unless the archive clock/station has moved on since it was submitted."""
+        if result["gen"] != self._archive_render_generation:
+            return  # station changed mid-render
+        if result["station"] != self._archive_radar.station:
+            return
+        pending = getattr(self, "_archive_superres_pending", None)
+        if pending is None or pending[2] is not result["scan"]:
+            return  # archive clock moved to a different frame since this was submitted
+
+        self._archive_superres_cache.put(result["key"], result["png"], result["bounds"])
+        self._radar_overlay.inject(result["png"], result["bounds"])
 
     def _on_archive_satellite_frame(self, frame) -> None:
         """Update the archive satellite frame; only show if the user has toggled it on."""
@@ -967,9 +1092,16 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._layout_overlays()
 
     def _on_archive_loading_aborted(self) -> None:
-        """User clicked Abort on the loading dialog — quit the application."""
-        self.session_aborted.emit()
-        QApplication.quit()
+        """User clicked Abort on the loading dialog — return to the launch
+        dialog (via closeEvent's session-exit path) instead of quitting."""
+        self._change_day_requested = True
+        self.close()
+
+    def _on_change_day_requested(self) -> None:
+        """User confirmed the DAY button in ArchiveControls — same clean
+        exit path as the loading-dialog Abort, just triggered mid-session."""
+        self._change_day_requested = True
+        self.close()
 
     def _on_archive_satellite_error(self, msg: str) -> None:
         if hasattr(self, "_archive_controls"):
@@ -1204,7 +1336,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         tb.setContentsMargins(8, 4, 8, 4)
         tb.setSpacing(4)
 
-        self.btn_radar = self._toolbar_toggle("RADAR", "Show/hide radar controls", tb)
+        self.btn_radar = self._toolbar_toggle("RADAR", "Radar controls", tb)
         # radar controls drop down below the toolbar as a separate floating pill
         self.radar_controls = RadarControls(self._map_container)
         self.radar_controls.setObjectName("floatingToolbar")
@@ -1217,10 +1349,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         self._add_separator(tb)
 
-        self.btn_vehicles = self._toolbar_toggle("VEHICLES", "Toggle vehicle panel", tb)
+        self.btn_vehicles = self._toolbar_toggle("VEHICLES", "Vehicle panel", tb)
 
         self.btn_prev_locs = self._toolbar_toggle(
-            "PREV LOCS", "Show previous truck deployment locations", tb
+            "PREV LOCS", "Previous deployments", tb
         )
         self.deploy_locs_controls = DeployLocsControls(self._map_container)
         self.deploy_locs_controls.setObjectName("floatingToolbar")
@@ -1231,7 +1363,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._add_separator(tb)
 
         self.btn_hazards = self._toolbar_toggle(
-            "HAZARDS", "Show/hide SPC and NWS hazard overlays", tb
+            "HAZARDS", "SPC and NWS hazards", tb
         )
         self.hazard_controls = HazardControls(self._map_container)
         self.hazard_controls.setObjectName("floatingToolbar")
@@ -1247,7 +1379,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._add_separator(tb)
 
         self.btn_satellite = self._toolbar_toggle(
-            "SATELLITE", "Show/hide GOES satellite imagery overlay", tb
+            "SATELLITE", "GOES satellite imagery", tb
         )
         self.satellite_controls = SatelliteControls(self._map_container)
         self.satellite_controls.setObjectName("floatingToolbar")
@@ -1260,7 +1392,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         if feature_flags.is_enabled("mesoanalysis"):
             self.btn_mesoanalysis = self._toolbar_toggle(
-                "MESO", "Show/hide Satsquatch mesoanalysis contours", tb
+                "MESO", "Satsquatch mesoanalysis", tb
             )
             self.mesoanalysis_controls = MesoanalysisControls(self._map_container)
             self.mesoanalysis_controls.setObjectName("floatingToolbar")
@@ -1270,7 +1402,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         if feature_flags.is_enabled("sfcoa"):
             self.btn_sfcoa = self._toolbar_toggle(
-                "SFCOA", "Show/hide SFCOA mesoanalysis contours", tb
+                "SFCOA", "SFCOA mesoanalysis", tb
             )
             self.sfcoa_controls = SfcoaControls(self._map_container)
             self.sfcoa_controls.setObjectName("floatingToolbar")
@@ -1290,7 +1422,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if self._archive and feature_flags.is_enabled("noxp_radar"):
             from archive.catalog import ALL_PLATFORMS as _ALL_PLATFORMS
             self.btn_noxp = self._toolbar_toggle(
-                "NOXP", "Show/hide NOXP mobile radar controls (archive)", tb
+                "NOXP", "NOXP radar controls", tb
             )
             self.noxp_controls = NoxpControls(self._map_container)
             self.noxp_controls.setObjectName("floatingToolbar")
@@ -1305,7 +1437,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         if self._archive and feature_flags.is_enabled("raw_lidar_quicklook"):
             self.btn_raw_lidar = self._toolbar_toggle(
-                "RAW LIDAR", "Show/hide CLAMPS raw lidar quicklook controls (archive)", tb
+                "RAW LIDAR", "Raw lidar quicklooks", tb
             )
             self.raw_lidar_controls = RawLidarControls(self._map_container)
             self.raw_lidar_controls.setObjectName("floatingToolbar")
@@ -1314,24 +1446,25 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.btn_raw_lidar.toggled.connect(self.raw_lidar_controls.toggle_drawer)
             self.btn_raw_lidar.toggled.connect(self._start_layout_pulse)
             self.raw_lidar_controls.quicklook_requested.connect(self._on_raw_lidar_quicklook_requested)
+            self.raw_lidar_controls.map_overlay_requested.connect(self._on_raw_lidar_map_overlay_requested)
 
         if self._archive and feature_flags.is_enabled("archive_asos"):
             # No drawer -- nothing to pick from a list, just "draw a box,
             # see markers replay," so a standalone toggle button is enough.
             self.btn_archive_asos = self._toolbar_toggle(
-                "ASOS", "Draw a bounding box to show historical ASOS observations (archive)", tb
+                "ASOS", "Draw a box for ASOS observations", tb
             )
             self.btn_archive_asos.toggled.connect(self._on_archive_asos_toggled)
 
         if self._archive and feature_flags.is_enabled("damage_paths"):
             # No drawer -- like ASOS, nothing to pick from a list.
             self.btn_damage_paths = self._toolbar_toggle(
-                "DAMAGE", "Draw a bounding box to show NWS damage-survey paths (archive)", tb
+                "DAMAGE", "Draw a box for damage paths", tb
             )
             self.btn_damage_paths.toggled.connect(self._on_damage_paths_toggled)
 
         self.btn_surface = self._toolbar_toggle(
-            "SURFACE", "Show/hide surface observation controls", tb
+            "SURFACE", "Surface observations", tb
         )
         self.surface_controls = SurfaceControls(self._map_container)
         self.surface_controls.setObjectName("floatingToolbar")
@@ -1342,7 +1475,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._add_separator(tb)
 
         self.btn_sounding = self._toolbar_toggle(
-            "SOUNDING", "Click map for HRRR point sounding or observed radiosonde data", tb
+            "SOUNDING", "HRRR and observed soundings", tb
         )
         self.sounding_controls = SoundingControls(self._map_container)
         self.sounding_controls.setObjectName("floatingToolbar")
@@ -1353,7 +1486,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._add_separator(tb)
 
         self.btn_annotate = self._toolbar_toggle(
-            "ANNOTATE", "Place road annotations and storm motion cone", tb
+            "ANNOTATE", "Annotations and storm motion", tb
         )
         # annotation tools drop down below the toolbar as a separate floating pill
         self.annotation_tools = AnnotationTools(self._map_container)
@@ -1536,7 +1669,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             "font-size: 10px; font-weight: 700; letter-spacing: 1px; "
             "color: #00CFFF; background: transparent; border: none; padding: 0;"
         )
-        self.update_indicator.setToolTip("Click to apply update and restart STORM")
+        self.update_indicator.setToolTip("Update and restart STORM")
         self.update_indicator.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_indicator.setVisible(False)
         self.update_indicator.clicked.connect(self._on_update_indicator_clicked)
@@ -1599,23 +1732,33 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         row2.setContentsMargins(0, 0, 0, 0)
         row2.setSpacing(8)
 
-        # gps fix status — vehicle mode only (hidden in monitor/viewer)
+        # gps fix status — vehicle mode only (hidden in monitor/viewer/archive:
+        # archive playback has no live GPS to report).
+        _show_gps = not (self._monitor or self._viewer or self._archive)
         self.gps_indicator = QLabel("● NO GPS FIX")
         self.gps_indicator.setStyleSheet(
             "font-size: 10px; font-weight: 600; letter-spacing: 1px; color: #E53935;"
         )
-        self.gps_indicator.setVisible(not (self._monitor or self._viewer))
+        self.gps_indicator.setVisible(_show_gps)
         row2.addWidget(self.gps_indicator)
 
-        if not (self._monitor or self._viewer):
-            row2.addWidget(self._status_divider())
+        _gps_divider = self._status_divider()
+        _gps_divider.setVisible(_show_gps)
+        row2.addWidget(_gps_divider)
 
+        # AWS connection status — relevant in monitor/viewer (still a live
+        # MQTT connection) but guaranteed offline/irrelevant in archive mode.
+        _show_conn = not self._archive
         self.conn_indicator = QLabel("● AWS OFFLINE")
         self.conn_indicator.setStyleSheet(
             "font-size: 10px; font-weight: 600; letter-spacing: 1px; color: #E53935;"
         )
+        self.conn_indicator.setVisible(_show_conn)
         row2.addWidget(self.conn_indicator)
-        row2.addWidget(self._status_divider())
+
+        _conn_divider = self._status_divider()
+        _conn_divider.setVisible(_show_conn)
+        row2.addWidget(_conn_divider)
 
         self.net_indicator = QLabel("")
         self.net_indicator.setStyleSheet(
@@ -1663,6 +1806,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         save_layer_order(self._layer_pill.current_order())
 
         # stop all background workers before closing so threads don't outlive
+        try:
+            QApplication.instance().applicationStateChanged.disconnect(
+                self._on_app_state_changed_raise_raw_lidar
+            )
+        except (TypeError, RuntimeError):
+            pass  # never connected (feature disabled) or already gone
         self._clock_timer.stop()
         if hasattr(self, "_update_check_timer"):
             self._update_check_timer.stop()
@@ -1682,10 +1831,35 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._obs_watcher.stop()
         if hasattr(self, "_mqtt_client"):
             self._mqtt_client.disconnect()
+        if hasattr(self, "map_widget") and self.map_widget is not None:
+            # must run before a replacement MainWindow/MapWidget is built in
+            # this process (session loop) -- otherwise the new window's
+            # storm:// registration silently no-ops and its page goes blank.
+            self.map_widget.shutdown()
+        if hasattr(self, "_archive_radar") and self._archive_radar is not None:
+            self._archive_radar.shutdown()
+        if hasattr(self, "_archive_superres_timer"):
+            self._archive_superres_timer.stop()
+        # thread pools outlive their MainWindow unless explicitly shut down
+        # (ThreadPoolExecutor worker threads are non-daemon) -- without this,
+        # every "change day" round-trip through main.py's session loop would
+        # leak one more set of idle worker threads forever.
+        for _exec_name in (
+            "_archive_render_executor", "_archive_superres_executor",
+            "_decode_executor", "_render_executor",
+        ):
+            _executor = getattr(self, _exec_name, None)
+            if _executor is not None:
+                _executor.shutdown(wait=False, cancel_futures=True)
         self._cleanup_debug_panel()
 
         super().closeEvent(event)
-        QApplication.quit()
+        if getattr(self, "_change_day_requested", False):
+            # main.py's session loop is listening for this -- it'll show the
+            # launch dialog again instead of tearing down the process.
+            self.session_aborted.emit()
+        else:
+            QApplication.quit()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2862,7 +3036,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         return [west, south, east, north]
 
     def _on_mesoanalysis_error(self, msg: str):
-        self.mesoanalysis_controls.set_status(str(msg))
+        self.mesoanalysis_controls.set_status("Could not load mesoanalysis. See status bar.")
         self.status_msg_label.setText(str(msg))
 
     def _on_sfcoa_times_ready(self, times):
@@ -3007,7 +3181,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _on_sfcoa_error(self, msg: str):
         text = f"SFCOA: {msg}"
-        self.sfcoa_controls.set_status(text)
+        self.sfcoa_controls.set_status("Could not load SFCOA. See status bar.")
         self.status_msg_label.setText(text)
 
     def _on_satellite_mode_changed(self, mode: str):
@@ -4006,19 +4180,106 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.raw_lidar_controls.set_assets_for_all_sources(assets_by_source)
 
     def _on_raw_lidar_quicklook_requested(self, platform_id: str, asset) -> None:
-        self.status_msg_label.setText(f"Raw lidar: loading {asset.filename}…")
+        self._raw_lidar_quicklook_requested_platform_id = platform_id
+        self.status_msg_label.setText(f"Raw lidar: loading {asset.source.product.upper()}…")
         if not self._archive_raw_lidar.load(platform_id, asset):
             self.status_msg_label.setText("Raw lidar: load already in progress")
 
     def _on_archive_raw_lidar_rays_ready(self, platform_id: str, rays) -> None:
         self.status_msg_label.setText(f"Raw lidar: {platform_id} loaded")
+
+        if platform_id == self._lidar_overlay_platform_id:
+            self._lidar_overlay_rays = rays
+            self._render_lidar_overlay()
+
         if self._raw_lidar_dialog is not None and self._raw_lidar_dialog.platform_id == platform_id:
             self._raw_lidar_dialog.set_rays(rays)
             self._raw_lidar_dialog.raise_()
             self._raw_lidar_dialog.activateWindow()
+        elif self._raw_lidar_quicklook_requested_platform_id == platform_id:
+            self._raw_lidar_dialog = RawLidarQuicklookDialog(platform_id, parent=self, preloaded_rays=rays)
+            self._raw_lidar_dialog.show()
+
+    # -- CLAMPS raw-lidar map overlay (stationary PPI/CSM only) ----------
+
+    def _on_raw_lidar_map_overlay_requested(self, platform_id: str, asset, enabled: bool) -> None:
+        if not enabled:
+            self._lidar_overlay_platform_id = None
+            self._lidar_overlay_rays = None
+            if self._lidar_overlay is not None:
+                self._lidar_overlay.clear()
             return
-        self._raw_lidar_dialog = RawLidarQuicklookDialog(platform_id, parent=self, preloaded_rays=rays)
-        self._raw_lidar_dialog.show()
+        self._lidar_overlay_platform_id = platform_id
+        self._lidar_overlay_field = None   # re-pick a default for the new source
+        self.status_msg_label.setText(f"Raw lidar: loading {asset.source.product.upper()} for map overlay…")
+        if not self._archive_raw_lidar.load(platform_id, asset):
+            self.status_msg_label.setText("Raw lidar: load already in progress")
+
+    def _on_time_changed_update_lidar_overlay(self, _t) -> None:
+        if self._lidar_overlay_platform_id is not None and self._lidar_overlay_rays is not None:
+            self._render_lidar_overlay()
+
+    def _render_lidar_overlay(self) -> None:
+        rays = self._lidar_overlay_rays
+        if rays is None or self._lidar_overlay_platform_id is None:
+            return
+        if self._lidar_overlay_render_in_flight:
+            self._lidar_overlay_pending = True
+            return
+        field = self._lidar_overlay_field
+        if field is None or field not in rays.fields:
+            field = "velocity" if "velocity" in rays.fields else (next(iter(rays.fields), None))
+        if field is None:
+            return
+        self._lidar_overlay_field = field
+        self._lidar_overlay_render_in_flight = True
+        threading.Thread(
+            target=self._bg_render_lidar_overlay,
+            args=(rays, self._time_ctrl.current_time, field),
+            daemon=True,
+        ).start()
+
+    def _bg_render_lidar_overlay(self, rays, when, field: str) -> None:
+        """Runs in a background thread — NOT on the main thread."""
+        from archive.fetchers.raw_lidar_archive_fetcher import raw_lidar_scan_to_map_scan
+        from ui.map.radar_overlay import RENDER_GRID_SIZE
+        try:
+            scan = raw_lidar_scan_to_map_scan(rays, when, field)
+            png, bounds, _ = _render_scan_to_png(scan, RENDER_GRID_SIZE)
+        except ValueError as exc:
+            self._lidar_overlay_render_ready.emit({"error": str(exc)})
+            return
+        except Exception as exc:  # noqa: BLE001
+            log.error("Raw lidar overlay render failed: %s", exc)
+            self._lidar_overlay_render_ready.emit({"error": str(exc)})
+            return
+        self._lidar_overlay_render_ready.emit({"png": png, "bounds": bounds})
+
+    def _on_lidar_overlay_render_ready(self, result: dict) -> None:
+        self._lidar_overlay_render_in_flight = False
+        if self._lidar_overlay_platform_id is None:
+            pass  # toggled off while this render was in flight -- drop it
+        elif "error" in result:
+            self.status_msg_label.setText(f"Raw lidar map: {result['error']}")
+            if self._lidar_overlay is not None:
+                self._lidar_overlay.hide()
+        else:
+            if self._lidar_overlay is None:
+                self._lidar_overlay = RadarOverlay(
+                    self.map_widget, layer_id="lidar-overlay", source_id="lidar-image",
+                    use_scheme_handler=False,
+                )
+            self._lidar_overlay.inject(result["png"], result["bounds"])
+        if self._lidar_overlay_pending:
+            self._lidar_overlay_pending = False
+            self._render_lidar_overlay()
+
+    def _on_app_state_changed_raise_raw_lidar(self, state) -> None:
+        if state != Qt.ApplicationState.ApplicationActive:
+            return
+        dlg = self._raw_lidar_dialog
+        if dlg is not None and dlg.isVisible():
+            dlg.raise_()
 
     # -- ASOS historical surface observations (archive) -----------------
 
@@ -5486,7 +5747,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.btn_screenshot = QToolButton(self._map_container)
         self.btn_screenshot.setIcon(_make_camera_icon(18))
         self.btn_screenshot.setIconSize(QSize(18, 18))
-        self.btn_screenshot.setToolTip("Save a screenshot of the map")
+        self.btn_screenshot.setToolTip("Save map screenshot")
         self.btn_screenshot.setFixedSize(32, 32)
         self.btn_screenshot.setStyleSheet("""
             QToolButton {
@@ -5508,7 +5769,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _init_scan_button(self) -> None:
         self.btn_scan = QToolButton(self._map_container)
         self.btn_scan.setText("SCAN")
-        self.btn_scan.setToolTip("Start or stop current data collection footprint")
+        self.btn_scan.setToolTip("Start or stop sampling footprint")
         self.btn_scan.setFixedSize(58, 32)
         self.btn_scan.setStyleSheet("""
             QToolButton {
@@ -5628,7 +5889,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 desc += f" {scan.range_m / 1000:.1f} km"
             self.btn_scan.setToolTip(f"Current sampling: {desc}")
         else:
-            self.btn_scan.setToolTip("Start or stop current data collection footprint")
+            self.btn_scan.setToolTip("Start or stop sampling footprint")
         self.btn_scan.style().unpolish(self.btn_scan)
         self.btn_scan.style().polish(self.btn_scan)
         self.btn_scan.adjustSize()

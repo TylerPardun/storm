@@ -63,9 +63,9 @@ class SatelliteControls(QWidget):
         self._btn_meso2 = self._btn("MESO-2")
 
         self._btn_meso1.setEnabled(False)
-        self._btn_meso1.setToolTip("Mesoscale sector 1 — not yet available")
+        self._btn_meso1.setToolTip("Mesoscale sector 1 · unavailable")
         self._btn_meso2.setEnabled(False)
-        self._btn_meso2.setToolTip("Mesoscale sector 2 — not yet available")
+        self._btn_meso2.setToolTip("Mesoscale sector 2 · unavailable")
 
         self._btn_meso1.installEventFilter(self)
         self._btn_meso2.installEventFilter(self)
@@ -181,7 +181,7 @@ class SatelliteControls(QWidget):
         if available:
             btn.setToolTip(f"Mesoscale sector {idx}")
         else:
-            btn.setToolTip(f"Mesoscale sector {idx} — not currently available")
+            btn.setToolTip(f"Mesoscale sector {idx} · unavailable")
             if btn.isChecked():
                 self._set_mode("conus")
                 self.mode_changed.emit("conus")

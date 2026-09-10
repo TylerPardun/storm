@@ -214,16 +214,25 @@ class ArchiveMQTTReader(QObject):
         self._emit_drawings(archive_time)
         self._emit_scan_sectors(archive_time)
 
-    def first_vehicle_positions(self) -> list[tuple[str, float, float]]:
-        """Return (vehicle_id, lat, lon) tuples from the first vehicle timestamp."""
+    def vehicle_positions_near(self, target_time: datetime) -> list[tuple[str, float, float]]:
+        """Return (vehicle_id, lat, lon) tuples from the vehicle timestamp
+        closest to target_time.
+
+        Deliberately not the day's first GPS fix -- a deployment can stage
+        from a base far from the actual storm intercept and drive for hours
+        before it matters, so "nearest radar to the day's first position"
+        can point at entirely the wrong station. target_time should be the
+        archive session's requested start time, which is a much better
+        proxy for where the deployment actually was.
+        """
         msgs = self._data.get("vehicles", [])
         if not msgs:
             return []
-        first_time = msgs[0][0]
+        nearest_time = min((ts for ts, _ in msgs), key=lambda ts: abs(ts - target_time))
         result = []
         for ts, obj in msgs:
-            if ts > first_time:
-                break
+            if ts != nearest_time:
+                continue
             try:
                 obs = _observation_from_payload(obj)
                 result.append((obs.vehicle_id, obs.lat, obs.lon))

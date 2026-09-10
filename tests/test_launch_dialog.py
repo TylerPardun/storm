@@ -2,7 +2,8 @@
 from datetime import date, datetime, timezone
 
 import pytest
-from PyQt6.QtCore import QDate, QDateTime, QTime, Qt
+from PyQt6.QtCore import QDate, QDateTime, QRect, QTime, Qt
+from PyQt6.QtGui import QImage, QPainter
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QSpinBox, QToolButton
 
@@ -354,13 +355,15 @@ def test_campaign_year_and_platform_filters_update_without_requests():
     assert not dlg._archive_dt_edit.calendarWidget()._known_dates
 
 
-def test_coverage_counts_instruments_and_keeps_errors_distinct_from_absence():
+def test_date_presence_keeps_errors_distinct_from_absence(caplog):
     _, dlg = _dialog()
     dlg._archive_dt_edit.setDate(QDate(2024, 4, 27))
     _apply(dlg, _snapshot([date(2024, 4, 27)], failed=True))
-    assert "1 instruments with listed data" in dlg._browse_coverage_lbl.text()
+    assert "Data listed" in dlg._browse_coverage_lbl.text()
     assert "incomplete" in dlg._browse_coverage_lbl.text()
-    assert "server timed out" in dlg._browse_coverage_lbl.toolTip()
+    assert "unchecked or partial" in dlg._browse_coverage_lbl.toolTip()
+    assert "server timed out" not in dlg._browse_coverage_lbl.toolTip()
+    assert "server timed out" in caplog.text
     assert dlg._browse_sources_list.count() == 1
     _apply(dlg, _snapshot(failed=True))
     assert "incomplete" in dlg._browse_coverage_lbl.text()
@@ -471,10 +474,88 @@ def test_calendar_shades_known_dates_and_clears_shading_when_filtered_out():
     dlg._cal_btn.click()
     target = QDate(2024, 4, 27)
     for calendar in (dlg._archive_dt_edit.calendarWidget(), dlg._calendar_popup):
-        assert calendar.dateTextFormat(target).background().color().name() == '#123c50'
-        assert calendar.dateTextFormat(target).foreground().color().name() == '#9be8ff'
+        calendar.setSelectedDate(target.addDays(-1))
+        cell = _render_calendar_cell(calendar, target)
+        assert cell.pixelColor(8, 7).name() == '#123c50'
+        assert cell.pixelColor(0, 0).name() == '#0d0d1a'
+        # Bright text must be painted above the availability fill.
+        assert any(
+            cell.pixelColor(x, y).red() > 220
+            for x in range(10, 34) for y in range(8, 26)
+        )
         calendar.setSelectedDate(target)
         assert calendar.selectedDate() == target
+        assert _render_calendar_cell(calendar, target).pixelColor(8, 7).name() == '#00cfff'
+        calendar.setSelectedDate(target.addDays(-1))
     dlg._browse_year_combo.setCurrentIndex(dlg._browse_year_combo.findData(2023))
     for calendar in (dlg._archive_dt_edit.calendarWidget(), dlg._calendar_popup):
-        assert calendar.dateTextFormat(target).background().style() == Qt.BrushStyle.NoBrush
+        assert _render_calendar_cell(calendar, target).pixelColor(8, 7).name() == '#0d0d1a'
+
+
+def _render_calendar_cell(calendar, day):
+    image = QImage(44, 34, QImage.Format.Format_ARGB32)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    calendar.paintCell(painter, QRect(0, 0, 44, 34), day)
+    painter.end()
+    return image
+
+
+def test_surprise_me_picks_a_known_date_and_keeps_the_current_time():
+    _, dlg = _dialog()
+    _apply(dlg, _snapshot([date(2024, 4, 27), date(2024, 5, 3)]))
+    dlg._archive_dt_edit.setTime(QTime(20, 0, 0))
+
+    dlg._on_surprise_me_clicked()
+
+    picked = dlg._archive_dt_edit.date().toPyDate()
+    assert picked in (date(2024, 4, 27), date(2024, 5, 3))
+    assert dlg._archive_dt_edit.time() == QTime(20, 0, 0)
+
+
+def test_surprise_me_draws_from_every_platform_not_just_the_browse_filter():
+    """Picking should use the full snapshot, not whatever narrow
+    platform/year/campaign filter the browse section happens to have set."""
+    _, dlg = _dialog()
+    _apply(dlg, _snapshot([date(2024, 4, 27)]))
+    # narrow the browse filter to a year with no data at all.
+    dlg._browse_year_combo.setCurrentIndex(dlg._browse_year_combo.findData(1999))
+    assert dlg._filtered_dates() == frozenset()
+
+    dlg._on_surprise_me_clicked()
+
+    assert dlg._archive_dt_edit.date().toPyDate() == date(2024, 4, 27)
+
+
+def test_surprise_me_with_no_snapshot_yet_shows_a_message_and_does_not_crash(monkeypatch):
+    shown = []
+    monkeypatch.setattr(
+        "ui.launch.dialog.QMessageBox.information",
+        lambda *args, **kwargs: shown.append(args),
+    )
+    _, dlg = _dialog()
+    dlg._select_mode("archive")
+    assert dlg._availability_snapshot is None
+
+    dlg._on_surprise_me_clicked()
+
+    assert len(shown) == 1
+
+
+def test_circular_scan_progress_mirrors_the_browse_coverage_progress():
+    """The wheel next to the date picker should track the same
+    checked/total as the browse drawer's bar, without requiring that
+    drawer to be expanded to see it."""
+    _, dlg = _dialog()
+    _apply(dlg, _snapshot([date(2024, 4, 27)], partial=True))
+    assert dlg._archive_scan_progress.isVisibleTo(dlg)
+    assert dlg._archive_scan_progress._maximum == dlg._browse_coverage_progress.maximum()
+    assert dlg._archive_scan_progress._value == dlg._browse_coverage_progress.value()
+
+    _apply(dlg, _snapshot())
+    assert not dlg._archive_scan_progress.isVisibleTo(dlg)
+
+
+def test_calendar_has_no_static_tooltip():
+    _, dlg = _dialog()
+    assert dlg._archive_dt_edit.calendarWidget().toolTip() == ""

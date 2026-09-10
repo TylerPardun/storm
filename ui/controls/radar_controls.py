@@ -153,7 +153,7 @@ class RadarControls(QWidget):
         self._stations_button.setFixedHeight(22)
         self._stations_button.setMinimumWidth(140)
         self._stations_button.setObjectName("radarStationsButton")
-        self._stations_button.setToolTip("Show radar station picker on the map")
+        self._stations_button.setToolTip("Choose radar station")
         self._stations_button.clicked.connect(self.stations_requested.emit)
         r1.addWidget(self._stations_button)
 
@@ -180,7 +180,7 @@ class RadarControls(QWidget):
         self._chk_show_data = QCheckBox("show data")
         self._chk_show_data.setChecked(False)
         self._chk_show_data.setFixedHeight(22)
-        self._chk_show_data.setToolTip("enable or disable radar data fetch and display")
+        self._chk_show_data.setToolTip("Load and show radar")
         self._chk_show_data.toggled.connect(self._on_data_enabled_toggled)
         r1.addWidget(self._chk_show_data)
 
@@ -189,7 +189,7 @@ class RadarControls(QWidget):
         self._btn_vad.setFixedHeight(22)
         self._btn_vad.setFixedWidth(48)
         self._btn_vad.setObjectName("radarVadButton")
-        self._btn_vad.setToolTip("View VAD wind profile hodograph")
+        self._btn_vad.setToolTip("VAD wind profile")
         self._btn_vad.clicked.connect(self.vad_requested.emit)
         r1.addWidget(self._btn_vad)
 
@@ -215,7 +215,7 @@ class RadarControls(QWidget):
         self._btn_back.setText("⏪")
         self._btn_back.setFixedSize(32, 26)
         self._btn_back.setEnabled(False)
-        self._btn_back.setToolTip("Step back one frame")
+        self._btn_back.setToolTip("Previous frame")
         self._btn_back.clicked.connect(self._on_step_back)
         r2.addWidget(self._btn_back)
 
@@ -232,7 +232,7 @@ class RadarControls(QWidget):
         self._btn_fwd.setText("⏩")
         self._btn_fwd.setFixedSize(32, 26)
         self._btn_fwd.setEnabled(False)
-        self._btn_fwd.setToolTip("Step forward one frame")
+        self._btn_fwd.setToolTip("Next frame")
         self._btn_fwd.clicked.connect(self._on_step_forward)
         r2.addWidget(self._btn_fwd)
 
@@ -452,7 +452,7 @@ class RadarControls(QWidget):
             avail = bool(availability.get(code, True))
             item.setEnabled(avail)
             if not avail:
-                item.setToolTip(f"No {code} data available for {self._site}")
+                item.setToolTip(f"No {code} data at {self._site}")
             else:
                 item.setToolTip("")
 

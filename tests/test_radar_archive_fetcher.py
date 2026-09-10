@@ -1,0 +1,168 @@
+import gzip
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import archive.fetchers.radar_archive_fetcher as raf
+from archive.fetchers.radar_archive_fetcher import ArchiveRadarFetcher
+
+_SCAN_TIME = datetime(2013, 5, 31, 23, 9, 57, tzinfo=timezone.utc)
+_PREFIX = "KTLX20130531_230957"
+
+
+def _fetcher():
+    return ArchiveRadarFetcher("KTLX", datetime(2013, 5, 31, tzinfo=timezone.utc))
+
+
+def test_download_scan_matches_plain_v06_suffix(monkeypatch):
+    fetcher = _fetcher()
+
+    def fake_get(url, timeout=60, stream=True):
+        if url.endswith("_V06"):
+            return SimpleNamespace(status_code=200, content=b"RAWDATA")
+        return SimpleNamespace(status_code=404, content=b"")
+
+    monkeypatch.setattr(raf.requests, "get", fake_get)
+    assert fetcher._download_scan(_SCAN_TIME) == b"RAWDATA"
+
+
+def test_download_scan_tries_expected_suffixes_in_order(monkeypatch):
+    # No suffix matches, so every candidate should be attempted, in order,
+    # trying the uncompressed keys before the gzip-suffixed fallbacks.
+    fetcher = _fetcher()
+    requested = []
+
+    def fake_get(url, timeout=60, stream=True):
+        requested.append(url.split("/")[-1])
+        return SimpleNamespace(status_code=404, content=b"")
+
+    monkeypatch.setattr(raf.requests, "get", fake_get)
+    assert fetcher._download_scan(_SCAN_TIME) is None
+    assert requested == [
+        f"{_PREFIX}_V06", f"{_PREFIX}_V03", _PREFIX,
+        f"{_PREFIX}_V06.gz", f"{_PREFIX}_V03.gz", f"{_PREFIX}.gz",
+    ]
+
+
+def test_download_scan_falls_back_to_gzip_suffixed_key_and_decompresses(monkeypatch):
+    # Regression test: the unidata-nexrad-level2 bucket was reorganized
+    # (observed 2025-06-28 LastModified timestamps) to store every object
+    # gzip-compressed under a ".gz"-suffixed key, e.g.
+    # KTLX20130531_230957_V06.gz instead of KTLX20130531_230957_V06. The
+    # plain suffixes now 404, so _download_scan must fall back to the
+    # gzip-suffixed variant and transparently decompress it (S3 doesn't set
+    # Content-Encoding for these objects, so requests won't do it for us).
+    fetcher = _fetcher()
+    raw = b"AR2V0006" + b"fake level2 payload"
+    compressed = gzip.compress(raw)
+    requested = []
+
+    def fake_get(url, timeout=60, stream=True):
+        name = url.split("/")[-1]
+        requested.append(name)
+        if name == f"{_PREFIX}_V06.gz":
+            return SimpleNamespace(status_code=200, content=compressed)
+        return SimpleNamespace(status_code=404, content=b"")
+
+    monkeypatch.setattr(raf.requests, "get", fake_get)
+    data = fetcher._download_scan(_SCAN_TIME)
+    assert data == raw
+    # confirms the uncompressed candidates were tried first, then the gzip one.
+    assert requested == [
+        f"{_PREFIX}_V06", f"{_PREFIX}_V03", _PREFIX, f"{_PREFIX}_V06.gz",
+    ]
+
+
+def test_download_scan_returns_none_when_every_suffix_404s(monkeypatch):
+    fetcher = _fetcher()
+    monkeypatch.setattr(
+        raf.requests, "get",
+        lambda url, timeout=60, stream=True: SimpleNamespace(status_code=404, content=b""),
+    )
+    assert fetcher._download_scan(_SCAN_TIME) is None
+
+
+def test_download_scan_returns_uncompressed_content_unchanged(monkeypatch):
+    # A ".gz"-suffixed key match whose bytes don't actually start with the
+    # gzip magic number should be returned as-is rather than raising in
+    # gzip.decompress -- guards the magic-byte check itself, not just the
+    # decompression path.
+    fetcher = _fetcher()
+
+    def fake_get(url, timeout=60, stream=True):
+        if url.endswith("_V06"):
+            return SimpleNamespace(status_code=200, content=b"AR2V0006plainbytes")
+        return SimpleNamespace(status_code=404, content=b"")
+
+    monkeypatch.setattr(raf.requests, "get", fake_get)
+    assert fetcher._download_scan(_SCAN_TIME) == b"AR2V0006plainbytes"
+
+
+def _split_cut_volume():
+    import numpy as np
+    def sweep(moment, value):
+        return [SimpleNamespace(
+            header=SimpleNamespace(el_angle=0.5, az_angle=az),
+            vol_consts=SimpleNamespace(lat=35.3, lon=-97.3),
+            moments={moment: (SimpleNamespace(first_gate=0.25, gate_width=0.25), np.array([value, value]))},
+        ) for az in (0, 90, 180, 270)]
+    return SimpleNamespace(sweeps=[sweep(b'REF', 30), sweep(b'VEL', 10), sweep(b'SW', 5)])
+
+
+def test_velocity_uses_compatible_split_cut_without_hiding_products(monkeypatch):
+    import numpy as np
+    fetcher = _fetcher()
+    monkeypatch.setattr(fetcher, '_get_parsed', lambda *args: _split_cut_volume())
+    scan = fetcher._decode(_SCAN_TIME, b'', product='velocity', tilt_idx=0)
+    assert scan.pyart_field == 'velocity'
+    assert scan.tilt_index == 1
+    assert {'reflectivity', 'velocity', 'spectrum_width'} <= set(scan.available_products)
+    np.testing.assert_allclose(scan.data, 19.4384)
+    width = fetcher._decode(_SCAN_TIME, b'', product='spectrum_width', tilt_idx=0)
+    np.testing.assert_allclose(width.data, 9.7192)
+    fetcher.shutdown()
+
+
+def test_product_changes_during_parse_do_not_change_requested_result(monkeypatch):
+    fetcher = _fetcher()
+    def parse(*args):
+        fetcher._product = 'reflectivity'
+        fetcher._tilt_idx = 2
+        return _split_cut_volume()
+    monkeypatch.setattr(fetcher, '_get_parsed', parse)
+    fetcher._decode_and_cache(_SCAN_TIME, b'', (_SCAN_TIME, 'velocity', 0))
+    assert fetcher._decoded_cache[(_SCAN_TIME, 'velocity', 0)].pyart_field == 'velocity'
+    fetcher.shutdown()
+
+
+def test_missing_product_does_not_silently_render_reflectivity(monkeypatch):
+    import pytest
+    fetcher = _fetcher()
+    monkeypatch.setattr(fetcher, '_get_parsed', lambda *args: _split_cut_volume())
+    with pytest.raises(RuntimeError, match='No differential_phase'):
+        fetcher._decode(_SCAN_TIME, b'', product='differential_phase', tilt_idx=0)
+    fetcher.shutdown()
+
+
+def test_shutdown_keeps_files_until_running_task_finishes():
+    import threading
+    from pathlib import Path
+    fetcher = _fetcher()
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    path = Path(fetcher._tmpdir) / 'held.dat'
+    path.write_bytes(b'data')
+    emitted = []
+    fetcher.error.connect(emitted.append)
+    def work():
+        started.set()
+        release.wait(3)
+        assert path.read_bytes() == b'data'
+        fetcher._emit(fetcher.error, 'obsolete')
+        finished.set()
+    future = fetcher._fetch_executor.submit(work)
+    assert started.wait(2)
+    fetcher.shutdown()
+    assert path.exists()
+    release.set()
+    future.result(timeout=3)
+    assert finished.is_set()
+    assert emitted == []

@@ -122,6 +122,11 @@ class ArchiveControls(QWidget):
 
         root.addLayout(row1)
 
+        self._radar_time_label = QLabel("Radar image: —")
+        self._radar_time_label.setStyleSheet("color: #E8EAF0; font-size: 11px; font-weight: 600;")
+        self._radar_time_label.setToolTip("Volume time of the displayed radar image")
+        root.addWidget(self._radar_time_label)
+
         # scrubber — seconds since midnight UTC of the session date. Dragging
         # only updates the time label (cheap); the actual seek (which fans
         # out to every fetcher's on_time_changed) only fires on release, so
@@ -213,6 +218,15 @@ class ArchiveControls(QWidget):
         color = "#FF8F8F" if error else "#8E97AB"
         self._radar_status.setStyleSheet(
             f"color: {color}; font-size: 9px; font-weight: 600; letter-spacing: 0.4px;"
+        )
+
+    def set_rendered_radar(self, scan) -> None:
+        if scan is None:
+            self._radar_time_label.setText("Radar image: —")
+            return
+        timestamp = scan.scan_time.astimezone(timezone.utc)
+        self._radar_time_label.setText(
+            f"Radar image: {scan.site} · {timestamp:%d %b %Y %H:%M:%SZ}"
         )
 
     def set_satellite_status(self, text: str, error: bool = False) -> None:

@@ -806,7 +806,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         # discard any in-flight/pending render for the old station
         self._archive_render_generation += 1
         self._archive_pending_render_scan = None
-        self._archive_render_in_flight = False
         self._archive_superres_timer.stop()
         self._archive_superres_pending = None
 
@@ -815,6 +814,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 self._archive_radar.scan_ready,
                 self._archive_radar.loading_changed,
                 self._archive_radar.error,
+                self._archive_radar.index_loaded,
             ):
                 try:
                     sig.disconnect()
@@ -825,6 +825,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             except Exception:
                 pass
 
+            self._archive_radar.shutdown()
+
+        self._radar_overlay.clear()
+        self._archive_controls.set_rendered_radar(None)
         self._archive_radar = ArchiveRadarFetcher(
             station=station,
             session_date=self._archive_time,
@@ -887,7 +891,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 if f in L2_PRODUCTS
             ]
             self.radar_controls.set_archive_products(products)
-            current_tilt_idx = getattr(self._archive_radar, "_tilt_idx", 0)
+            current_tilt_idx = getattr(scan, "tilt_index", getattr(self._archive_radar, "_tilt_idx", 0))
             self.radar_controls.set_archive_tilts(scan.available_tilts, current_tilt_idx)
 
         self._archive_pending_render_scan = scan
@@ -928,7 +932,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _on_archive_render_ready(self, result: dict) -> None:
         """Runs on the main thread — injects the pre-rendered archive PNG into the map."""
         self._archive_render_in_flight = False
-        if result["gen"] == self._archive_render_generation:
+        if result["gen"] == self._archive_render_generation and result["scan"] is self._current_radar_scan:
             scan = result["scan"]
             if "error" in result:
                 if hasattr(self, "_archive_controls"):
@@ -938,8 +942,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 if hasattr(self, "radar_controls"):
                     self.radar_controls.set_scan_time(scan.scan_time.strftime("%H:%MZ"))
                 if hasattr(self, "_archive_controls"):
+                    self._archive_controls.set_rendered_radar(scan)
                     self._archive_controls.set_radar_status(
-                        f"Radar: {scan.pyart_field} {scan.tilt_deg:.1f}deg {scan.scan_time.strftime('%H:%MZ')}"
+                        f"Radar: {scan.product} {scan.tilt_deg:.1f}°"
                     )
                 # Tier 2: (re)start the debounced super-res upgrade for this frame.
                 # Any earlier pending fire is implicitly superseded — QTimer.start()

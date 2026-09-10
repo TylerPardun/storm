@@ -93,3 +93,17 @@ def test_scan_step_buttons_unaffected_by_precision_mode():
     assert controller.current_time == datetime(
         2026, 4, 16, 11, 52, 0, tzinfo=timezone.utc
     )
+
+
+def test_rendered_radar_time_survives_loading_and_clock_changes():
+    from types import SimpleNamespace
+    _, controller, controls = _controls()
+    scan = SimpleNamespace(site='KTWX', scan_time=datetime(2026, 6, 11, 0, 3, 42, tzinfo=timezone.utc))
+    controls.set_rendered_radar(scan)
+    original = controls._radar_time_label.text()
+    assert '11 Jun 2026 00:03:42Z' in original
+    controls.set_radar_status('Radar: loading…')
+    controller.step(10)
+    assert controls._radar_time_label.text() == original
+    controls.set_rendered_radar(None)
+    assert 'KTWX' not in controls._radar_time_label.text()

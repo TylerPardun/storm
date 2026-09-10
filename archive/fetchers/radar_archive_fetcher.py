@@ -77,6 +77,9 @@ class ArchiveRadarFetcher(QObject):
             UTC datetime of the archive session (only the date portion is used).
         """
         super().__init__(parent)
+        self._closed = threading.Event()
+        self._signal_lock = threading.Lock()
+        self._parse_lock = threading.Lock()
         self._station     = station.upper()
         self._date        = session_date
         self._product     = DEFAULT_L2_PRODUCT
@@ -119,14 +122,31 @@ class ArchiveRadarFetcher(QObject):
     def station(self) -> str:
         return self._station
 
+    def _emit(self, signal, *args):
+        # Serialize shutdown with signal delivery; no queued updates after close.
+        with self._signal_lock:
+            if not self._closed.is_set():
+                signal.emit(*args)
+
+    def _submit(self, task, *args):
+        try:
+            self._fetch_executor.submit(task, *args)
+        except RuntimeError:
+            if not self._closed.is_set():
+                raise
+
     def shutdown(self) -> None:
-        """Stop background work and drop the tmp dir. Call this when the
-        owning session is ending (e.g. MainWindow.closeEvent) -- the fetch
-        pool's worker threads are non-daemon and won't stop on their own,
-        and without this every "change day" round-trip would leave both a
-        stray thread pool and an orphaned tmp dir behind."""
+        with self._signal_lock:
+            if self._closed.is_set():
+                return
+            self._closed.set()
         self._fetch_executor.shutdown(wait=False, cancel_futures=True)
-        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        # Running downloads may still own these files. Finish cleanup off the
+        # GUI thread, after the executor releases them.
+        def finish():
+            self._fetch_executor.shutdown(wait=True, cancel_futures=True)
+            shutil.rmtree(self._tmpdir, ignore_errors=True)
+        threading.Thread(target=finish, daemon=True, name="radar-cleanup").start()
 
     def set_station(self, station: str) -> None:
         self._station = station.upper()
@@ -162,6 +182,8 @@ class ArchiveRadarFetcher(QObject):
 
     def load_index(self) -> None:
         """Fetch the list of available scans from AWS (background thread)."""
+        if self._closed.is_set():
+            return
         t = threading.Thread(target=self._fetch_index, daemon=True)
         t.start()
 
@@ -171,6 +193,8 @@ class ArchiveRadarFetcher(QObject):
         Finds the correct scan for the given time, emits it if cached,
         or triggers a background fetch if not.
         """
+        if self._closed.is_set():
+            return
         self._current_archive_time = archive_time
         scan_time = self._nearest_scan_before(archive_time)
         if scan_time is None:
@@ -180,7 +204,7 @@ class ArchiveRadarFetcher(QObject):
         if scan is not None:
             if cache_key != self._last_emitted_key:
                 self._last_emitted_key = cache_key
-                self.scan_ready.emit(scan)
+                self._emit(self.scan_ready, scan)
         elif self._raw_cache.get(scan_time) is not None:
             self._ensure_decoded(scan_time)
         else:
@@ -207,13 +231,13 @@ class ArchiveRadarFetcher(QObject):
                 len(self._index), self._station, self._date.strftime("%Y-%m-%d"),
             )
             if not times:
-                self.error.emit(
+                self._emit(self.error, 
                     f"No archive data found for {self._station} on "
                     f"{self._date.strftime('%Y-%m-%d')} — "
                     f"station may not be in the public archive"
                 )
                 return
-            self.index_loaded.emit(
+            self._emit(self.index_loaded, 
                 [t.strftime("%Y-%m-%dT%H:%M:%SZ") for t in self._index]
             )
             # pre-fetch the scan nearest to the current archive time.
@@ -221,7 +245,7 @@ class ArchiveRadarFetcher(QObject):
                 self.on_time_changed(self._current_archive_time)
         except Exception as exc:
             log.error("ArchiveRadarFetcher: index fetch failed: %s", exc)
-            self.error.emit(f"Radar index failed for {self._station}: {exc}")
+            self._emit(self.error, f"Radar index failed for {self._station}: {exc}")
 
     def _parse_s3_listing(self, xml_text: str) -> list:
         """Parse S3 XML listing and extract scan datetimes."""
@@ -268,11 +292,13 @@ class ArchiveRadarFetcher(QObject):
                 return
             if self._raw_cache.get(scan_time) is not None:
                 return
+            if self._closed.is_set():
+                return
             self._pending_fetches.add(scan_time)
             self._raw_cache[scan_time] = None
 
-        self.loading_changed.emit(True)
-        self._fetch_executor.submit(self._fetch_raw_then_decode, scan_time)
+        self._emit(self.loading_changed, True)
+        self._submit(self._fetch_raw_then_decode, scan_time)
 
     def _ensure_decoded(self, scan_time: datetime) -> None:
         cache_key = self._decode_key(scan_time)
@@ -281,16 +307,18 @@ class ArchiveRadarFetcher(QObject):
                 return
             if self._raw_cache.get(scan_time) is None:
                 return
+            if self._closed.is_set():
+                return
             self._pending_decodes.add(cache_key)
-        self.loading_changed.emit(True)
-        self._fetch_executor.submit(self._decode_cached_scan, scan_time)
+        self._emit(self.loading_changed, True)
+        self._submit(self._decode_cached_scan, scan_time, cache_key)
 
     def _fetch_raw_then_decode(self, scan_time: datetime) -> None:
         cache_key = self._decode_key(scan_time)
         decoding = False
         try:
             file_bytes = self._download_scan(scan_time)
-            if file_bytes is None:
+            if file_bytes is None or self._closed.is_set():
                 return
             # persist raw bytes to tmp file so later product/tilt switches
             # (after this call returns) can still find the raw scan on disk.
@@ -312,7 +340,7 @@ class ArchiveRadarFetcher(QObject):
             self._decode_and_cache(scan_time, file_bytes, cache_key)
         except Exception as exc:
             log.error("ArchiveRadarFetcher: fetch failed for %s: %s", scan_time, exc)
-            self.error.emit(f"Radar fetch error: {exc}")
+            self._emit(self.error, f"Radar fetch error: {exc}")
         finally:
             with self._fetch_lock:
                 self._pending_fetches.discard(scan_time)
@@ -320,8 +348,7 @@ class ArchiveRadarFetcher(QObject):
                     self._pending_decodes.discard(cache_key)
                 self._update_loading_state()
 
-    def _decode_cached_scan(self, scan_time: datetime) -> None:
-        cache_key = self._decode_key(scan_time)
+    def _decode_cached_scan(self, scan_time: datetime, cache_key: tuple) -> None:
         try:
             path = self._raw_cache.get(scan_time)
             if not path or not os.path.exists(path):
@@ -336,21 +363,25 @@ class ArchiveRadarFetcher(QObject):
 
     def _decode_and_cache(self, scan_time: datetime, file_bytes: bytes, cache_key: tuple) -> None:
         try:
-            scan = self._decode(scan_time, file_bytes)
+            if self._closed.is_set():
+                return
+            scan = self._decode(scan_time, file_bytes, product=cache_key[1], tilt_idx=cache_key[2])
+            if self._closed.is_set():
+                return
             self._decoded_cache[cache_key] = scan
             if (
                 self._current_archive_time is not None
                 and self._nearest_scan_before(self._current_archive_time) == scan_time
                 and self._decode_key(scan_time) == cache_key
             ):
-                self.scan_ready.emit(scan)
+                self._emit(self.scan_ready, scan)
         except Exception as exc:
             log.error("ArchiveRadarFetcher: decode failed for %s: %s", scan_time, exc)
-            self.error.emit(f"Radar decode error: {exc}")
+            self._emit(self.error, f"Radar decode error: {exc}")
 
     def _update_loading_state(self) -> None:
         if not self._pending_fetches and not self._pending_decodes:
-            self.loading_changed.emit(False)
+            self._emit(self.loading_changed, False)
 
     def _decode_key(self, scan_time: datetime) -> tuple[datetime, str, int]:
         return (scan_time, self._product, self._tilt_idx)
@@ -368,6 +399,8 @@ class ArchiveRadarFetcher(QObject):
         # store objects gzip-compressed with a ".gz" suffix on the key, so
         # also try gzip-suffixed variants of each.
         for suffix in ("_V06", "_V03", "", "_V06.gz", "_V03.gz", ".gz"):
+            if self._closed.is_set():
+                return None
             url = f"{_S3_BASE}/{prefix}{suffix}"
             try:
                 resp = requests.get(url, timeout=60, stream=True)
@@ -395,14 +428,15 @@ class ArchiveRadarFetcher(QObject):
         was already fetched only needs to be parsed once even if the user
         switches products or tilts repeatedly.
         """
-        f = self._parsed_cache.get(scan_time)
-        if f is None:
-            from metpy.io import Level2File
-            f = Level2File(io.BytesIO(file_bytes))
-            self._parsed_cache[scan_time] = f
-        return f
+        with self._parse_lock:
+            f = self._parsed_cache.get(scan_time)
+            if f is None:
+                from metpy.io import Level2File
+                f = Level2File(io.BytesIO(file_bytes))
+                self._parsed_cache[scan_time] = f
+            return f
 
-    def _decode(self, scan_time: datetime, file_bytes: bytes) -> Optional[Level2RadarScan]:
+    def _decode(self, scan_time: datetime, file_bytes: bytes, *, product=None, tilt_idx=None) -> Optional[Level2RadarScan]:
         """Decode a Level-2 file with MetPy and return a Level2RadarScan."""
         from pyproj import Proj, Transformer
         from core.mem_probe import peak_rss_mb, log_delta
@@ -410,44 +444,38 @@ class ArchiveRadarFetcher(QObject):
         _t0 = _time.perf_counter()
         _rss_before = peak_rss_mb()
 
+        requested_product = self._product if product is None else product
+        requested_tilt = self._tilt_idx if tilt_idx is None else tilt_idx
         f = self._get_parsed(scan_time, file_bytes)
 
         if not f.sweeps:
             raise RuntimeError("No sweeps found in Level-2 file")
 
-        available_tilts = []
-        for sweep in f.sweeps:
-            if sweep:
-                rad0 = sweep[0]
-                # msg31: Radial namedtuple with .header; MSG1: plain (hdr, data) tuple
-                hdr = rad0.header if hasattr(rad0, "header") else rad0[0]
-                available_tilts.append(round(float(hdr.el_angle), 1))
-
-        if not available_tilts:
+        sweeps = [sweep for sweep in f.sweeps if sweep]
+        if not sweeps:
             raise RuntimeError("No valid sweeps in Level-2 file")
-
-        tilt_idx = min(self._tilt_idx, len(f.sweeps) - 1)
+        available_tilts = []
+        sweep_products = []
+        for sweep in sweeps:
+            rad0 = sweep[0]
+            hdr = rad0.header if hasattr(rad0, "header") else rad0[0]
+            available_tilts.append(round(float(hdr.el_angle), 1))
+            present = set()
+            for rad in sweep:
+                moments = rad.moments if hasattr(rad, "moments") else rad[1]
+                present.update((k.decode() if isinstance(k, bytes) else k).strip() for k in moments)
+            sweep_products.append({p for p in L2_PRODUCTS if _MOMENT_MAP[p] in present})
+        available_products = [p for p in L2_PRODUCTS if any(p in fields for fields in sweep_products)]
+        compatible = [i for i, fields in enumerate(sweep_products) if requested_product in fields]
+        if not compatible:
+            raise RuntimeError(f"No {requested_product} data in this radar volume")
+        preferred = max(0, min(requested_tilt, len(sweeps) - 1))
+        tilt_idx = min(compatible, key=lambda i: (abs(available_tilts[i] - available_tilts[preferred]), abs(i - preferred)))
         tilt_deg = available_tilts[tilt_idx]
-        sweep    = f.sweeps[tilt_idx]
-        rad0 = sweep[0]
-        is_msg31 = hasattr(rad0, "moments")
-
-        present: set[str] = set()
-        for rad in sweep:
-            moments = rad.moments if is_msg31 else rad[1]
-            present.update(
-                (k.decode() if isinstance(k, bytes) else k).strip()
-                for k in moments.keys()
-            )
-
-        available_products = [p for p in L2_PRODUCTS if _MOMENT_MAP[p] in present]
-        if not available_products:
-            raise RuntimeError(
-                f"No recognised moments in sweep {tilt_idx} (found: {sorted(present)})"
-            )
-
-        product  = self._product if self._product in available_products else available_products[0]
-        moment   = _MOMENT_MAP[product]
+        sweep = sweeps[tilt_idx]
+        is_msg31 = hasattr(sweep[0], "moments")
+        product = requested_product
+        moment = _MOMENT_MAP[product]
 
         radar_lat = radar_lon = None
         for rad in sweep:
@@ -503,7 +531,7 @@ class ArchiveRadarFetcher(QObject):
             data[i, :ng] = row  # already NaN for MISSING/RANGE_FOLD
 
         # velocity is in m/s from MetPy — convert to knots.
-        if product == "velocity":
+        if product in ("velocity", "spectrum_width"):
             data *= 1.94384
 
         az_rad   = np.deg2rad(np.array(azimuths, dtype=np.float64))
@@ -519,7 +547,7 @@ class ArchiveRadarFetcher(QObject):
         meta = L2_PRODUCTS[product]
         log_delta(f"ArchiveRadarFetcher._decode {self._station} {scan_time}",
                    _rss_before, peak_rss_mb(), (_time.perf_counter() - _t0) * 1000.0)
-        return Level2RadarScan(
+        scan = Level2RadarScan(
             site=self._station,
             product=meta["label"].split("(")[-1].rstrip(")"),
             scan_time=scan_time,
@@ -535,6 +563,9 @@ class ArchiveRadarFetcher(QObject):
             available_products=available_products,
             pyart_field=product,
         )
+        scan.tilt_index = tilt_idx
+        return scan
+
 
 
     def _maintain_buffer(self, current_scan_time: datetime) -> None:

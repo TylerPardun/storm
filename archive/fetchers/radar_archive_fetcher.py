@@ -231,13 +231,13 @@ class ArchiveRadarFetcher(QObject):
                 len(self._index), self._station, self._date.strftime("%Y-%m-%d"),
             )
             if not times:
-                self._emit(self.error, 
+                self._emit(self.error,
                     f"No archive data found for {self._station} on "
                     f"{self._date.strftime('%Y-%m-%d')} — "
                     f"station may not be in the public archive"
                 )
                 return
-            self._emit(self.index_loaded, 
+            self._emit(self.index_loaded,
                 [t.strftime("%Y-%m-%dT%H:%M:%SZ") for t in self._index]
             )
             # pre-fetch the scan nearest to the current archive time.

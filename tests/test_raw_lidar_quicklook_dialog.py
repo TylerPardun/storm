@@ -38,9 +38,10 @@ def test_switching_field_updates_the_plotted_mesh():
     assert not np.array_equal(np.asarray(mesh_intensity), np.asarray(mesh_velocity))
 
 
-def test_mobile_platform_status_notes_ground_geometry_is_not_established():
+def test_mobile_platform_status_shows_acquisition_without_geometry_claim():
     dlg = RawLidarQuicklookDialog('DLTRUCK1-DL1-PPI', preloaded_rays=_rays(mobile=True))
-    assert 'ground geometry not established' in dlg._status_label.text()
+    assert '5 rays' in dlg._status_label.text()
+    assert 'ground geometry' not in dlg._status_label.text()
 
 
 def test_stationary_platform_status_omits_the_mobile_caveat():

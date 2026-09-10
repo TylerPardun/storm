@@ -187,6 +187,4 @@ class RawLidarQuicklookDialog(QDialog):
 
         summary = rays.summary()
         status = f"{summary['rays']} rays, {summary['start']} → {summary['end']}"
-        if rays.source.mobile:
-            status += " — mobile platform, ground geometry not established"
         self._status_label.setText(status)

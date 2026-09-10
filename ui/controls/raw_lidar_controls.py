@@ -25,9 +25,8 @@ class RawLidarControls(QWidget):
     quicklook_requested(str, object)   platform_id, LidarAsset
     map_overlay_requested(str, object, bool)
         platform_id, LidarAsset, enabled -- user (un)checked MAP. Only
-        offered for stationary (non-mobile) PPI/CSM sources, since those
-        are the only ones with real, trustworthy scan geometry to
-        georeference (see raw_lidar_scan_to_map_scan's docstring).
+        offered for PPI/CSM sources. The renderer validates coordinates and
+        the mobile azimuth reference before plotting measured gates.
     """
 
     source_selected = pyqtSignal(str)
@@ -75,8 +74,9 @@ class RawLidarControls(QWidget):
         self._btn_map = QPushButton("MAP")
         self._btn_map.setCheckable(True)
         self._btn_map.setEnabled(False)
+        self._btn_map.hide()
         self._btn_map.setToolTip(
-            "Map scan · stationary CLAMPS PPI/CSM only"
+            "Show lidar scan on map"
         )
         self._btn_map.toggled.connect(self._on_map_toggled)
         asset_row.addWidget(self._btn_map)
@@ -93,10 +93,6 @@ class RawLidarControls(QWidget):
         # as a placeholder since discovery runs automatically once archive
         # mode starts (main_window._begin_archive_startup), not on open.
         col.addWidget(self._status_label)
-        self._map_reason = QLabel("Choose a scan to view map availability.")
-        self._map_reason.setStyleSheet("color: #8E97AB; font-size: 10px;")
-        self._map_reason.setWordWrap(True)
-        col.addWidget(self._map_reason)
 
         outer.addWidget(self._drawer)
 
@@ -217,14 +213,9 @@ class RawLidarControls(QWidget):
         if self._btn_map.isChecked():
             self._btn_map.setChecked(False)
         source = self.current_source()
-        can_map = source is not None and not source.mobile and source.product in ("ppi", "csm")
+        can_map = source is not None and source.product in ("ppi", "csm")
         self._btn_map.setEnabled(can_map)
-        self._map_reason.setText(
-            "MAP: stationary scan" if can_map else
-            "MAP unavailable: mobile orientation unverified" if source and source.mobile else
-            "MAP unavailable for this scan mode" if source else
-            "Choose an available scan."
-        )
+        self._btn_map.setVisible(can_map)
         if source is not None:
             self.source_selected.emit(source.platform_id)
 

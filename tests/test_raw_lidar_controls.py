@@ -88,21 +88,19 @@ def test_view_quicklook_requested_carries_platform_id_and_asset():
     assert requested == [(fp_source.platform_id, asset)]
 
 
-def test_map_button_enabled_only_for_stationary_ppi_or_csm():
-    """MAP should only ever be usable for a source raw_lidar_scan_to_map_scan
-    can actually georeference: not mobile, and a real scanning product."""
+def test_map_button_visible_for_ppi_or_csm_including_mobile():
     controls = RawLidarControls()
-    dltruck = _dltruck1_dl1_sources()  # all mobile -- MAP should stay off
+    dltruck = _dltruck1_dl1_sources()
     clamps1 = [s for s in KNOWN_RAW_LIDAR_SOURCES if s.instrument == "CLAMPS1"]
     controls.set_sources(dltruck + clamps1)
 
     assets = {s.platform_id: [LidarAsset(s, f"{s.platform_id}.cdf", "catalog")] for s in dltruck + clamps1}
     controls.set_assets_for_all_sources(assets)
 
-    # still on DLTRUCK1-DL1 (mobile) -- MAP must stay disabled regardless of product.
+    # Mobile PPI and CSM offer mapping; other products do not.
     for i in range(controls._asset_combo.count()):
         controls._asset_combo.setCurrentIndex(i)
-        assert controls._btn_map.isEnabled() is False
+        assert controls._btn_map.isEnabled() == (controls.current_source().product in ("ppi", "csm"))
 
     clamps1_index = controls._source_combo.findData("CLAMPS1")
     controls._source_combo.setCurrentIndex(clamps1_index)
@@ -110,6 +108,7 @@ def test_map_button_enabled_only_for_stationary_ppi_or_csm():
         controls._asset_combo.setCurrentIndex(i)
         product = controls._asset_combo.itemText(i).lower()
         assert controls._btn_map.isEnabled() == (product in ("ppi", "csm"))
+        assert controls._btn_map.isHidden() == (product not in ("ppi", "csm"))
 
 
 def test_map_toggled_emits_map_overlay_requested_with_enabled_flag():
@@ -165,7 +164,8 @@ def test_roster_hides_absent_instruments_but_preserves_unknown_sources():
     assert controls._source_combo.count() == 2
     assert controls._source_combo.findData('DLTRUCK1-DL2') == -1
     assert 'unavailable' in controls._source_combo.itemText(1)
-    assert 'orientation unverified' in controls._map_reason.text()
+    assert not controls._btn_map.isHidden()
+    assert not hasattr(controls, '_map_reason')
 
 
 def test_multiple_files_for_a_scan_mode_remain_selectable():

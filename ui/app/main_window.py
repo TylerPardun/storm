@@ -180,7 +180,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     # emitted from the NOXP render thread when a rendered sweep PNG is ready.
     _noxp_render_ready = pyqtSignal(object)
     # emitted from the raw-lidar map-overlay render thread when a scan PNG
-    # is ready (stationary CLAMPS PPI/CSM only -- see raw_lidar_scan_to_map_scan).
+    # is ready (north-referenced PPI/CSM rays -- see ui/map/lidar_overlay.py).
     _lidar_overlay_render_ready = pyqtSignal(object)
     # emitted when the user aborts an archive loading session.
     session_aborted = pyqtSignal()
@@ -472,6 +472,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._raw_lidar_quicklook_requested_platform_id = None
         # map-overlay state (stationary CLAMPS PPI/CSM only — see
         # RawLidarControls' MAP button and _render_lidar_overlay below).
+        self._lidar_overlay_generation = 0
+        self._lidar_overlay_asset_url = None
         self._lidar_overlay = None
         self._lidar_overlay_platform_id = None
         self._lidar_overlay_rays = None
@@ -1804,6 +1806,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         return div
 
     def closeEvent(self, event):
+        self._lidar_overlay_generation += 1
+        self._lidar_overlay_platform_id = None
+        self._lidar_overlay_rays = None
+        self._lidar_overlay_pending = False
         _s = QSettings("NSSL", "STORM")
         _s.setValue("geometry", self.saveGeometry())
         _s.setValue("windowState", self.saveState())
@@ -4193,7 +4199,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _on_archive_raw_lidar_rays_ready(self, platform_id: str, rays) -> None:
         self.status_msg_label.setText(f"Raw lidar: {platform_id} loaded")
 
-        if platform_id == self._lidar_overlay_platform_id:
+        if platform_id == self._lidar_overlay_platform_id and rays.provenance.get("url") == self._lidar_overlay_asset_url:
             self._lidar_overlay_rays = rays
             self._render_lidar_overlay()
 
@@ -4205,22 +4211,26 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._raw_lidar_dialog = RawLidarQuicklookDialog(platform_id, parent=self, preloaded_rays=rays)
             self._raw_lidar_dialog.show()
 
-    # -- CLAMPS raw-lidar map overlay (stationary PPI/CSM only) ----------
+    # -- CLAMPS raw-lidar map overlay (positioned PPI/CSM rays) ----------
 
     def _on_raw_lidar_map_overlay_requested(self, platform_id: str, asset, enabled: bool) -> None:
+        self._lidar_overlay_generation += 1
+        self._lidar_overlay_asset_url = asset.url if enabled else None
+        self._lidar_overlay_rays = None
+        if self._lidar_overlay is not None:
+            self._lidar_overlay.clear()
         if not enabled:
             self._lidar_overlay_platform_id = None
-            self._lidar_overlay_rays = None
-            if self._lidar_overlay is not None:
-                self._lidar_overlay.clear()
             return
         self._lidar_overlay_platform_id = platform_id
         self._lidar_overlay_field = None   # re-pick a default for the new source
         self.status_msg_label.setText(f"Raw lidar: loading {asset.source.product.upper()} for map overlay…")
         if not self._archive_raw_lidar.load(platform_id, asset):
             self.status_msg_label.setText("Raw lidar: load already in progress")
+            self.raw_lidar_controls._btn_map.setChecked(False)
 
     def _on_time_changed_update_lidar_overlay(self, _t) -> None:
+        self._lidar_overlay_generation += 1
         if self._lidar_overlay_platform_id is not None and self._lidar_overlay_rays is not None:
             self._render_lidar_overlay()
 
@@ -4240,30 +4250,29 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._lidar_overlay_render_in_flight = True
         threading.Thread(
             target=self._bg_render_lidar_overlay,
-            args=(rays, self._time_ctrl.current_time, field),
+            args=(rays, self._time_ctrl.current_time, field, self._lidar_overlay_generation),
             daemon=True,
         ).start()
 
-    def _bg_render_lidar_overlay(self, rays, when, field: str) -> None:
+    def _bg_render_lidar_overlay(self, rays, when, field: str, generation: int) -> None:
         """Runs in a background thread — NOT on the main thread."""
-        from archive.fetchers.raw_lidar_archive_fetcher import raw_lidar_scan_to_map_scan
+        from ui.map.lidar_overlay import render_lidar_to_png
         from ui.map.radar_overlay import RENDER_GRID_SIZE
         try:
-            scan = raw_lidar_scan_to_map_scan(rays, when, field)
-            png, bounds, _ = _render_scan_to_png(scan, RENDER_GRID_SIZE)
+            png, bounds, metadata = render_lidar_to_png(rays, when, field, RENDER_GRID_SIZE)
         except ValueError as exc:
-            self._lidar_overlay_render_ready.emit({"error": str(exc)})
+            self._lidar_overlay_render_ready.emit({"error": str(exc), "generation": generation})
             return
         except Exception as exc:  # noqa: BLE001
             log.error("Raw lidar overlay render failed: %s", exc)
-            self._lidar_overlay_render_ready.emit({"error": str(exc)})
+            self._lidar_overlay_render_ready.emit({"error": str(exc), "generation": generation})
             return
-        self._lidar_overlay_render_ready.emit({"png": png, "bounds": bounds})
+        self._lidar_overlay_render_ready.emit({"png": png, "bounds": bounds, "generation": generation})
 
     def _on_lidar_overlay_render_ready(self, result: dict) -> None:
         self._lidar_overlay_render_in_flight = False
-        if self._lidar_overlay_platform_id is None:
-            pass  # toggled off while this render was in flight -- drop it
+        if self._lidar_overlay_platform_id is None or result["generation"] != self._lidar_overlay_generation:
+            pass  # superseded source/time, or toggled off while rendering
         elif "error" in result:
             self.status_msg_label.setText(f"Raw lidar map: {result['error']}")
             if self._lidar_overlay is not None:

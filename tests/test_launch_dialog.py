@@ -8,7 +8,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QSpinBox, QToolButton
 
 from archive.catalog import ALL_PLATFORMS, AvailabilitySnapshot, PlatformAvailability
-from ui.launch.dialog import LaunchDialog, _YearGridPopup
+from ui.launch.dialog import LaunchDialog, _AvailabilityCalendar, _YearGridPopup
 from ui.launch.availability import AvailabilityWorker
 
 
@@ -188,7 +188,20 @@ def test_post_layout_adjust_resets_the_coverage_labels_minimum_height_when_clear
     assert dlg._browse_coverage_lbl.minimumHeight() == 0
 
 
-def test_year_grid_popup_shows_a_dozen_years_centered_on_current_and_marks_it_selected():
+def test_availability_calendar_disallows_dates_after_today():
+    calendar = _AvailabilityCalendar()
+    assert calendar.maximumDate() == QDate.currentDate()
+
+
+def _freeze_today(monkeypatch, year, month=6, day=15):
+    # _YearGridPopup clamps its range to "no years beyond today" -- pin
+    # "today" so these tests don't drift as real time passes.
+    import ui.launch.dialog as dialog_module
+    monkeypatch.setattr(dialog_module.QDate, "currentDate", staticmethod(lambda: QDate(year, month, day)))
+
+
+def test_year_grid_popup_shows_a_dozen_years_centered_on_current_and_marks_it_selected(monkeypatch):
+    _freeze_today(monkeypatch, 2030)  # comfortably past the centered window, no clamping
     _, dlg = _dialog()
     popup = _YearGridPopup(2022, parent=dlg)
 
@@ -198,7 +211,23 @@ def test_year_grid_popup_shows_a_dozen_years_centered_on_current_and_marks_it_se
     assert [b.text() for b in selected] == ["2022"]
 
 
-def test_year_grid_popup_shift_pages_the_range_by_a_full_grid():
+def test_year_grid_popup_never_shows_or_pages_past_the_current_year(monkeypatch):
+    # Field deployments have no data from the future -- the popup should
+    # neither open on nor page into a range beyond "today".
+    _freeze_today(monkeypatch, 2022)
+    _, dlg = _dialog()
+    popup = _YearGridPopup(2022, parent=dlg)
+
+    assert popup._range_lbl.text() == "2011 – 2022"
+    assert [b.text() for b in popup._buttons] == [str(y) for y in range(2011, 2023)]
+    assert popup._next_btn.isEnabled() is False
+
+    popup._shift(_YearGridPopup._COUNT)  # attempting to page forward is a no-op at the boundary
+    assert popup._range_lbl.text() == "2011 – 2022"
+
+
+def test_year_grid_popup_shift_pages_the_range_by_a_full_grid(monkeypatch):
+    _freeze_today(monkeypatch, 2050)  # comfortably past the shifted-forward window too
     _, dlg = _dialog()
     popup = _YearGridPopup(2022, parent=dlg)
 
@@ -209,7 +238,8 @@ def test_year_grid_popup_shift_pages_the_range_by_a_full_grid():
     assert popup._range_lbl.text() == "2017 – 2028"
 
 
-def test_year_grid_popup_pick_emits_the_picked_year_and_closes():
+def test_year_grid_popup_pick_emits_the_picked_year_and_closes(monkeypatch):
+    _freeze_today(monkeypatch, 2030)
     _, dlg = _dialog()
     popup = _YearGridPopup(2022, parent=dlg)
     picked = []
@@ -367,7 +397,7 @@ def test_date_presence_keeps_errors_distinct_from_absence(caplog):
     assert dlg._browse_sources_list.count() == 1
     _apply(dlg, _snapshot(failed=True))
     assert "incomplete" in dlg._browse_coverage_lbl.text()
-    assert not dlg._browse_coverage_progress.isVisibleTo(dlg)
+    assert not dlg._archive_scan_progress.isVisibleTo(dlg)
     _apply(dlg, _snapshot())
     assert "check complete" in dlg._browse_coverage_lbl.text()
     assert dlg._browse_coverage_lbl.styleSheet() == ""
@@ -377,7 +407,7 @@ def test_partial_snapshot_keeps_progress_and_positive_dates():
     _, dlg = _dialog()
     _apply(dlg, _snapshot([date(2024, 4, 27)], partial=True))
     assert "Indexing" in dlg._browse_coverage_lbl.text()
-    assert dlg._browse_coverage_progress.isVisibleTo(dlg)
+    assert dlg._archive_scan_progress.isVisibleTo(dlg)
     assert dlg._browse_dates_list.count() == 1
 
 
@@ -542,15 +572,17 @@ def test_surprise_me_with_no_snapshot_yet_shows_a_message_and_does_not_crash(mon
     assert len(shown) == 1
 
 
-def test_circular_scan_progress_mirrors_the_browse_coverage_progress():
-    """The wheel next to the date picker should track the same
-    checked/total as the browse drawer's bar, without requiring that
-    drawer to be expanded to see it."""
+def test_circular_scan_progress_tracks_the_snapshots_checked_and_total():
+    """The wheel next to the date picker is the only scan-progress
+    indicator now (the old linear bar in the browse drawer was removed as
+    redundant) -- it should track the snapshot's checked/total and be
+    visible only while the scan is still running."""
     _, dlg = _dialog()
     _apply(dlg, _snapshot([date(2024, 4, 27)], partial=True))
     assert dlg._archive_scan_progress.isVisibleTo(dlg)
-    assert dlg._archive_scan_progress._maximum == dlg._browse_coverage_progress.maximum()
-    assert dlg._archive_scan_progress._value == dlg._browse_coverage_progress.value()
+    snapshot = dlg._availability_snapshot
+    assert dlg._archive_scan_progress._maximum == snapshot.total
+    assert dlg._archive_scan_progress._value == snapshot.checked
 
     _apply(dlg, _snapshot())
     assert not dlg._archive_scan_progress.isVisibleTo(dlg)

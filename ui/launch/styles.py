@@ -169,6 +169,15 @@ QCalendarWidget QMenu {
     border: 1px solid #1E1E2E;
     color: #E8EAF0;
 }
+QCalendarWidget QMenu::item {
+    padding: 4px 20px;
+}
+QCalendarWidget QMenu::item:selected {
+    /* QMenu uses :selected (not :hover) for the item under the cursor or
+       keyboard focus -- this is the month popup's hover highlight. */
+    background-color: #123C50;
+    color: #9BE8FF;
+}
 QCalendarWidget QSpinBox {
     /* Normally never shown -- the visible year control is
        qt_calendar_yearbutton (a QToolButton, styled by the generic

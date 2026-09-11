@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QPushButton, QToolButton, QFileDialog, QFrame,
     QApplication, QMessageBox, QSizePolicy, QWidget,
-    QDateTimeEdit, QSpinBox, QComboBox, QCheckBox, QProgressBar,
+    QDateTimeEdit, QSpinBox, QComboBox, QCheckBox,
     QCalendarWidget, QListWidget, QListWidgetItem, QTabWidget, QScrollArea,
 )
 from PyQt6.QtCore import (
@@ -85,12 +85,13 @@ def _calendar_glyph_icon(color: str = "#8E97AB", w: int = 16, h: int = 16) -> QI
 class _CircularProgress(QWidget):
     """Small circular progress ring for the archive catalog scan.
 
-    The scan already had a progress bar (_browse_coverage_progress), but it
-    lives inside the collapsible "browse" drawer, which starts collapsed --
-    easy to never see, which reads as "nothing is happening" even though
+    Originally added alongside a linear bar (_browse_coverage_progress)
+    inside the collapsible "browse" drawer, which starts collapsed -- easy
+    to never see, which reads as "nothing is happening" even though
     AvailabilityIndex.scan() (archive/catalog.py) is genuinely progressive,
-    most-recent-year first. This sits next to the date picker instead, so
-    the scan being in progress is visible without expanding anything.
+    most-recent-year first. That bar has since been removed as redundant;
+    this wheel (next to the date picker, visible without expanding
+    anything) is the only progress indicator now.
     """
 
     def __init__(self, parent=None, diameter: int = 20):
@@ -137,6 +138,9 @@ class _AvailabilityCalendar(QCalendarWidget):
         self._known_dates = frozenset()
         self.setMinimumSize(322, 260)
         self.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        # Field deployments only ever produce past data -- no case can exist
+        # for a day that hasn't happened yet.
+        self.setMaximumDate(QDate.currentDate())
         weekday = QTextCharFormat()
         weekday.setForeground(QColor("#8E97AB"))
         for day in Qt.DayOfWeek:
@@ -225,10 +229,16 @@ class _YearGridPopup(QWidget):
         self.setStyleSheet(_YEAR_GRID_STYLE)
         self._known_years = frozenset()
         self._current_year = current_year
-        self._start_year = current_year - 5
+        # No field deployment has data past today, so no page should ever
+        # scroll in a year beyond this one.
+        self._max_year = QDate.currentDate().year()
+        self._start_year = self._clamp_start(current_year - 5)
         self._buttons: list[QPushButton] = []
         self._build_ui()
         self._refresh()
+
+    def _clamp_start(self, start: int) -> int:
+        return min(start, self._max_year - self._COUNT + 1)
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
@@ -259,6 +269,7 @@ class _YearGridPopup(QWidget):
         next_btn.setToolTip("Next years")
         next_btn.clicked.connect(lambda: self._shift(self._COUNT))
         nav.addWidget(next_btn)
+        self._next_btn = next_btn
         outer.addLayout(nav)
 
         grid = QGridLayout()
@@ -273,7 +284,7 @@ class _YearGridPopup(QWidget):
         outer.addLayout(grid)
 
     def _shift(self, delta: int):
-        self._start_year += delta
+        self._start_year = self._clamp_start(self._start_year + delta)
         self._refresh()
 
     def _pick(self, idx: int):
@@ -286,6 +297,7 @@ class _YearGridPopup(QWidget):
 
     def _refresh(self):
         self._range_lbl.setText(f"{self._start_year} – {self._start_year + self._COUNT - 1}")
+        self._next_btn.setEnabled(self._start_year + self._COUNT - 1 < self._max_year)
         for i, btn in enumerate(self._buttons):
             year = self._start_year + i
             btn.setText(str(year))
@@ -309,6 +321,13 @@ class LaunchDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # _post_layout_adjust() re-centers after every content-size change
+        # (switching modes, browse results changing height, ...), which
+        # otherwise silently discards a window position the user dragged
+        # themselves -- these two flags make _recenter() a one-time "center
+        # on first show" instead of "re-center on every layout pass."
+        self._user_moved_window = False
+        self._recentering_window = False
         self.setWindowTitle("STORM")
         self.setMinimumWidth(380)
         self.setWindowFlags(
@@ -812,13 +831,23 @@ class LaunchDialog(QDialog):
         self._form_scroll.widget().layout().activate()
         lbl = self._browse_coverage_lbl
         lbl.setMinimumHeight(max(0, lbl.heightForWidth(lbl.width())) if lbl.text() else 0)
-        self._recenter()
+        if not self._user_moved_window:
+            self._recenter()
 
     def _recenter(self):
         screen = QApplication.primaryScreen().availableGeometry()
         x = screen.x() + max(0, (screen.width()  - self.width())  // 2)
         y = screen.y() + max(0, (screen.height() - self.height()) // 2)
-        self.move(x, y)
+        self._recentering_window = True
+        try:
+            self.move(x, y)
+        finally:
+            self._recentering_window = False
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if not self._recentering_window:
+            self._user_moved_window = True
 
 
     def _build_calendar_button(self) -> QToolButton:
@@ -977,12 +1006,6 @@ class LaunchDialog(QDialog):
         self._availability_refresh_btn.clicked.connect(self._refresh_availability)
         summary_row.addWidget(self._availability_refresh_btn)
         parent_layout.addLayout(summary_row)
-        self._browse_coverage_progress = QProgressBar()
-        self._browse_coverage_progress.setObjectName("coverageProgress")
-        self._browse_coverage_progress.setTextVisible(False)
-        self._browse_coverage_progress.setFixedHeight(4)
-        self._browse_coverage_progress.hide()
-        parent_layout.addWidget(self._browse_coverage_progress)
 
         self._browse_toggle_btn = QPushButton("▸  BROWSE AVAILABLE CASES")
         self._browse_toggle_btn.setObjectName("dataToggleBtn")
@@ -1174,9 +1197,6 @@ class LaunchDialog(QDialog):
             self._browse_sources_list.addItem(item)
         self._browse_results.setTabText(1, "Selected date")
         running = snapshot is None or snapshot.checked < snapshot.total
-        self._browse_coverage_progress.setVisible(running)
-        self._browse_coverage_progress.setRange(0, snapshot.total if snapshot else 0)
-        self._browse_coverage_progress.setValue(snapshot.checked if snapshot else 0)
         self._archive_scan_progress.setVisible(running)
         self._archive_scan_progress.setRange(0, snapshot.total if snapshot else 0)
         self._archive_scan_progress.setValue(snapshot.checked if snapshot else 0)

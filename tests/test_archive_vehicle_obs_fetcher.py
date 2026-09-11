@@ -241,3 +241,30 @@ def test_position_track_uses_launch_time_and_rejects_stale_invalid_fixes():
     assert track.nearest(_utc(60)).lat == 35  # ties prefer earlier actual fix
     assert track.nearest(_utc(181)) is None
     assert track.nearest(float("nan")) is None
+
+
+def test_vehicle_positions_near_picks_nearest_not_first_fix():
+    """Same regression this fixes as ArchiveMQTTReader.vehicle_positions_near:
+    a deployment can stage from a base far from the actual intercept, so
+    picking the day's first fix is a poor proxy for where a vehicle
+    actually was at the requested archive start time."""
+    fetcher = ArchiveVehicleObsFetcher(_utc(0))
+    fetcher._observations = {
+        "dltruck": [
+            Observation("dltruck", 35.0, -97.0, _utc(0)),      # staged near OKC
+            Observation("dltruck", 34.7, -102.8, _utc(3600)),  # drove to near Lubbock
+            Observation("dltruck", 34.5, -103.0, _utc(7200)),
+        ],
+    }
+
+    near_start = fetcher.vehicle_positions_near(_utc(0))
+    assert near_start == [("dltruck", 35.0, -97.0)]
+
+    near_lubbock = fetcher.vehicle_positions_near(_utc(3650))
+    assert near_lubbock == [("dltruck", 34.7, -102.8)]
+
+
+def test_vehicle_positions_near_with_no_observations_is_empty():
+    fetcher = ArchiveVehicleObsFetcher(_utc(0))
+    fetcher._observations = {"dltruck": []}
+    assert fetcher.vehicle_positions_near(_utc(0)) == []

@@ -32,6 +32,18 @@ _NOXP_CACHE_DIR = Path.home() / ".cache" / "storm" / "noxp"
 _DISCOVERY_BUDGET = 40  # per platform, per click -- see module docstring
 
 
+def noxp_site_at(volume) -> dict | None:
+    """This volume's approximate instrument location, or None if it
+    carries no usable position. Independent of scan_type -- unlike
+    noxp_volume_to_scan, a location marker is meaningful even for an
+    RHI/other volume that can't itself be map-rendered."""
+    lat0 = float(np.nanmean(volume.latitude))
+    lon0 = float(np.nanmean(volume.longitude))
+    if not (np.isfinite(lat0) and np.isfinite(lon0)):
+        return None
+    return {"instrument": "NOXP", "lat": lat0, "lon": lon0}
+
+
 def noxp_volume_to_scan(volume, sweep_index: int, field_name: str) -> NoxpRadarScan:
     """Slice one sweep out of a decoded RadarVolume and georeference it via
     an aeqd projection centered on the volume's own file-declared position
@@ -115,6 +127,12 @@ def noxp_volume_to_scan(volume, sweep_index: int, field_name: str) -> NoxpRadarS
         elevation_deg=sweep_elevation(sweep_index),
         available_sweeps=[(i, sweep_elevation(i)) for i in range(n_sweeps)],
         native_field=field_name,
+        # Same reasoning as ArchiveRadarFetcher._decode (radar_archive_fetcher.py):
+        # az is sorted above, so az[0] is whichever azimuth happens to be
+        # smallest in this sweep, not reliably 0 deg. Without this,
+        # _sample_scan_to_grid renders rotated by that gap whenever a
+        # sweep's near-0 deg ray is missing.
+        az_offset=float(az[0]),
     )
 
 
@@ -129,30 +147,60 @@ class ArchiveNoxpRadarFetcher(QObject):
     def __init__(self, parent=None, noxp_factory=None):
         super().__init__(parent)
         self._busy = False
+        self._pending = None
+        self._closed = False
         self._lock = threading.Lock()
         # Overridable so tests can substitute a fake NoxpArchive instead of
         # hitting the network; defaults to the real thing.
         self._noxp_factory = noxp_factory or self._default_noxp
+        # Built once and reused across every discover()/load() call, not
+        # once per call -- NoxpArchive.discover() is explicitly written to
+        # resume via its own internal per-URL catalog memo (self._catalogs)
+        # on a repeat call with the same instance, which is exactly what
+        # "NOXP search incomplete ... try again" below promises. A fresh
+        # NoxpArchive() per call (the previous behavior) starts that memo
+        # empty every time, so a deterministic BFS with a fixed budget hits
+        # the exact same wall on every retry -- "try again" silently did
+        # nothing.
+        self._noxp = None
 
     @staticmethod
     def _default_noxp():
         from archive.fetchers.noxp_archive_fetcher import NoxpArchive
         return NoxpArchive(_NOXP_CACHE_DIR)
 
+    def _get_noxp(self):
+        if self._noxp is None:
+            self._noxp = self._noxp_factory()
+        return self._noxp
+
     def _start(self, target) -> bool:
         with self._lock:
-            if self._busy:
+            if self._closed:
                 return False
+            if self._busy:
+                self._pending = target
+                return True
             self._busy = True
         threading.Thread(target=self._run, args=(target,), daemon=True).start()
         return True
 
     def _run(self, target) -> None:
-        try:
-            target()
-        finally:
+        while target is not None:
+            try:
+                target()
+            except Exception:
+                log.exception("NOXP worker failed")
             with self._lock:
-                self._busy = False
+                target = None if self._closed else self._pending
+                self._pending = None
+                if target is None:
+                    self._busy = False
+
+    def shutdown(self):
+        with self._lock:
+            self._closed = True
+            self._pending = None
 
     def discover(self, platform_id: str, catalog_root: str, archive_date: datetime) -> bool:
         """Bounded crawl of one platform's campaign root for one date."""
@@ -172,7 +220,7 @@ class ArchiveNoxpRadarFetcher(QObject):
         archive/catalog.py's module docstring). So: always emit whatever
         real assets were found, and separately surface incompleteness.
         """
-        archive = self._noxp_factory()
+        archive = self._get_noxp()
         try:
             inventory = archive.discover(
                 target=archive_date.date() if isinstance(archive_date, datetime) else archive_date,
@@ -181,6 +229,8 @@ class ArchiveNoxpRadarFetcher(QObject):
         except Exception as exc:  # noqa: BLE001
             log.warning("ArchiveNoxpRadarFetcher: discovery failed for %s: %s", platform_id, exc)
             self.error.emit(f"NOXP discovery failed: {exc}")
+            return
+        if self._closed:
             return
         self.assets_ready.emit(platform_id, inventory.assets)
         if inventory.errors or inventory.pending:
@@ -207,11 +257,12 @@ class ArchiveNoxpRadarFetcher(QObject):
         return self._start(lambda: self._do_load_volume(platform_id, asset))
 
     def _do_load_volume(self, platform_id: str, asset) -> None:
-        archive = self._noxp_factory()
+        archive = self._get_noxp()
         try:
             volume = archive.load(asset)
         except Exception as exc:  # noqa: BLE001
             log.warning("ArchiveNoxpRadarFetcher: load failed for %s: %s", asset.name, exc)
             self.error.emit(f"NOXP volume load failed: {exc}")
             return
-        self.volume_loaded.emit(platform_id, volume)
+        if not self._closed:
+            self.volume_loaded.emit(platform_id, volume)

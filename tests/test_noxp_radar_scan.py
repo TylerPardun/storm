@@ -49,6 +49,18 @@ def test_projected_position_matches_a_hand_computed_point_due_north():
     assert scan.lons[0, 0] == pytest.approx(-97.0, abs=1e-4)
 
 
+def test_az_offset_is_set_to_the_smallest_sorted_azimuth():
+    # Regression test: noxp_volume_to_scan sorts az/data by azimuth (mirrors
+    # ArchiveRadarFetcher._decode) but previously never passed az_offset to
+    # NoxpRadarScan, silently defaulting to 0.0 and assuming ray 0 sits at
+    # true north. A sweep missing its near-0 deg ray then renders rotated by
+    # that gap -- same bug as the WSR-88D archive path.
+    volume = _ppi_volume(n_sweeps=1, n_rays_per_sweep=4, n_gates=1)
+    volume.azimuth_deg[:] = [12.0, 100.0, 200.0, 300.0]
+    scan = noxp_volume_to_scan(volume, sweep_index=0, field_name="DBZ")
+    assert scan.az_offset == pytest.approx(12.0)
+
+
 def test_rhi_unverified_scan_type_is_rejected_before_projection():
     volume = _ppi_volume(scan_type="rhi_unverified")
     with pytest.raises(ValueError, match="rhi_unverified"):
@@ -86,3 +98,45 @@ def test_2d_per_ray_range_from_wdss2_sparse_is_sliced_by_sweep_too():
     scan = noxp_volume_to_scan(volume, sweep_index=1, field_name="DBZ")
     assert scan.data.shape == (2, 2)
     assert scan.lats.shape == (2, 2)
+
+
+def test_noxp_partial_sector_preserves_native_gates_and_units():
+    from ui.map.noxp_overlay import render_noxp_to_png
+    from PIL import Image
+    from io import BytesIO
+    v = _ppi_volume(n_sweeps=1, n_rays_per_sweep=61)
+    v.azimuth_deg = np.linspace(240, 300, 61)
+    v.range_m = np.tile(v.range_m, (61, 1))
+    # Per-ray positions and range spacing must survive rendering.
+    v.latitude = np.full(61, 35.)
+    v.longitude = np.linspace(-97., -97.001, 61)
+    v.range_m[1::2] *= 1.1
+    png, bounds, scan, meta = render_noxp_to_png(v, 0, 'DBZ', 256)
+    pixels = np.asarray(Image.open(BytesIO(png)))
+    assert bounds[2] < -97
+    assert 0 < (pixels[:, :, 3] > 0).mean() < .8
+    assert meta['units'] == 'dBZ'
+    assert meta['rays'] == 61
+    assert scan.native_field == 'DBZ'
+
+
+def test_noxp_site_at_returns_the_volumes_mean_position():
+    from archive.fetchers.noxp_radar_archive_fetcher import noxp_site_at
+    site = noxp_site_at(_ppi_volume())
+    assert site == {"instrument": "NOXP", "lat": 35.0, "lon": -97.0}
+
+
+def test_noxp_site_at_is_independent_of_scan_type():
+    """Unlike noxp_volume_to_scan, a location marker is meaningful even
+    for a volume that can't itself be map-rendered (e.g. RHI)."""
+    from archive.fetchers.noxp_radar_archive_fetcher import noxp_site_at
+    site = noxp_site_at(_ppi_volume(scan_type="rhi_unverified"))
+    assert site == {"instrument": "NOXP", "lat": 35.0, "lon": -97.0}
+
+
+def test_noxp_site_at_returns_none_without_a_usable_position():
+    from archive.fetchers.noxp_radar_archive_fetcher import noxp_site_at
+    volume = _ppi_volume()
+    volume.latitude = np.array([np.nan])
+    volume.longitude = np.array([np.nan])
+    assert noxp_site_at(volume) is None

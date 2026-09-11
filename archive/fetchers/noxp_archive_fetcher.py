@@ -136,6 +136,30 @@ def _year_priority(url, target):
     return 0 if target.year in years else 2
 
 
+_DATED_SUBDIR = re.compile(r'^(\d{8})(?:_.*)?$')
+
+
+def _dated_subdir_mismatch(child_url, target):
+    """True only when this catalog URL's own directory name encodes one
+    specific YYYYMMDD date (e.g. "20130531_moment") that isn't target --
+    safe to skip entirely rather than spend a request opening it. Ambiguous
+    names (no encoded date, e.g. "Ingest"/"Product_Raw") are never skipped
+    this way; unlike _year_priority (ordering only), this actually removes
+    the folder from the crawl, so it stays conservative on purpose."""
+    if target is None or not child_url.endswith('/catalog.html'):
+        return False
+    parts = child_url.rstrip('/').split('/')
+    if len(parts) < 2:
+        return False
+    match = _DATED_SUBDIR.match(parts[-2])
+    if not match:
+        return False
+    try:
+        return datetime.strptime(match[1], '%Y%m%d').date() != target
+    except ValueError:
+        return False
+
+
 class NoxpArchive:
     def __init__(self, cache_dir: Path, fetch_catalog=None):
         from archive.catalog import _fetch_catalog_html
@@ -146,15 +170,28 @@ class NoxpArchive:
     def clear_catalog_cache(self):
         self._catalogs.clear()
 
+    # Sibling catalog pages are independent HTTP GETs of small HTML, not the
+    # bounded radar-volume downloads elsewhere in this codebase that stay
+    # deliberately throttled for memory safety -- fetching a batch of these
+    # concurrently is low-risk and is the single biggest lever on wall-clock
+    # crawl time. Kept moderate (not higher) since this server has shown
+    # WAF/bot-detection sensitivity elsewhere in this codebase.
+    _CONCURRENCY = 6
+
     def discover(self, target: date | None = None, *, cancel=None, budget=80, progress=None, catalog_root=None):
         """Union supported files; retain unknown/budget-limited states.
 
         A second call reuses completed catalogs and spends its budget on the
         remaining pages. No data files or dataset-detail pages are downloaded.
         Folder years only prioritize requests. A complete scan examines every
-        supported branch beneath the declared root, including misdated folders.
+        supported branch beneath the declared root, including misdated
+        folders -- except a folder whose own name encodes one specific date
+        that isn't target (_dated_subdir_mismatch), which is skipped
+        entirely rather than opened, since opening it can only ever be
+        wasted budget.
         """
         from archive.catalog import _check_cancel
+        from concurrent.futures import ThreadPoolExecutor
         cancel = cancel or Event()
         result = RadarInventory()
         start_url = catalog_root or ROOT + 'catalog.html'
@@ -164,51 +201,72 @@ class NoxpArchive:
         queue = deque([start_url])
         visited, assets = set(), {}
         requests = 0
-        while queue:
-            _check_cancel(cancel)
-            url = queue.popleft()
-            if url in visited:
-                continue
-            if url not in self._catalogs and requests >= budget:
-                queue.appendleft(url)
-                break
-            visited.add(url)
+
+        def _fetch_one(url):
+            if url in self._catalogs:
+                return url, self._catalogs[url], None
             try:
-                if url not in self._catalogs:
-                    requests += 1
-                    if cancel.wait(0.2):
-                        _check_cancel(cancel)
-                    html = self.fetch_catalog(url, cancel)
-                    # 404 at a listed child is unresolved, not an empty catalog.
-                    if not html:
-                        raise ValueError('Catalog returned 404')
-                    self._catalogs[url] = parse_catalog(url, html)
-                links = self._catalogs[url]
-                result.catalogs_checked += 1
-                for child in sorted(links.catalogs, reverse=True):
-                    if not child.startswith(url.rsplit('/', 1)[0] + '/') or child == url:
+                html = self.fetch_catalog(url, cancel)
+                # 404 at a listed child is unresolved, not an empty catalog.
+                if not html:
+                    return url, None, ValueError('Catalog returned 404')
+                return url, parse_catalog(url, html), None
+            except Exception as exc:  # noqa: BLE001 -- surfaced per-URL below, not raised here
+                return url, None, exc
+
+        with ThreadPoolExecutor(max_workers=self._CONCURRENCY) as pool:
+            while queue:
+                _check_cancel(cancel)
+                batch = []
+                while queue and len(batch) < self._CONCURRENCY:
+                    url = queue[0]
+                    if url in visited:
+                        queue.popleft()
                         continue
-                    if _excluded(child):
-                        result.excluded.append(child)
-                    else:
-                        queue.append(child)
+                    if url not in self._catalogs and requests + len(batch) >= budget:
+                        break   # leave it queued -- resumes on the next discover() call
+                    batch.append(queue.popleft())
+                if not batch:
+                    break
+                visited.update(batch)
+
+                new_fetches = [u for u in batch if u not in self._catalogs]
+                if new_fetches:
+                    requests += len(new_fetches)
+                    if cancel.wait(0.2):   # one pace per batch, not per request
+                        _check_cancel(cancel)
+
+                for url, links, exc in pool.map(_fetch_one, batch):
+                    _check_cancel(cancel)
+                    if exc is not None:
+                        from archive.catalog import ScanCancelled
+                        if isinstance(exc, ScanCancelled):
+                            raise exc
+                        result.errors.append(f'{url}: {exc}')
+                        continue
+                    self._catalogs[url] = links
+                    result.catalogs_checked += 1
+                    for child in sorted(links.catalogs, reverse=True):
+                        if not child.startswith(url.rsplit('/', 1)[0] + '/') or child == url:
+                            continue
+                        if _excluded(child) or _dated_subdir_mismatch(child, target):
+                            result.excluded.append(child)
+                        else:
+                            queue.append(child)
+                    for child in sorted(links.datasets):
+                        asset = asset_from_url(child)
+                        if asset is None:
+                            result.excluded.append(child)
+                        elif target is None or asset.nominal_time is None or asset.nominal_time.date() <= target <= (asset.nominal_end or asset.nominal_time).date():
+                            assets[child] = asset  # Identity is the locator, never the basename.
+
                 if target is not None:
                     queue = deque(sorted(queue, key=lambda child: _year_priority(child, target)))
-                for child in sorted(links.datasets):
-                    asset = asset_from_url(child)
-                    if asset is None:
-                        result.excluded.append(child)
-                    elif target is None or asset.nominal_time is None or asset.nominal_time.date() <= target <= (asset.nominal_end or asset.nominal_time).date():
-                        assets[child] = asset  # Identity is the locator, never the basename.
                 result.assets = sorted(assets.values(), key=lambda a: (a.nominal_time or datetime.min.replace(tzinfo=timezone.utc), a.catalog_url))
                 result.pending = len(queue)
                 if progress:
                     progress(replace(result, assets=list(result.assets), errors=list(result.errors), excluded=list(result.excluded)))
-            except Exception as exc:
-                from archive.catalog import ScanCancelled
-                if isinstance(exc, ScanCancelled):
-                    raise
-                result.errors.append(f'{url}: {exc}')
+
         result.pending = len(queue)
         result.requests_made = requests
         return result

@@ -339,7 +339,17 @@ class AvailabilityIndex:
                 if dates:
                     self._latest_seen[spec] = max(dates).year
                 age = self._clock() - float(record['checked_at'])
-                if 0 <= age < _CACHE_TTL_SECONDS and (not record.get('error') or record.get('budget_limited')):
+                # A budget_limited record is a real but incomplete crawl --
+                # it used to count as "already checked" here (the `or
+                # record.get('budget_limited')` let an errored record
+                # through the not-error gate), which meant scan()'s `if
+                # spec in self._results: continue` skipped it forever on
+                # every future launch until someone clicked refresh. Its
+                # dates are still loaded above (self._cached_dates) so the
+                # UI shows what's already known immediately; just don't
+                # mark it done, so scan() retries it automatically and
+                # makes further progress on its own.
+                if 0 <= age < _CACHE_TTL_SECONDS and not record.get('error') and not record.get('budget_limited'):
                     self._results[spec] = (dates, record.get('error', ''))
         except (OSError, ValueError, TypeError, KeyError):
             log.warning('Ignoring unreadable archive date cache')

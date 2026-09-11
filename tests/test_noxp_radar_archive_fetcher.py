@@ -31,10 +31,11 @@ def _fetcher(fake):
     return ArchiveNoxpRadarFetcher(noxp_factory=lambda: fake)
 
 
-def test_discover_re_entrancy_guard_blocks_a_second_call_while_busy():
+def test_discover_queues_latest_request_while_busy():
     fetcher = ArchiveNoxpRadarFetcher(noxp_factory=lambda: _FakeNoxp(RadarInventory()))
     fetcher._busy = True
-    assert fetcher.discover("NOXP-2013", "https://example.test/catalog.html", datetime(2013, 5, 31, tzinfo=timezone.utc)) is False
+    assert fetcher.discover("NOXP-2013", "https://example.test/catalog.html", datetime(2013, 5, 31, tzinfo=timezone.utc)) is True
+    assert fetcher._pending is not None
 
 
 def test_do_discover_emits_assets_ready_with_the_real_assets():
@@ -129,3 +130,25 @@ def test_do_load_volume_emits_error_on_failure():
     fetcher._do_load_volume("NOXP-2013", asset)
     assert loaded == []
     assert 'corrupt' in errors[0]
+
+
+def test_noxp_instance_is_reused_across_discover_calls_not_rebuilt():
+    """Regression test: the factory must be called at most once, so repeat
+    discover() calls resume via the same NoxpArchive's internal catalog
+    memo instead of each starting a fresh, empty-memo crawl (which made
+    the "search incomplete ... try again" status a no-op)."""
+    built = []
+
+    def factory():
+        fake = _FakeNoxp(inventory=RadarInventory(assets=[], pending=0))
+        built.append(fake)
+        return fake
+
+    fetcher = ArchiveNoxpRadarFetcher(noxp_factory=factory)
+    fetcher._do_discover("NOXP-2013", "https://example.test/catalog.html",
+                          datetime(2013, 5, 31, tzinfo=timezone.utc))
+    fetcher._do_discover("NOXP-2013", "https://example.test/catalog.html",
+                          datetime(2013, 5, 31, tzinfo=timezone.utc))
+
+    assert len(built) == 1
+    assert len(built[0].discover_calls) == 2

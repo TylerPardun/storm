@@ -40,6 +40,7 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
     map_double_clicked    = pyqtSignal(float, float)
     drawing_clicked       = pyqtSignal(str)
     radar_station_clicked = pyqtSignal(str)
+    platform_marker_clicked = pyqtSignal(str)
     sounding_clicked             = pyqtSignal(float, float)
     obs_sounding_station_clicked = pyqtSignal(str, str, float, float, float)  # id, name, lat, lon, elev
     asos_bbox_selected    = pyqtSignal(float, float, float, float)  # west, south, east, north
@@ -111,6 +112,7 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         self.bridge.map_double_clicked.connect(self.map_double_clicked)
         self.bridge.drawing_clicked.connect(self.drawing_clicked)
         self.bridge.radar_station_clicked.connect(self.radar_station_clicked)
+        self.bridge.platform_marker_clicked.connect(self.platform_marker_clicked)
         self.bridge.sounding_clicked.connect(self.sounding_clicked)
         self.bridge.obs_sounding_station_clicked.connect(self.obs_sounding_station_clicked)
         self.bridge.asos_bbox_selected.connect(self.asos_bbox_selected)
@@ -197,28 +199,30 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         self.run_js(f"stormRemoveVehicle('{vehicle_id}');")
 
     def set_lidar_site(self, site: dict | None):
-        """Selected raw-lidar origin, separate from surface-observation vehicles."""
-        features = [] if site is None else [{
-            "type": "Feature", "geometry": {"type": "Point", "coordinates": [site['lon'], site['lat']]},
-            "properties": {"label": site['instrument']},
-        }]
-        data = json.dumps({"type": "FeatureCollection", "features": features})
-        self.run_js(f"""(function() {{
-            if (typeof map === 'undefined' || !map.isStyleLoaded()) return;
-            const data = {data};
-            if (map.getSource('raw-lidar-site')) {{
-                map.getSource('raw-lidar-site').setData(data);
-            }} else {{
-                map.addSource('raw-lidar-site', {{type: 'geojson', data: data}});
-                map.addLayer({{id: 'raw-lidar-site-dot', type: 'circle', source: 'raw-lidar-site',
-                    paint: {{'circle-radius': 5, 'circle-color': '#00CFFF',
-                        'circle-stroke-color': '#101020', 'circle-stroke-width': 2}}}});
-                map.addLayer({{id: 'raw-lidar-site-label', type: 'symbol', source: 'raw-lidar-site',
-                    layout: {{'text-field': ['get', 'label'], 'text-size': 11,
-                        'text-offset': [0, 1.4], 'text-allow-overlap': true}},
-                    paint: {{'text-color': '#00CFFF', 'text-halo-color': '#101020', 'text-halo-width': 1.5}}}});
-            }}
-        }})();""")
+        """Selected raw-lidar origin, separate from surface-observation
+        vehicles. Uses the same clickable icon marker as vehicles/NOXP
+        (_vIcons["lidar"]) for visual consistency across instrument types."""
+        if site is None:
+            self.run_js("stormRemovePlatformMarker('raw-lidar-site');")
+            return
+        self.run_js(
+            "stormAddPlatformMarker("
+            f"{json.dumps('raw-lidar-site')}, {site['lat']}, {site['lon']}, "
+            f"{json.dumps('#00CFFF')}, {json.dumps('lidar')}, {json.dumps(site['instrument'])});"
+        )
+
+    def set_noxp_site(self, site: dict | None):
+        """Selected NOXP volume's origin -- separate marker id from
+        set_lidar_site so both can be shown at once without clobbering
+        each other. Clicking it emits platform_marker_clicked('noxp')."""
+        if site is None:
+            self.run_js("stormRemovePlatformMarker('noxp');")
+            return
+        self.run_js(
+            "stormAddPlatformMarker("
+            f"{json.dumps('noxp')}, {site['lat']}, {site['lon']}, "
+            f"{json.dumps('#FFB347')}, {json.dumps('radar')}, {json.dumps(site['instrument'])});"
+        )
 
     def set_satellite_frame(self, b64: str, west: float, south: float,
                             east: float, north: float):

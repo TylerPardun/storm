@@ -410,6 +410,8 @@
     function _stormNoop() {}
     window.stormAddVehicle = _stormNoop;
     window.stormRemoveVehicle = _stormNoop;
+    window.stormAddPlatformMarker = _stormNoop;
+    window.stormRemovePlatformMarker = _stormNoop;
     window.stormFlyTo = _stormNoop;
     window.stormFollowMove = _stormNoop;
     window.stormSetFollow = _stormNoop;
@@ -2232,6 +2234,65 @@
 
     window.stormRemoveVehicle = function(id) {
       const el = document.getElementById("vehicle-" + id);
+      if (el && el._stormMarker) el._stormMarker.remove();
+      else if (el) el.remove();
+    };
+
+    // Generic clickable instrument-site marker (NOXP, raw lidar, ...) --
+    // same _vIcons set as vehicles, but a separate "platform-" DOM
+    // namespace so it's never touched by vehicle add/remove/clear logic.
+    window.stormAddPlatformMarker = function(id, lat, lon, color, iconType, hoverText) {
+      const existing = document.getElementById("platform-" + id);
+      var _iconFn = _vIcons[iconType] || _vIcons.radar;
+      var _c = color || "__ACCENT_COLOR__";
+      if (existing) {
+        existing.style.filter = "drop-shadow(0 0 5px " + _c + ")";
+        existing.innerHTML = _iconFn(_c);
+        existing.dataset.hoverText = hoverText || id;
+        if (existing._stormMarker) existing._stormMarker.setLngLat([lon, lat]);
+        return;
+      }
+
+      const el = document.createElement("div");
+      el.id = "platform-" + id;
+      el.style.cssText = "width:28px;height:28px;cursor:pointer;";
+      el.style.filter = "drop-shadow(0 0 5px " + _c + ")";
+      el.innerHTML = _iconFn(_c);
+      el.dataset.hoverText = hoverText || id;
+
+      el.addEventListener("click", function(e) {
+        e.stopPropagation();
+        if (bridge) bridge.on_platform_marker_click(id);
+      });
+      el.addEventListener("mouseenter", function(e) {
+        var tip = document.getElementById("hazard-tooltip");
+        if (tip) {
+          tip.textContent = el.dataset.hoverText || id;
+          tip.style.whiteSpace = "pre-line";
+          tip.style.display = "block";
+          tip.style.left = (e.clientX + 14) + "px";
+          tip.style.top  = (e.clientY - 36) + "px";
+        }
+      });
+      el.addEventListener("mousemove", function(e) {
+        var tip = document.getElementById("hazard-tooltip");
+        if (tip && tip.style.display !== "none") {
+          tip.style.left = (e.clientX + 14) + "px";
+          tip.style.top  = (e.clientY - 36) + "px";
+        }
+      });
+      el.addEventListener("mouseleave", function() {
+        var tip = document.getElementById("hazard-tooltip");
+        if (tip) tip.style.display = "none";
+      });
+
+      el._stormMarker = new maplibregl.Marker({ element: el, anchor: "center" })
+        .setLngLat([lon, lat])
+        .addTo(map);
+    };
+
+    window.stormRemovePlatformMarker = function(id) {
+      const el = document.getElementById("platform-" + id);
       if (el && el._stormMarker) el._stormMarker.remove();
       else if (el) el.remove();
     };

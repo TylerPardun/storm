@@ -286,6 +286,19 @@ class ArchiveVehicleObsFetcher(QObject):
                 result.append((vehicle_id, first.lat, first.lon))
         return result
 
+    def vehicle_positions_near(self, target_time: datetime) -> list[tuple[str, float, float]]:
+        """Same reasoning as ArchiveMQTTReader.vehicle_positions_near: the
+        position nearest target_time, not each vehicle's first-ever fix --
+        a deployment can stage from a base far from the actual intercept,
+        so the day's first position is a poor proxy for where it was."""
+        result = []
+        for vehicle_id, observations in self._observations.items():
+            if not observations:
+                continue
+            nearest = min(observations, key=lambda o: abs((o.timestamp - target_time).total_seconds()))
+            result.append((vehicle_id, nearest.lat, nearest.lon))
+        return result
+
     def _index_at(self, vehicle_id: str, archive_time: datetime) -> int:
         timestamps = self._timestamps.get(vehicle_id)
         if not timestamps:

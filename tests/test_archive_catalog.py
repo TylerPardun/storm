@@ -310,7 +310,16 @@ def test_noxp_startup_has_one_shared_budget_not_thirty_requests_per_branch():
     assert all(not v.complete for v in result.platforms.values())
 
 
-def test_warm_partial_radar_dates_need_no_network_but_stay_partial(tmp_path):
+def test_budget_limited_noxp_dates_show_immediately_and_retry_automatically(tmp_path):
+    """A budget-limited (incomplete) crawl used to get cached as "already
+    checked" permanently -- previously-cached_error `or budget_limited`
+    let it through the not-error gate in _read_cache(), so scan()'s `if
+    spec in self._results: continue` skipped it forever on every future
+    launch, and a genuinely incomplete campaign (NOXP-2013 in practice)
+    never made further progress without an explicit manual refresh. It
+    should now surface its already-found dates immediately on the next
+    launch (no network needed for that), but still retry the crawl itself
+    automatically rather than being silently skipped forever."""
     platform = _noxp_platform()
     inventory = RadarInventory(assets=[_asset('NOX100430145529.RAW8K8H',
         datetime(2010, 4, 30, 14, 55, 29, tzinfo=timezone.utc))], requests_made=2, pending=50)
@@ -319,11 +328,17 @@ def test_warm_partial_radar_dates_need_no_network_but_stay_partial(tmp_path):
     first = cat.AvailabilityIndex([platform], lambda *a: '', pace=0, noxp=noxp, cache_path=path)
     list(first.scan(Event()))
     noxp.calls.clear()
+
     second = cat.AvailabilityIndex([platform], lambda *a: '', pace=0, noxp=noxp, cache_path=path)
-    result = list(second.scan(Event()))[-1]
+    # already-found dates show immediately -- no network call needed for that.
+    assert second.snapshot().dates == {date(2010, 4, 30)}
     assert noxp.calls == []
+
+    result = list(second.scan(Event()))[-1]
+    # but the incomplete crawl is retried automatically, not skipped forever.
+    assert len(noxp.calls) == 1
     assert result.dates == {date(2010, 4, 30)}
-    assert result.cached and not result.platforms[platform.platform_id].complete
+    assert not result.platforms[platform.platform_id].complete
 
 
 def test_calendar_parser_keeps_one_presence_token_per_day_not_all_files():

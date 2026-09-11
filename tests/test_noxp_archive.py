@@ -177,3 +177,89 @@ def test_requested_year_runs_first_without_claiming_other_branches_absent(tmp_pa
     result = NoxpArchive(tmp_path, fetch).discover(date(2022, 9, 28), budget=2)
     assert calls == [root, current]
     assert result.pending == 1 and not result.complete
+
+
+def test_radar_asset_has_no_url_only_catalog_url():
+    """Regression test for an AttributeError that crashed the app: unlike
+    LidarAsset (raw_lidar_archive_fetcher.py), which has a real .url
+    property, RadarAsset only carries catalog_url -- the actual download
+    URL isn't resolved until deep inside NoxpArchive.load(). MainWindow's
+    NOXP handlers must key off catalog_url (which NoxpArchive.load()
+    preserves into the loaded volume's provenance), not a nonexistent
+    .url attribute."""
+    from archive.fetchers.noxp_archive_fetcher import RadarAsset
+    asset = RadarAsset(
+        catalog_url='https://example.test/catalog.html?dataset=NSSL/NOXP/2013/x.RAWETW4',
+        name='x.RAWETW4', format='sigmet',
+        nominal_time=datetime(2013, 5, 31, 21, 44, 5, tzinfo=timezone.utc),
+    )
+    assert not hasattr(asset, 'url')
+    assert asset.catalog_url == 'https://example.test/catalog.html?dataset=NSSL/NOXP/2013/x.RAWETW4'
+
+
+def test_dated_subdirectory_mismatch_is_skipped_without_spending_a_request(tmp_path):
+    """A folder whose own name encodes one specific date that isn't the
+    target (e.g. "20130409_moment" when searching 2013-05-31) should never
+    be opened at all -- the whole point is not spending a request on it."""
+    root = ROOT + 'catalog.html'
+    moment = ROOT + 'moment2013/catalog.html'
+    wrong_day = ROOT + 'moment2013/20130409_moment/catalog.html'
+    right_day = ROOT + 'moment2013/20130531_moment/catalog.html'
+    right_day_file = right_day + '?dataset=NSSL/NOXP/2013/moment2013/20130531_moment/NOX130531214405.RAWETW4'
+    pages = {
+        root: f'<a href="{moment}">moment2013</a>',
+        moment: f'<a href="{wrong_day}">a</a><a href="{right_day}">b</a>',
+        right_day: f'<a href="{right_day_file}">f</a>',
+    }
+    fetched = []
+
+    def fetch(url, cancel):
+        fetched.append(url)
+        if url == wrong_day:
+            raise AssertionError('wrong_day should never be fetched at all')
+        return pages[url]
+
+    adapter = NoxpArchive(tmp_path, fetch)
+    result = adapter.discover(date(2013, 5, 31), budget=10)
+
+    assert wrong_day not in fetched
+    assert right_day in fetched
+    assert wrong_day in result.excluded
+    assert {a.catalog_url for a in result.assets} == {right_day_file}
+
+
+def test_ambiguous_subdirectory_names_are_never_skipped_by_date_pruning(tmp_path):
+    """A folder name with no encoded date (e.g. VORTEX2's "Ingest") must
+    still always be visited -- date pruning only ever removes folders it's
+    certain don't match, never ones it's merely unsure about."""
+    root = ROOT + 'catalog.html'
+    ingest = ROOT + 'Vortex/2010/Ingest/catalog.html'
+    pages = {root: f'<a href="{ingest}">Ingest</a>', ingest: ''}
+    fetched = []
+
+    def fetch(url, cancel):
+        fetched.append(url)
+        return pages[url]
+
+    adapter = NoxpArchive(tmp_path, fetch)
+    adapter.discover(date(2013, 5, 31), budget=10)
+
+    assert ingest in fetched
+
+
+def test_sibling_catalog_pages_are_fetched_even_beyond_serial_expectations(tmp_path):
+    """Regression guard for the batched-concurrency rewrite: a wide set of
+    sibling pages (more than one batch's worth) must all still be reached
+    and unioned correctly, not just the first _CONCURRENCY of them."""
+    root = ROOT + 'catalog.html'
+    siblings = [ROOT + f'2013/day{i:02d}/catalog.html' for i in range(10)]
+    files = {s: s + f'?dataset=NSSL/NOXP/2013/day{i:02d}/f{i}.netcdf'
+             for i, s in enumerate(siblings)}
+    pages = {root: ''.join(f'<a href="{s}">s</a>' for s in siblings)}
+    pages.update({s: f'<a href="{files[s]}">f</a>' for s in siblings})
+
+    adapter = NoxpArchive(tmp_path, lambda u, c: pages[u])
+    result = adapter.discover(budget=50)
+
+    assert result.complete
+    assert {a.catalog_url for a in result.assets} == set(files.values())

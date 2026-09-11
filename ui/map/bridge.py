@@ -16,6 +16,7 @@ class MapBridge(QObject):
     map_double_clicked    = pyqtSignal(float, float)
     drawing_clicked       = pyqtSignal(str)
     radar_station_clicked = pyqtSignal(str)
+    platform_marker_clicked = pyqtSignal(str)
     sounding_clicked             = pyqtSignal(float, float)
     obs_sounding_station_clicked = pyqtSignal(str, str, float, float, float)  # id, name, lat, lon, elev
     asos_bbox_selected = pyqtSignal(float, float, float, float)
@@ -85,6 +86,10 @@ class MapBridge(QObject):
     @pyqtSlot(str)
     def on_radar_station_click(self, site_id: str):
         self.radar_station_clicked.emit(site_id)
+
+    @pyqtSlot(str)
+    def on_platform_marker_click(self, platform_id: str):
+        self.platform_marker_clicked.emit(platform_id)
 
     @pyqtSlot(str)
     def on_js_console(self, msg: str):

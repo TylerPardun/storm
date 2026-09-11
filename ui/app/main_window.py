@@ -417,6 +417,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_vehicle_obs_started = False
         self._archive_vehicle_obs_from_catalog = False
         self._archive_vehicle_obs_roster_size = 0
+        self._archive_vehicle_obs_loaded = False
+        # True while _try_auto_select_radar_station is waiting on the dense
+        # observation source (see its own docstring) rather than having
+        # already fallen back to home.
+        self._radar_station_awaiting_dense_obs = False
 
         # hazard fetcher.
         self._archive_hazard = ArchiveHazardFetcher(
@@ -438,11 +443,19 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._sounding_dialog = SoundingDialog(self)
         self._archive_sounding = ArchiveSoundingFetcher(parent=self)
         self._archive_sounding.sounding_ready.connect(self._on_sounding_ready)
+        self._archive_sounding.coptersondes_ready.connect(self._on_archive_coptersondes_ready)
         self._archive_sounding.fetch_error.connect(
             lambda msg: self.status_msg_label.setText(f"Sounding: {msg}")
         )
         # also initialise the sounding-station layer so the map shows clickable sites.
         self._sounding_stations_geojson = build_stations_geojson()
+
+        from archive.fetchers.clamps_surface_playback import ClampsSurfacePlayback
+        self._archive_clamps_surface = ClampsSurfacePlayback(self)
+        self._archive_clamps_surface.loaded.connect(self._on_clamps_surface_loaded)
+        self._archive_clamps_surface.error.connect(lambda msg: self.status_msg_label.setText(f"CLAMPS surface: {msg}"))
+        self._time_ctrl.time_changed.connect(self._update_clamps_surface)
+        self._archive_clamps_surface.load(self._archive_time)
 
         # CLAMPS wind profiles (VAD dialog reuse; on-demand, like soundings).
         self._archive_clamps_wind = ArchiveClampsWindFetcher(parent=self)
@@ -458,12 +471,29 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if feature_flags.is_enabled("noxp_radar"):
             from archive.fetchers.noxp_radar_archive_fetcher import ArchiveNoxpRadarFetcher
             self._noxp_current_volume = None
+            self._noxp_overlay = None
+            self._noxp_generation = 0
+            self._noxp_render_busy = False
+            self._noxp_render_pending = None
+            self._noxp_asset_url = None
+            # True while MAP is checked -- makes newly-loaded volumes keep
+            # rendering instead of set_volume_summary's default "a fresh
+            # load always clears MAP" behavior, and drives
+            # _on_time_changed_update_noxp_overlay's auto-advance below.
+            self._noxp_map_follow_clock = False
+            # Cached separately from ArchiveControls' scan-step buttons,
+            # which only ever hold one active list -- swapped in/out of
+            # them as NOXP MAP toggles (see _on_noxp_map_toggled) so
+            # switching back to WSR-88D doesn't need a re-fetch.
+            self._wsr88d_scan_times: list[str] = []
+            self._noxp_scan_times: list[str] = []
             self._archive_noxp = ArchiveNoxpRadarFetcher(parent=self)
             self._archive_noxp.assets_ready.connect(self._on_archive_noxp_assets_ready)
             self._archive_noxp.volume_loaded.connect(self._on_archive_noxp_volume_loaded)
             self._archive_noxp.error.connect(
                 lambda msg: self.status_msg_label.setText(f"NOXP: {msg}")
             )
+            self._time_ctrl.time_changed.connect(self._on_time_changed_update_noxp_overlay)
 
         # CLAMPS raw lidar quicklook (discovers every known source once per
         # archive date; on-demand load of one selected file).
@@ -594,7 +624,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         # station (see _try_auto_select_radar_station) -- so Radar always
         # finishes last. Listing them in that order keeps the checkmarks
         # cascading top-to-bottom instead of appearing out of sequence.
-        loading_tasks = ["SPC & NWS", "Satellite", "Mesonets", "Radar"]
+        # Mobile Radar (NOXP) is a bounded THREDDS crawl -- slower and less
+        # predictable than any of the above -- so it goes last of all.
+        loading_tasks = ["SPC & NWS", "Satellite", "Mesonets", "Radar", "Mobile Radar"]
         self._archive_loading = ArchiveLoadingDialog(
             session_label=self._archive_time.strftime("%Y-%m-%d  %H:%M UTC"),
             tasks=loading_tasks,
@@ -639,6 +671,57 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         QTimer.singleShot(400, _check_mqtt_loaded)
         QTimer.singleShot(400, _check_hazard_loaded)
+
+        # Mobile Radar (NOXP): find this case's own campaign by year and
+        # search it for this specific day automatically -- no manual
+        # Campaign/Volume picking. NoxpArchive.discover() resumes via its
+        # own internal catalog memo on a repeat call against the same
+        # instance (see ArchiveNoxpRadarFetcher._get_noxp), so retrying
+        # here actually makes progress instead of re-crawling from
+        # scratch. "Nothing found" is the normal case (NOXP is rarely
+        # deployed) -- times out to done, not an error.
+        if self._archive_noxp is not None:
+            from archive.catalog import ALL_PLATFORMS, catalogs_for_platform
+            _year_str = str(self._archive_time.year)
+            _noxp_platform = next(
+                (p for p in ALL_PLATFORMS if p.family == "NOXP Radar" and _year_str in p.display_name),
+                None,
+            )
+            if _noxp_platform is None:
+                self._archive_loading.set_task_done("Mobile Radar")
+            else:
+                self.noxp_controls.select_campaign_for_year(self._archive_time.year)
+                _noxp_catalog_root = catalogs_for_platform(_noxp_platform)[0].url
+                _noxp_target_day = self._archive_time.date()
+                _noxp_retries = {"n": 0}
+
+                def _on_noxp_startup_assets(platform_id, assets, _platform=_noxp_platform, _day=_noxp_target_day):
+                    if platform_id != _platform.platform_id or not self._archive_loading.isVisible():
+                        return
+                    matching = [a for a in assets if a.nominal_time is not None and a.nominal_time.date() == _day]
+                    if not matching:
+                        return   # crawl still incomplete or genuinely nothing here -- _retry_noxp_discovery decides
+                    self._archive_loading.set_task_done("Mobile Radar")
+                    try:
+                        self._archive_noxp.assets_ready.disconnect(_on_noxp_startup_assets)
+                    except (TypeError, RuntimeError):
+                        pass
+                    nearest = min(matching, key=lambda a: abs((a.nominal_time - self._archive_time).total_seconds()))
+                    self._on_noxp_asset_selected(nearest)
+
+                self._archive_noxp.assets_ready.connect(_on_noxp_startup_assets)
+
+                def _retry_noxp_discovery(_platform=_noxp_platform, _root=_noxp_catalog_root):
+                    if not self._archive_loading.isVisible():
+                        return
+                    _noxp_retries["n"] += 1
+                    if _noxp_retries["n"] > 15:   # ~45s of retries at 3s apart
+                        self._archive_loading.set_task_done("Mobile Radar")
+                        return
+                    self._archive_noxp.discover(_platform.platform_id, _root, self._archive_time)
+                    QTimer.singleShot(3000, _retry_noxp_discovery)
+
+                _retry_noxp_discovery()
 
         self._archive_loading.show()
         # trigger an initial data load for all fetchers once loading completes.
@@ -731,6 +814,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_vehicle_obs.load(vehicles)
 
     def _on_archive_vehicle_obs_loaded(self, vehicle_ids: set[str]) -> None:
+        self._archive_vehicle_obs_loaded = True
+        if self._radar_station_awaiting_dense_obs:
+            self._radar_station_awaiting_dense_obs = False
+            self._try_auto_select_radar_station()
+
         total = self._archive_vehicle_obs_roster_size
         if not vehicle_ids:
             status = (
@@ -754,31 +842,72 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _try_auto_select_radar_station(self) -> None:
         """Pick the nearest NEXRAD station to where the deployment actually
         was at the requested archive start time, or fall back to the home
-        location when no MQTT data is available. Deliberately uses the
-        position nearest self._archive_time rather than the day's first GPS
-        fix -- a deployment can stage from a base far from the actual storm
-        intercept, so the day's first position is a poor proxy for where
-        the probes ended up."""
+        location when no position data is available at all. Deliberately
+        uses the position nearest self._archive_time rather than the day's
+        first GPS fix -- a deployment can stage from a base far from the
+        actual storm intercept, so the day's first position is a poor
+        proxy for where the probes ended up.
+
+        The coarse MQTT vehicles topic (ArchiveMQTTReader) can genuinely
+        have no history for a date STORM wasn't deployed/connected for --
+        _start_archive_vehicle_obs already has its own fallback for this
+        exact case (admin-only dense/1-second observations, probing the
+        full FOFS roster directly), so before giving up to the home
+        location this also waits for and checks that richer source rather
+        than declaring "no vehicle positions" while it's simply still
+        loading.
+        """
         if not hasattr(self, "_archive_mqtt"):
             return
         positions = self._archive_mqtt.vehicle_positions_near(self._archive_time)
         if positions:
-            _, lat, lon = positions[0]
-            site = self._nearest_nexrad(lat, lon, archive=True)
-        else:
-            log.info(
-                "Archive: no vehicle positions — falling back to home location "
-                "(%.3f, %.3f) for radar station selection",
-                config.HOME_LAT, config.HOME_LON,
-            )
-            site = self._nearest_nexrad(config.HOME_LAT, config.HOME_LON, archive=True)
+            self._finish_radar_station_selection(positions, "MQTT")
+            return
 
+        dense = getattr(self, "_archive_vehicle_obs", None)
+        if dense is not None and not self._archive_vehicle_obs_loaded:
+            # Still loading (started just before this call, in
+            # _check_mqtt_loaded) -- _on_archive_vehicle_obs_loaded will
+            # call this again once it's ready, instead of this falling
+            # back to home immediately.
+            self._radar_station_awaiting_dense_obs = True
+            return
+        if dense is not None:
+            positions = dense.vehicle_positions_near(self._archive_time)
+            if positions:
+                self._finish_radar_station_selection(positions, "1-second archive")
+                return
+
+        log.info(
+            "Archive: no vehicle positions from any source — falling back to "
+            "home location (%.3f, %.3f) for radar station selection",
+            config.HOME_LAT, config.HOME_LON,
+        )
+        self._apply_radar_station(self._nearest_nexrad(config.HOME_LAT, config.HOME_LON, archive=True))
+
+    def _finish_radar_station_selection(self, positions, source: str) -> None:
+        vehicle_id, lat, lon = positions[0]
+        site = self._nearest_nexrad(lat, lon, archive=True)
+        log.info(
+            "Archive: radar station selected from %s (%s) at (%.4f, %.4f) "
+            "(nearest reported position to the requested %s start time) -> %s",
+            vehicle_id, source, lat, lon, self._archive_time.isoformat(), site,
+        )
+        if len(positions) > 1:
+            log.info(
+                "Archive: %d vehicles reported at that same timestamp; "
+                "used the first (%s) -- others: %s",
+                len(positions), vehicle_id,
+                [(v, round(la, 4), round(lo, 4)) for v, la, lo in positions[1:]],
+            )
+        self._apply_radar_station(site)
+
+    def _apply_radar_station(self, site: "str | None") -> None:
         if not site:
             self.status_msg_label.setText(
                 "Could not determine radar station — select one on the map"
             )
             return
-
         self._archive_session.radar_station = site
         self._start_archive_radar(site)
 
@@ -840,7 +969,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         )
         self._archive_radar.scan_ready.connect(self._on_archive_radar_scan)
         if hasattr(self, "_archive_controls"):
-            self._archive_radar.index_loaded.connect(self._archive_controls.set_available_scan_times)
+            self._archive_radar.index_loaded.connect(self._on_archive_radar_index_loaded)
         self._archive_radar.loading_changed.connect(
             lambda loading: (
                 self.status_msg_label.setText(f"Radar: loading {station}…" if loading else ""),
@@ -1028,6 +1157,20 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._layout_overlays()
         if self.btn_satellite.isChecked():
             self.map_widget.set_satellite_visible(True)
+
+    def _on_clamps_surface_loaded(self, rows):
+        self._archive_clamps_surface.install(rows)
+        self._update_clamps_surface(self._time_ctrl.current_time)
+
+    def _update_clamps_surface(self, when):
+        for key in self._archive_clamps_surface.rows:
+            obs = self._archive_clamps_surface.at(key, when)
+            if obs is None:
+                self._hide_vehicle(key)
+            else:
+                vehicle = self._vehicles.get(key)
+                if vehicle is None or vehicle.latest_obs is not obs:
+                    self.update_vehicle_obs(obs)
 
     def _on_archive_vehicle_position(self, obs) -> None:
         """Update a vehicle marker from the MQTT archive."""
@@ -1438,11 +1581,18 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.noxp_controls.set_platforms(
                 [p for p in _ALL_PLATFORMS if p.family == "NOXP Radar"]
             )
+            # Pre-select the campaign matching this case's year so opening
+            # the drawer searches it first, instead of always starting from
+            # whatever the first registered campaign happens to be --
+            # that's the "search through all years" friction this removes.
+            self.noxp_controls.select_campaign_for_year(self._archive_time.year)
             self.btn_noxp.toggled.connect(self.noxp_controls.toggle_drawer)
+            self.map_widget.platform_marker_clicked.connect(self._on_platform_marker_clicked)
             self.btn_noxp.toggled.connect(self._start_layout_pulse)
             self.noxp_controls.platform_selected.connect(self._on_noxp_platform_selected)
             self.noxp_controls.asset_selected.connect(self._on_noxp_asset_selected)
             self.noxp_controls.render_requested.connect(self._on_noxp_render_requested)
+            self.noxp_controls.map_toggled.connect(self._on_noxp_map_toggled)
 
         if self._archive and feature_flags.is_enabled("raw_lidar_quicklook"):
             self.btn_raw_lidar = self._toolbar_toggle(
@@ -1490,6 +1640,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             "SOUNDING", "HRRR and observed soundings", tb
         )
         self.sounding_controls = SoundingControls(self._map_container)
+        if self._archive:
+            self.sounding_controls._btn_copter.show()
+            self.sounding_controls.coptersonde_selected.connect(self._on_sounding_ready)
         self.sounding_controls.setObjectName("floatingToolbar")
         self.btn_sounding.toggled.connect(self.sounding_controls.toggle_drawer)
         self.btn_sounding.toggled.connect(self._start_layout_pulse)
@@ -1815,6 +1968,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._lidar_overlay_platform_id = None
         self._lidar_overlay_rays = None
         self._lidar_overlay_pending = False
+        self._noxp_generation = getattr(self, '_noxp_generation', 0) + 1
+        self._noxp_render_pending = None
+        if getattr(self, '_archive_noxp', None) is not None:
+            self._archive_noxp.shutdown()
+        if getattr(self, "_archive_clamps_surface", None) is not None:
+            self._archive_clamps_surface.shutdown()
         _s = QSettings("NSSL", "STORM")
         _s.setValue("geometry", self.saveGeometry())
         _s.setValue("windowState", self.saveState())
@@ -3899,6 +4058,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if hasattr(self, "map_widget"):
             self.map_widget.set_route_pick_mode(False)
 
+    def _on_archive_coptersondes_ready(self, sets):
+        if self.sounding_controls.active_mode != 'coptersonde':
+            return
+        self.sounding_controls.set_coptersondes(sets)
+        self.status_msg_label.setText(f"CopterSonde: {len(sets)} site(s)" if sets else "No CopterSonde profiles for this date")
+
     def _on_sounding_mode_changed(self, mode: str):
         """Called when the user switches between HRRR, OBS, and NSSL in the sub-bar."""
         if not self.btn_sounding.isChecked():
@@ -3915,6 +4080,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 self.map_widget.set_sounding_mode(False)
                 self.map_widget.set_sounding_stations(self._sounding_stations_geojson)
                 self.map_widget.set_obs_sounding_mode(True)
+            elif mode == "coptersonde":
+                self.map_widget.set_sounding_mode(False)
+                self.map_widget.set_obs_sounding_mode(False)
+                self.map_widget.clear_sounding_stations()
+                self.status_msg_label.setText("Fetching CopterSonde profiles…")
+                self._archive_sounding.fetch_coptersondes()
             else:  # nssl
                 self.map_widget.set_sounding_mode(False)
                 self.map_widget.set_obs_sounding_mode(False)
@@ -4030,7 +4201,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             if nssl and nssl_within_radius_km(nssl.lat, nssl.lon, sset.lat, sset.lon):
                 available["nssl"] = {}
 
-        elif sset.source == "nssl":
+        elif sset.source in ("nssl", "coptersonde", "clamps_tropoe"):
             if sset.lat != 0.0 or sset.lon != 0.0:
                 available["hrrr"] = {"lat": sset.lat, "lon": sset.lon}
                 obs = nearest_obs_station(sset.lat, sset.lon)
@@ -4106,13 +4277,13 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if not sets:
             self.status_msg_label.setText("CLAMPS wind: no data for this date")
             return
-        # More than one platform can have data on a given date; show
-        # whichever sorts first for now. Picking among several is a later
-        # UI improvement once that's a common case rather than the
-        # exception it is today.
         platform_id = sorted(sets)[0]
-        note = f" ({len(sets)} platforms available)" if len(sets) > 1 else ""
-        self.status_msg_label.setText(f"CLAMPS wind: showing {platform_id}{note}")
+        if len(sets) > 1:
+            from PyQt6.QtWidgets import QInputDialog
+            platform_id, accepted = QInputDialog.getItem(self, "CLAMPS wind profiles", "Instrument", sorted(sets), 0, False)
+            if not accepted:
+                return
+        self.status_msg_label.setText(f"CLAMPS wind: {platform_id}")
         from ui.dialogs.vad_dialog import VADDialog
         dlg = VADDialog(platform_id, parent=self, preloaded_set=sets[platform_id])
         dlg.exec()
@@ -4126,6 +4297,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             return
         catalog_root = catalogs_for_platform(platform)[0].url
         self.status_msg_label.setText(f"NOXP: searching {platform.display_name}…")
+        self.map_widget.set_noxp_site(None)   # stale marker from a previous campaign
         if not self._archive_noxp.discover(platform_id, catalog_root, self._archive_time):
             self.status_msg_label.setText("NOXP: search already in progress")
 
@@ -4138,57 +4310,127 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             return  # a later platform selection has already superseded this result
         self.noxp_controls.set_assets(assets)
         self.status_msg_label.setText(f"NOXP: {len(assets)} volume(s) found")
+        self._noxp_scan_times = [
+            a.nominal_time.strftime("%Y-%m-%dT%H:%M:%SZ") for a in assets if a.nominal_time is not None
+        ]
+        if self._noxp_map_follow_clock:
+            self._archive_controls.set_available_scan_times(self._noxp_scan_times)
+
+    def _on_archive_radar_index_loaded(self, iso_times: list[str]) -> None:
+        self._wsr88d_scan_times = iso_times
+        if not self._noxp_map_follow_clock:
+            self._archive_controls.set_available_scan_times(iso_times)
 
     def _on_noxp_asset_selected(self, asset) -> None:
         platform = self.noxp_controls.current_platform()
         if platform is None:
             return
+        # RadarAsset has no .url (unlike LidarAsset) -- catalog_url is the
+        # identifier available both now (from the asset) and later (NoxpArchive
+        # .load() preserves it verbatim into the loaded volume's provenance),
+        # since the actual resolved download URL isn't known until deep
+        # inside load() and can't be compared against at request time.
+        self._noxp_asset_url = asset.catalog_url
         self.status_msg_label.setText(f"NOXP: loading {asset.name}…")
         if not self._archive_noxp.load_volume(platform.platform_id, asset):
             self.status_msg_label.setText("NOXP: load already in progress")
 
     def _on_archive_noxp_volume_loaded(self, platform_id: str, volume) -> None:
+        platform = self.noxp_controls.current_platform()
+        if platform is None or platform.platform_id != platform_id or volume.provenance.get('catalog_url') != self._noxp_asset_url:
+            return
         self._noxp_current_volume = volume
-        self.noxp_controls.set_volume_summary(volume)
+        self.noxp_controls.set_volume_summary(volume, keep_map_on=self._noxp_map_follow_clock)
         self.status_msg_label.setText(f"NOXP: {volume.scan_type} volume loaded ({volume.provenance.get('format', '?')})")
+        # Plot the instrument's location as soon as we know it -- no LOCATE
+        # click needed, since the case's day/time is already what's being
+        # looked at. Independent of scan_type (meaningful for RHI too).
+        from archive.fetchers.noxp_radar_archive_fetcher import noxp_site_at
+        self.map_widget.set_noxp_site(noxp_site_at(volume))
+
+    def _on_noxp_map_toggled(self, checked):
+        self._noxp_generation += 1
+        self._noxp_map_follow_clock = checked
+        # Don't show two competing radar images at once -- hide (not stop)
+        # WSR-88D while NOXP is plotting; fetching/decoding keeps running so
+        # switching back is instant, not a fresh fetch.
+        if hasattr(self, "_radar_overlay"):
+            if checked:
+                self._radar_overlay.hide(transient=False)
+            elif self._current_radar_scan is not None:
+                self._archive_pending_render_scan = self._current_radar_scan
+                self._submit_pending_archive_render()
+        # The scan-step (prev/next scan) buttons follow whichever radar is
+        # actually being displayed.
+        if hasattr(self, "_archive_controls"):
+            self._archive_controls.set_available_scan_times(
+                self._noxp_scan_times if checked else self._wsr88d_scan_times
+            )
+        if not checked and self._noxp_overlay is not None:
+            self._noxp_overlay.clear()
+
+    def _on_platform_marker_clicked(self, platform_id: str) -> None:
+        if platform_id == "noxp" and hasattr(self, "btn_noxp"):
+            self.btn_noxp.setChecked(True)
+
+    def _on_time_changed_update_noxp_overlay(self, when) -> None:
+        """Auto-advance NOXP's loaded volume as the archive clock moves,
+        same idea as the CLAMPS lidar overlay -- MAP should track "now,"
+        not stay pinned to whatever volume was picked when it was checked.
+        Unlike lidar (one file already holds a whole day of rays to slice),
+        each NOXP volume is a separate discovered file, so this means
+        picking the nearest-time asset and fetching it, not just re-slicing
+        already-loaded data."""
+        if not self._noxp_map_follow_clock:
+            return
+        asset = self.noxp_controls.asset_near(when)
+        if asset is None or asset.catalog_url == self._noxp_asset_url:
+            return
+        self.noxp_controls.set_current_asset_silently(asset)
+        self._on_noxp_asset_selected(asset)
 
     def _on_noxp_render_requested(self, sweep_index: int, field_name: str) -> None:
         if self._noxp_current_volume is None:
             return
-        from archive.fetchers.noxp_radar_archive_fetcher import noxp_volume_to_scan
-        try:
-            scan = noxp_volume_to_scan(self._noxp_current_volume, sweep_index, field_name)
-        except ValueError as exc:
-            self.status_msg_label.setText(f"NOXP: {exc}")
+        self._noxp_generation += 1
+        request = (self._noxp_current_volume, sweep_index, field_name, self._noxp_generation)
+        if self._noxp_render_busy:
+            self._noxp_render_pending = request
             return
-        self.status_msg_label.setText(f"NOXP: rendering sweep {sweep_index} ({field_name})…")
+        self._start_noxp_render(request)
+
+    def _start_noxp_render(self, request):
+        self._noxp_render_busy = True
+        threading.Thread(target=self._bg_render_noxp, args=request, daemon=True).start()
+
+    def _bg_render_noxp(self, volume, sweep, field, generation):
+        from ui.map.noxp_overlay import render_noxp_to_png
         from ui.map.radar_overlay import RENDER_GRID_SIZE
-        threading.Thread(
-            target=self._bg_render_noxp, args=(scan, max(RENDER_GRID_SIZE, 768)), daemon=True,
-        ).start()
-
-    def _bg_render_noxp(self, scan, grid_size: int) -> None:
-        """A NOXP render is a discrete, user-triggered one-shot -- unlike the
-        continuously-advancing NEXRAD archive playback, there's no in-flight
-        render to preempt, so this doesn't need that pipeline's
-        generation-tracking, just the same render + inject calls."""
         try:
-            png, bounds, _ = _render_scan_to_png(scan, grid_size)
+            png, bounds, scan, metadata = render_noxp_to_png(volume, sweep, field, RENDER_GRID_SIZE)
+            result = {"png": png, "bounds": bounds, "scan": scan, "metadata": metadata}
         except Exception as exc:
-            log.error("NOXP render failed: %s", exc)
-            self._noxp_render_ready.emit({"error": str(exc)})
-            return
-        self._noxp_render_ready.emit({"png": png, "bounds": bounds, "scan": scan})
+            log.exception("NOXP render failed")
+            result = {"error": str(exc)}
+        self._noxp_render_ready.emit({**result, "generation": generation})
 
-    def _on_noxp_render_ready(self, result: dict) -> None:
-        if "error" in result:
-            self.status_msg_label.setText(f"NOXP: render error — {result['error']}")
+    def _on_noxp_render_ready(self, result):
+        self._noxp_render_busy = False
+        pending = self._noxp_render_pending
+        self._noxp_render_pending = None
+        if pending is not None and pending[-1] == self._noxp_generation:
+            self._start_noxp_render(pending)
+        if result['generation'] != self._noxp_generation or not self.noxp_controls._btn_render.isChecked():
             return
-        self._radar_overlay.inject(result["png"], result["bounds"])
-        scan = result["scan"]
-        self.status_msg_label.setText(
-            f"NOXP: {scan.native_field} {scan.elevation_deg:.1f}° {scan.scan_time.strftime('%H:%MZ')}"
-        )
+        if 'error' in result:
+            self.status_msg_label.setText(f"NOXP: {result['error']}")
+            return
+        if self._noxp_overlay is None:
+            self._noxp_overlay = RadarOverlay(self.map_widget, layer_id='noxp-overlay', source_id='noxp-image', use_scheme_handler=False)
+        self._noxp_overlay.inject(result['png'], result['bounds'])
+        scan = result['scan']
+        meta = result['metadata']
+        self.noxp_controls.set_status(f"{scan.native_field} · {meta['vmin']:g} … {meta['vmax']:g} {meta['units']} · {scan.scan_time:%H:%M:%S}Z")
 
     # -- CLAMPS raw lidar quicklook (archive) ---------------------------
 
@@ -6300,6 +6542,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if not hasattr(self, "_archive_mqtt") or not hasattr(self, "_time_ctrl"):
             return []
 
+        surface = getattr(self, "_archive_clamps_surface", None)
+        if surface is not None and vehicle_id in surface.rows:
+            return surface.history(vehicle_id, self._time_ctrl.current_time)
         dense_obs = getattr(self, "_archive_vehicle_obs", None)
         if (
             dense_obs is not None

@@ -51,8 +51,8 @@ DEPLOY_LOCS_FILE = str(_PROJ / "locs" / "deployment_locations.csv")
 # pbkdf2-HMAC-SHA256 hashes (600 000 iterations) of the passphrases required
 VEHICLE_PASSPHRASE_HASH = "CeNUNJ5o6dIu9Jgi3CKTIw==:E70QJVtj0v5u91wuOJEQJPDG+CJML30lCW+2BqzcLhM="
 MONITOR_PASSPHRASE_HASH = "AYxyUvyUW9hzxWA7UMtNfA==:Bi6XDsi3+E52eLhEP7sT80Effgm3l6mAeKCEpNGNdqY="
-ARCHIVE_PASSPHRASE_HASH = "O3uHJWRbpiJXzOOqTNrGLA==:LecEzsMFUFlijFzJpTlz8PaWGtxuTVx+l0ShiguqoVE="
-ADMIN_PASSPHRASE_HASH = "N44K/AWhoT+O08E33gdLvg==:EbVnqJ4r5oRxSR2BjtxlRwpUjJOJoUe0oiIfFJQNUbM="
+ARCHIVE_PASSPHRASE_HASH = "6mdUm9+kU1fQ3G03Nk2pjA==:awD9zaS5oWYlDYGcty7jUjYlJKZnWSILyYU78dXav+A="  # TEMP dev/test passphrase: storm-test-2026 — restore original hash when done testing
+ADMIN_PASSPHRASE_HASH = "b6KVDOcOm3JtxqwHF4hBUA==:PqRF/nvXPkOW6fzIN15CoxNivGBIwbTXHFwSnzzrVBA="  # TEMP dev/test passphrase: storm-admin-test-2026 — distinct from ARCHIVE_PASSPHRASE_HASH on purpose (admin mode needs both fields filled in); replace before any non-dev push
 
 # accent color
 ACCENT_COLOR = "#00CFFF"

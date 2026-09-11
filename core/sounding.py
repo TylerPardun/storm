@@ -90,6 +90,10 @@ class SoundingSet:
         return self.source == "nssl"
 
     @property
+    def is_coptersonde(self) -> bool:
+        return self.source == "coptersonde"
+
+    @property
     def is_clamps_tropoe(self) -> bool:
         """True when this set came from a CLAMPS AERI/MWR TROPoe thermodynamic
         retrieval (a remote-sensing profile, not an in-situ radiosonde launch --

@@ -117,12 +117,14 @@ class SoundingDialog(QDialog):
         self._sset = sset
 
         # check if this is an observed, NSSL, or CLAMPS TROPoe sounding set
-        if sset.is_observed or sset.is_nssl or sset.is_clamps_tropoe:
+        if sset.is_observed or sset.is_nssl or sset.is_clamps_tropoe or sset.is_coptersonde:
             # default to the most recent (last) sounding
             self._cur_idx = len(sset.soundings) - 1
             self._source_cur_idx[sset.source] = self._cur_idx
             if sset.is_nssl:
                 title = "NSSL Observed Sounding"
+            elif sset.is_coptersonde:
+                title = "CopterSonde Profile"
             elif sset.is_clamps_tropoe:
                 title = "CLAMPS TROPoe Profile"
             else:
@@ -162,7 +164,7 @@ class SoundingDialog(QDialog):
         self._sources[src] = sset
         self._enabled_sources.add(src)
         # pick best matching index: for HRRR secondary snap to F0; for OBS/NSSL/TROPoe use latest
-        if sset.is_observed or sset.is_nssl or sset.is_clamps_tropoe:
+        if sset.is_observed or sset.is_nssl or sset.is_clamps_tropoe or sset.is_coptersonde:
             self._source_cur_idx[src] = len(sset.soundings) - 1
         else:
             self._source_cur_idx[src] = next(
@@ -508,7 +510,7 @@ class SoundingDialog(QDialog):
         self._scrubber.blockSignals(False)
 
         # for obs/nssl: show the day number if any two soundings share the same hour.
-        time_based = self._sset.is_observed or self._sset.is_nssl or self._sset.is_clamps_tropoe
+        time_based = self._sset.is_observed or self._sset.is_nssl or self._sset.is_clamps_tropoe or self._sset.is_coptersonde
         snd_hours = (
             [s.valid_time.strftime("%H%d") for s in self._sset.soundings]
             if time_based else []
@@ -534,7 +536,7 @@ class SoundingDialog(QDialog):
             lbl = _lbl(f_str, color=_MUTED, size=8,
                        align=Qt.AlignmentFlag.AlignCenter)
             lbl.setWordWrap(True)
-            lbl.setFixedWidth(36)
+            lbl.setFixedWidth(48 if self._sset.is_coptersonde else 36)
             self._tick_labels.append(lbl)
             self._tick_row.addWidget(lbl)
             if i < count - 1:
@@ -578,6 +580,9 @@ class SoundingDialog(QDialog):
             self._header_line2.setText(
                 f"Valid {valid_str}  ·  {self._sset.elevation:.0f} m MSL"
             )
+        elif self._sset.is_coptersonde:
+            self._header_line1.setText(f"CopterSonde · {self._sset.station_name}")
+            self._header_line2.setText(f"Valid {snd.valid_time:%H:%MZ %d %b %Y} · {snd.lat:.3f}, {snd.lon:.3f}")
         elif self._sset.is_clamps_tropoe:
             valid_str = snd.valid_time.strftime("%H%MZ %d %b %Y")
             self._header_line1.setText(

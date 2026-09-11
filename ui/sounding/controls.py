@@ -1,5 +1,5 @@
 
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QFrame, QToolButton
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QFrame, QToolButton, QComboBox
 from PyQt6.QtCore import pyqtSignal, QPropertyAnimation, QEasingCurve, Qt
 
 
@@ -11,6 +11,7 @@ class SoundingControls(QWidget):
         [OBS]   — radiosonde station dots appear; click one to fetch observed data
     """
 
+    coptersonde_selected = pyqtSignal(object)
     mode_changed   = pyqtSignal(str)   # "hrrr", "obs", or "nssl"
     content_resized = pyqtSignal()     # triggers layout pulse in main_window
 
@@ -43,6 +44,12 @@ class SoundingControls(QWidget):
         self._btn_hrrr = self._btn("HRRR")
         self._btn_obs  = self._btn("OBS")
         self._btn_nssl = self._btn("NSSL")
+        self._btn_copter = self._btn("COPTERSONDE")
+        self._btn_copter.hide()
+        self._btn_copter.toggled.connect(lambda on: self._on_mode_toggled("coptersonde", on))
+        self._copter_combo = QComboBox()
+        self._copter_combo.hide()
+        self._copter_combo.currentIndexChanged.connect(self._on_copter_selected)
 
         self._btn_hrrr.setChecked(True)   # default source
 
@@ -55,6 +62,8 @@ class SoundingControls(QWidget):
         row.addWidget(self._btn_obs)
         row.addWidget(self._vdiv())
         row.addWidget(self._btn_nssl)
+        row.addWidget(self._btn_copter)
+        row.addWidget(self._copter_combo)
         row.addStretch(1)
 
         col.addWidget(btn_row)
@@ -79,7 +88,7 @@ class SoundingControls(QWidget):
             # prevent both buttons from being unchecked simultaneously
             if self._active_mode == mode:
                 # re-check the button that was just unchecked
-                btn = {"hrrr": self._btn_hrrr, "obs": self._btn_obs, "nssl": self._btn_nssl}[mode]
+                btn = {"hrrr": self._btn_hrrr, "obs": self._btn_obs, "nssl": self._btn_nssl, "coptersonde": self._btn_copter}[mode]
                 btn.blockSignals(True)
                 btn.setChecked(True)
                 btn.blockSignals(False)
@@ -92,12 +101,14 @@ class SoundingControls(QWidget):
             (self._btn_hrrr, "hrrr"),
             (self._btn_obs,  "obs"),
             (self._btn_nssl, "nssl"),
+            (self._btn_copter, "coptersonde"),
         ):
             if btn_mode != mode:
                 btn.blockSignals(True)
                 btn.setChecked(False)
                 btn.blockSignals(False)
 
+        self._copter_combo.setVisible(mode == "coptersonde" and self._copter_combo.count() > 0)
         self.mode_changed.emit(mode)
 
 
@@ -128,14 +139,32 @@ class SoundingControls(QWidget):
     def reset_to_hrrr(self):
         """Silently reset to HRRR mode (called when SOUNDING button is deactivated)."""
         self._active_mode = "hrrr"
-        for btn in (self._btn_hrrr, self._btn_obs, self._btn_nssl):
+        for btn in (self._btn_hrrr, self._btn_obs, self._btn_nssl, self._btn_copter):
             btn.blockSignals(True)
         self._btn_hrrr.setChecked(True)
         self._btn_obs.setChecked(False)
         self._btn_nssl.setChecked(False)
-        for btn in (self._btn_hrrr, self._btn_obs, self._btn_nssl):
+        self._btn_copter.setChecked(False)
+        self._copter_combo.hide()
+        for btn in (self._btn_hrrr, self._btn_obs, self._btn_nssl, self._btn_copter):
             btn.blockSignals(False)
 
     @property
     def active_mode(self) -> str:
         return self._active_mode
+
+    def set_coptersondes(self, sets):
+        self._copter_combo.blockSignals(True)
+        self._copter_combo.clear()
+        for key, profiles in sorted(sets.items()):
+            self._copter_combo.addItem(key, profiles)
+        self._copter_combo.blockSignals(False)
+        self._copter_combo.setVisible(self.active_mode == 'coptersonde' and bool(sets))
+        self.content_resized.emit()
+        if sets:
+            self._on_copter_selected()
+
+    def _on_copter_selected(self, _index=None):
+        profiles = self._copter_combo.currentData()
+        if profiles is not None and self.active_mode == 'coptersonde':
+            self.coptersonde_selected.emit(profiles)

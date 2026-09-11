@@ -42,6 +42,7 @@ class ArchiveSoundingFetcher(QObject):
     fetch_error(str)
     """
 
+    coptersondes_ready = pyqtSignal(object)
     sounding_ready = pyqtSignal(object)   # SoundingSet
     fetch_error    = pyqtSignal(str)
 
@@ -89,6 +90,20 @@ class ArchiveSoundingFetcher(QObject):
             daemon=True,
         ).start()
 
+
+    def fetch_coptersondes(self):
+        t = self._current_archive_time
+        if t is not None:
+            threading.Thread(target=self._do_fetch_coptersondes, args=(t,), daemon=True).start()
+
+    def _do_fetch_coptersondes(self, t):
+        from archive.fetchers.coptersonde_archive_fetcher import fetch_coptersonde_soundings
+        try:
+            sets = fetch_coptersonde_soundings(t)
+            if self._current_archive_time is not None and self._current_archive_time.date() == t.date():
+                self.coptersondes_ready.emit(sets)
+        except Exception as exc:
+            self.fetch_error.emit(f"CopterSonde: {exc}")
 
     def _do_fetch_model(self, lat: float, lon: float, t: datetime) -> None:
         try:

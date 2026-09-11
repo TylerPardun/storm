@@ -189,6 +189,8 @@ def fetch_coptersonde_soundings(archive_date: datetime) -> "dict[str, SoundingSe
     by_site: dict[str, list[Sounding]] = {}
 
     for year, iop in KNOWN_PERILS_IOPS:
+        if str(year) != str(archive_date.year):
+            continue
         filenames = _list_catalog_filenames(year, iop)
         for filename in filenames:
             m = _FILENAME_RE.match(filename)

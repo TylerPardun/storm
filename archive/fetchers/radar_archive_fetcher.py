@@ -562,6 +562,16 @@ class ArchiveRadarFetcher(QObject):
             available_tilts=available_tilts,
             available_products=available_products,
             pyart_field=product,
+            # _sample_scan_to_grid (ui/map/radar_overlay.py) maps ray index
+            # -> azimuth by uniform division of 360 deg, assuming row 0 sits
+            # at az_offset. Rows here are sorted by azimuth above, so
+            # azimuths[0] is whatever the *smallest* azimuth in this
+            # particular scan happens to be -- not reliably 0 deg. A scan
+            # missing its near-0 deg ray (or any other completeness quirk)
+            # then renders rotated by that gap until the next, more-complete
+            # scan resets it. The live decoder (data/radar/radar_decoder.py)
+            # already sets this correctly; the archive path never did.
+            az_offset=float(azimuths[0]),
         )
         scan.tilt_index = tilt_idx
         return scan

@@ -143,6 +143,34 @@ def test_missing_product_does_not_silently_render_reflectivity(monkeypatch):
     fetcher.shutdown()
 
 
+def _volume_missing_first_radial():
+    # Azimuths deliberately don't include anything near 0 deg -- e.g. a
+    # dropped/missing radial near true north, a real WSR-88D data artifact.
+    # After ArchiveRadarFetcher._decode sorts by azimuth, the smallest value
+    # present (12.0) is not 0, so az_offset must be set to 12.0, not default
+    # to 0.0, or _sample_scan_to_grid renders every ray rotated by 12 deg.
+    import numpy as np
+    def sweep(moment, value):
+        return [SimpleNamespace(
+            header=SimpleNamespace(el_angle=0.5, az_angle=az),
+            vol_consts=SimpleNamespace(lat=35.3, lon=-97.3),
+            moments={moment: (SimpleNamespace(first_gate=0.25, gate_width=0.25), np.array([value, value]))},
+        ) for az in (12.0, 100.0, 200.0, 300.0)]
+    return SimpleNamespace(sweeps=[sweep(b'REF', 30), sweep(b'VEL', 10), sweep(b'SW', 5)])
+
+
+def test_decode_sets_az_offset_to_the_smallest_sorted_azimuth(monkeypatch):
+    # Regression test: archive _decode() previously omitted az_offset
+    # entirely from the Level2RadarScan(...) call, silently defaulting to
+    # 0.0 and assuming ray 0 always sits at true north. Mirrors the live
+    # decoder's az_offset=float(azimuths[0]) pattern (data/radar/radar_decoder.py).
+    fetcher = _fetcher()
+    monkeypatch.setattr(fetcher, '_get_parsed', lambda *args: _volume_missing_first_radial())
+    scan = fetcher._decode(_SCAN_TIME, b'', product='reflectivity', tilt_idx=0)
+    assert scan.az_offset == 12.0
+    fetcher.shutdown()
+
+
 def test_shutdown_keeps_files_until_running_task_finishes():
     import threading
     from pathlib import Path

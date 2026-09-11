@@ -203,7 +203,7 @@ def parse_clamps_surface_netcdf(data: bytes, platform_id: str, trust_wind_direct
 
         lat = float(lat_arr[i]) if per_record_location else site_lat
         lon = float(lon_arr[i]) if per_record_location else site_lon
-        if per_record_location and not (_valid(lat) and _valid(lon)):
+        if not (_valid(lat) and _valid(lon) and abs(lat) <= 90 and abs(lon) <= 180 and (lat, lon) != (0, 0)):
             continue
 
         rh = sfc_rh[i]
@@ -229,9 +229,12 @@ def parse_clamps_surface_netcdf(data: bytes, platform_id: str, trust_wind_direct
 
 def fetch_clamps_surface_observations(archive_date: datetime) -> "list[Observation] | None":
     """Try each known source in preference order (met tower before MWR,
-    per-platform) and return the first with data for this date."""
+    per-platform), retaining every platform with data for this date."""
     date_str = archive_date.strftime("%Y%m%d")
+    by_platform = {}
     for source in KNOWN_CLAMPS_SURFACE_SOURCES:
+        if source.platform_id in by_platform:
+            continue
         url = _find_file(source, date_str)
         if url is None:
             continue
@@ -251,6 +254,6 @@ def fetch_clamps_surface_observations(archive_date: datetime) -> "list[Observati
             continue
 
         if observations:
-            return observations
+            by_platform[source.platform_id] = observations
 
-    return None
+    return sorted((obs for rows in by_platform.values() for obs in rows), key=lambda obs: obs.timestamp) or None

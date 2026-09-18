@@ -489,11 +489,19 @@ def _parse_mcd_shapefile_zip(zip_bytes: bytes, filter_time: datetime) -> list:
     return features
 
 
-def _parse_shp(data: bytes) -> list:
+def _parse_shp(data: bytes, transform=None) -> list:
     """
     Minimal parser for ESRI Shapefile (.shp).
     Supports Polygon (type 5) only.  Returns a list of GeoJSON geometry dicts
     (or None for null/unsupported records).
+
+    `transform`, if given, is a callable (x, y) -> (x2, y2) applied to every
+    raw point as it's read -- SPC's shapefiles store coordinates in a
+    projected CRS (Lambert Conformal Conic; see
+    _parse_outlook_shapefile_zip), not GeoJSON's required WGS84 lon/lat, so
+    the real caller always passes a proper reprojection. None (the
+    default) is an identity no-op, kept for callers/tests that already
+    hand in lon/lat-like values directly.
     """
     if len(data) < 100:
         return []
@@ -538,7 +546,10 @@ def _parse_shp(data: bytes) -> list:
         part_starts = list(struct.unpack_from(f"<{num_parts}i", data, offset))
         offset += num_parts * 4
         pts_raw = struct.unpack_from(f"<{num_points * 2}d", data, offset)
-        points = [(pts_raw[i * 2], pts_raw[i * 2 + 1]) for i in range(num_points)]
+        if transform is None:
+            points = [(pts_raw[i * 2], pts_raw[i * 2 + 1]) for i in range(num_points)]
+        else:
+            points = [transform(pts_raw[i * 2], pts_raw[i * 2 + 1]) for i in range(num_points)]
 
         # split points into rings using part_starts.
         rings = []
@@ -616,6 +627,24 @@ def _archive_spc_shapefile_zip_url(day: int, cycle: datetime) -> str:
     )
 
 
+def _shapefile_lonlat_transform(prj_wkt: str):
+    """Build an (x, y) -> (lon, lat) callable from a shapefile's own .prj
+    (ESRI WKT) contents. Confirmed live (2026-09) against a real archive
+    zip: SPC's outlook shapefiles are Lambert Conformal Conic (standard
+    parallels 33N/45N, central meridian 0), not GeoJSON's required WGS84
+    lon/lat -- every product's .prj in a given zip carries the identical
+    definition. Raw .shp coordinates used directly as lon/lat (this
+    fallback's original behavior) put every polygon at a wildly wrong
+    location -- e.g. one real Oklahoma categorical-outlook ring's raw
+    coordinates inverse-projected as plain Web Mercator landed in
+    northern Canada, nowhere near the visible map extent.
+    """
+    from pyproj import CRS, Transformer
+    crs = CRS.from_wkt(prj_wkt)
+    transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+    return lambda x, y: transformer.transform(x, y)
+
+
 def _parse_outlook_shapefile_zip(zip_bytes: bytes) -> dict[str, list[dict]]:
     """Parse a pre-2020 outlook zip into {suffix: [GeoJSON Feature, ...]},
     keyed by the same suffix strings _archive_product_suffixes /
@@ -633,13 +662,29 @@ def _parse_outlook_shapefile_zip(zip_bytes: bytes) -> dict[str, list[dict]]:
         return {}
 
     names = zf.namelist()
+    # Every product's .prj in a real zip carries the identical projection
+    # (confirmed live) -- read whichever one is present once, rather than
+    # re-parsing it per suffix. Without a usable transform, raw .shp
+    # coordinates (a projected CRS, not lon/lat) would misplace every
+    # polygon, so this is treated the same as an unreadable zip rather
+    # than silently emitting geometry at the wrong location.
+    prj_name = next((n for n in names if n.lower().endswith(".prj")), None)
+    if prj_name is None:
+        log.warning("Outlook shapefile zip: no .prj found; refusing to guess a coordinate system")
+        return {}
+    try:
+        transform = _shapefile_lonlat_transform(zf.read(prj_name).decode("ascii", errors="replace"))
+    except Exception as exc:
+        log.warning("Outlook shapefile zip: could not parse %s: %s", prj_name, exc)
+        return {}
+
     by_suffix: dict[str, list[dict]] = {}
     for suffix in ("cat", "wind", "hail", "torn", "sigwind", "sighail", "sigtorn"):
         shp_name = next((n for n in names if n.lower().endswith(f"_{suffix}.shp")), None)
         dbf_name = next((n for n in names if n.lower().endswith(f"_{suffix}.dbf")), None)
         if not shp_name or not dbf_name:
             continue
-        geometries = _parse_shp(zf.read(shp_name))
+        geometries = _parse_shp(zf.read(shp_name), transform=transform)
         records = _parse_dbf(zf.read(dbf_name))
 
         features = []

@@ -147,6 +147,32 @@
       z-index: 200;
     }
 
+    #damage-path-tooltip {
+      display: none;
+      position: absolute;
+      pointer-events: none;
+      background: rgba(15, 15, 26, 0.94);
+      border: 1px solid #49536F;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-family: "Helvetica Neue", sans-serif;
+      font-size: 11px;
+      font-weight: 500;
+      color: #E8EDF5;
+      line-height: 1.5;
+      white-space: nowrap;
+      z-index: 200;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+    }
+    #damage-path-tooltip .title {
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    #damage-path-tooltip .muted {
+      color: #8E97AB;
+      font-weight: 500;
+    }
+
     #private-pin-menu {
       display: none;
       position: absolute;
@@ -400,6 +426,9 @@
 
   <!-- ── Hazard Hover Tooltip ── -->
   <div id="hazard-tooltip"></div>
+
+  <!-- ── Damage Path Hover Readout (EF scale, times, length/width/wind) ── -->
+  <div id="damage-path-tooltip"></div>
 
   <script>
     window.onerror = function(msg, src, line) {
@@ -1825,6 +1854,46 @@
       tip.style.display = 'block';
     }
 
+    // starttime/endtime are epoch milliseconds (see
+    // archive/fetchers/damage_paths_archive_fetcher.py), not a date string --
+    // new Date(String(ms)) would misparse a raw number, so this takes the
+    // number directly.
+    function _fmtDamagePathTime(ms) {
+      if (ms == null) return '—';
+      var d = new Date(Number(ms));
+      if (isNaN(d.getTime())) return '—';
+      return d.toISOString().replace('T', ' ').replace('.000Z', ' UTC');
+    }
+
+    function _showDamagePathHover(feature, e) {
+      var tip = document.getElementById('damage-path-tooltip');
+      if (!tip) return;
+      var p = feature.properties || {};
+      var coords = (feature.geometry && feature.geometry.coordinates) || null;
+      var lat = e.lngLat.lat, lon = e.lngLat.lng;
+      if (Array.isArray(coords) && coords.length === 2 && typeof coords[0] === 'number') {
+        lon = coords[0]; lat = coords[1];
+      }
+      var length = p.length != null ? Number(p.length).toFixed(1) + ' mi' : '—';
+      var width = p.width != null ? Number(p.width).toFixed(0) + ' yd' : '—';
+      var wind = p.maxwind != null ? Number(p.maxwind).toFixed(0) + ' mph' : '—';
+      tip.innerHTML =
+        '<div class="title">' + (p.ef_label || 'Damage path') +
+        ' <span class="muted">' + (p.damage_source || 'Damage path') + '</span></div>' +
+        '<div>' + _fmtDamagePathTime(p.starttime) + ' → ' + _fmtDamagePathTime(p.endtime) + '</div>' +
+        '<div>Len ' + length + '  ·  Width ' + width + '  ·  Wind ' + wind + '</div>' +
+        '<div class="muted">Lat ' + lat.toFixed(4) + '  Lon ' + lon.toFixed(4) + '</div>';
+      var mc = map.getContainer().getBoundingClientRect();
+      tip.style.left = (e.originalEvent.clientX - mc.left + 14) + 'px';
+      tip.style.top  = (e.originalEvent.clientY - mc.top  - 10) + 'px';
+      tip.style.display = 'block';
+    }
+
+    function _hideDamagePathHover() {
+      var tip = document.getElementById('damage-path-tooltip');
+      if (tip) tip.style.display = 'none';
+    }
+
     map.on("mousemove", function(e) {
       if (bridge) bridge.on_map_move(e.lngLat.lat, e.lngLat.lng, map.getZoom());
       if (window._measureAnchor && map.getSource('measure-rubber')) {
@@ -1881,24 +1950,24 @@
         var _hits = _hazardLayers.length > 0
           ? map.queryRenderedFeatures(e.point, {layers: _hazardLayers})
           : [];
-        // Damage-path hover uses the same shared tooltip -- queried
-        // separately (not folded into _hazardLayers) so that array's
-        // existing hazard-specific semantics/filtering stay untouched.
+        // Damage paths get their own richer, multi-line readout (EF scale,
+        // start/end time, length/width/wind, lat/lon -- like MESO-VIEW's
+        // own damage-track hover) instead of folding into the single-line
+        // shared hazard tooltip below, queried separately so _hits' own
+        // hazard-specific semantics/filtering stay untouched.
         var _dmgHits = (map.getLayer('damage-paths-hit') &&
                         map.getLayoutProperty('damage-paths-hit', 'visibility') === 'visible')
           ? map.queryRenderedFeatures(e.point, {layers: ['damage-paths-hit']})
           : [];
-        if (_hits.length > 0 || _dmgHits.length > 0) {
+        if (_dmgHits.length > 0) {
+          _showDamagePathHover(_dmgHits[0], e);
+        } else {
+          _hideDamagePathHover();
+        }
+        if (_hits.length > 0) {
           // build a label for every unique product under the cursor.
           var _tipParts = [];
           var _tipSeen = {};
-          if (_dmgHits.length > 0) {
-            var _dp = _dmgHits[0].properties || {};
-            var _dpBits = [_dp.ef_label || 'Damage path'];
-            if (_dp.length != null) _dpBits.push(Number(_dp.length).toFixed(1) + 'mi');
-            _dpBits.push(_dp.damage_source || 'Damage path');
-            _tipParts.push(_dpBits.join(' · '));
-          }
           // probabilistic layers first — _spcProbLabel merges CIG/significant + prob.
           [['spc-tor','Tor'],['spc-wind','Wind'],['spc-hail','Hail'],['spc-prob','Prob'],['spc-sig','Sig']].forEach(function(pv) {
             var l = _spcProbLabel(pv[1], _hits, pv[0]);
@@ -1939,8 +2008,8 @@
           } else {
             _htip.style.display = 'none';
           }
-        } else {
-          // no hazard or CWA hit — check for a nearby surface station.
+        } else if (_dmgHits.length === 0) {
+          // no hazard, CWA, or damage-path hit — check for a nearby surface station.
           var _stLabel = null;
           if (window._stormSurfacePlotsVisible && window._stormSurfaceRegistry) {
             try {
@@ -3693,6 +3762,7 @@
     window.stormClearDamagePaths = function() {
       var src = map.getSource('damage-paths');
       if (src) src.setData({type:'FeatureCollection', features:[]});
+      _hideDamagePathHover();
     };
 
     window.stormSetDestinationMarker = function(lon, lat) {

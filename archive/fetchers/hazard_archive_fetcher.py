@@ -28,6 +28,14 @@ _IEM_MCD_GIS_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/gis/spc_mc
 _SPC_OUTLOOK_ARCHIVE = "https://www.spc.noaa.gov/products/outlook/archive"
 _SPC_EXTENDED_OUTLOOK_ARCHIVE = "https://www.spc.noaa.gov/products/exper/day4-8/archive"
 
+# SPC only started publishing day1/2 outlooks as .lyr.geojson on 2020-01-01;
+# before that the archive only has the shapefile zip (day{N}otlk_..._-shp.zip,
+# one zip per cycle bundling every product's .shp/.dbf together, unlike the
+# geojson path which is one file per product). Confirmed by HEAD request:
+# .../2019/day1otlk_20190608_1300_wind.lyr.geojson -> 404
+# .../2019/day1otlk_20190608_1300-shp.zip -> 200
+_SPC_CAT_DN_LABELS = {2: "MRGL", 3: "SLGT", 4: "ENH", 5: "MDT", 6: "HIGH"}
+
 # cache resolution for time-varying fetches.
 _CACHE_MINUTES = 5
 
@@ -256,6 +264,7 @@ class ArchiveHazardFetcher(QObject):
             candidates = _outlook_cycle_candidates(cycle, day)
             products = _archive_product_suffixes(day)
             sig_products = _archive_sig_suffixes(day)
+            any_found = False
 
             for key, suffix in products.items():
                 found = False
@@ -290,9 +299,11 @@ class ArchiveHazardFetcher(QObject):
                         )
                 if not found:
                     results[key] = _EMPTY_FC
+                any_found = any_found or found
 
             for key, suffix in sig_products.items():
                 base_key = key if key in ("prob", "sig") else key
+                found = False
                 for ct in candidates:
                     url = _archive_spc_url(day, ct, suffix)
                     try:
@@ -314,6 +325,7 @@ class ArchiveHazardFetcher(QObject):
                                 results.get(key, _EMPTY_FC),
                                 sig_geojson,
                             )
+                        found = True
                         break
                     except Exception as exc:
                         log.warning(
@@ -323,6 +335,58 @@ class ArchiveHazardFetcher(QObject):
                             ct.strftime("%Y%m%d_%H%M"),
                             exc,
                         )
+                any_found = any_found or found
+
+            # SPC only started publishing day1/2 outlooks as .lyr.geojson on
+            # 2020-01-01 -- every candidate above 404s for anything older,
+            # silently (a 404 is treated as "try the next candidate", not an
+            # error), which is why this could fail with no warning logged at
+            # all. Older dates are only in the archive as one shapefile zip
+            # per cycle bundling every product together; try it once, across
+            # the same candidate cycles, only once the geojson path has
+            # genuinely found nothing (2020+ dates always succeed above and
+            # never reach this).
+            if not any_found and day in (1, 2):
+                for ct in candidates:
+                    zip_url = _archive_spc_shapefile_zip_url(day, ct)
+                    try:
+                        resp = requests.get(zip_url, timeout=20)
+                        if resp.status_code == 404:
+                            continue
+                        resp.raise_for_status()
+                    except Exception as exc:
+                        log.warning(
+                            "ArchiveHazardFetcher: day %s outlook shapefile zip @ %s failed: %s",
+                            day, ct.strftime("%Y%m%d_%H%M"), exc,
+                        )
+                        continue
+                    by_suffix = _parse_outlook_shapefile_zip(resp.content)
+                    if not by_suffix:
+                        continue
+                    log.info(
+                        "ArchiveHazardFetcher: day %s outlook found via pre-2020 shapefile archive at %s",
+                        day, ct.strftime("%Y%m%d_%H%M"),
+                    )
+                    for key, suffix in products.items():
+                        features = by_suffix.get(suffix, [])
+                        results[key] = json.dumps({"type": "FeatureCollection", "features": features})
+                    for key, suffix in sig_products.items():
+                        sig_features = by_suffix.get(suffix, [])
+                        if not sig_features:
+                            continue
+                        for f in sig_features:
+                            f["properties"]["LABEL"] = "SIGN"
+                        sig_geojson = json.dumps({"type": "FeatureCollection", "features": sig_features})
+                        if key == "sig":
+                            results["sig"] = sig_geojson
+                        else:
+                            results[key] = _merge_significant_geojson(
+                                results.get(key, _EMPTY_FC),
+                                sig_geojson,
+                            )
+                    break
+                else:
+                    log.warning("ArchiveHazardFetcher: day %s outlook not found for any candidate cycle (geojson or shapefile)", day)
 
             payload = (
                 results.get("categorical", _EMPTY_FC),
@@ -523,6 +587,76 @@ def _parse_dbf(data: bytes) -> list:
         rec_pos += record_bytes
 
     return records
+
+
+def _archive_spc_shapefile_zip_url(day: int, cycle: datetime) -> str:
+    """Pre-2020 day1/2 outlook archive URL -- one zip per cycle, bundling
+    every product's .shp/.dbf/.prj together (unlike the per-product
+    .lyr.geojson files _archive_spc_url builds for 2020+)."""
+    return (
+        f"{_SPC_OUTLOOK_ARCHIVE}/{cycle.strftime('%Y')}/"
+        f"day{day}otlk_{cycle.strftime('%Y%m%d')}_{cycle.strftime('%H%M')}-shp.zip"
+    )
+
+
+def _parse_outlook_shapefile_zip(zip_bytes: bytes) -> dict[str, list[dict]]:
+    """Parse a pre-2020 outlook zip into {suffix: [GeoJSON Feature, ...]},
+    keyed by the same suffix strings _archive_product_suffixes /
+    _archive_sig_suffixes use (cat, wind, hail, torn, sigwind, sighail,
+    sigtorn) -- one member pair per suffix, named
+    day{N}otlk_..._{suffix}.shp/.dbf. Each record's only real field is a
+    numeric DN: the categorical outlook's risk-level code (2-6, mapped via
+    _SPC_CAT_DN_LABELS) or the probabilistic layers' percent-contour value,
+    which _spc_prob_label already reads directly off props["DN"].
+    """
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    except zipfile.BadZipFile as exc:
+        log.warning("Outlook shapefile zip: bad zip: %s", exc)
+        return {}
+
+    names = zf.namelist()
+    by_suffix: dict[str, list[dict]] = {}
+    for suffix in ("cat", "wind", "hail", "torn", "sigwind", "sighail", "sigtorn"):
+        shp_name = next((n for n in names if n.lower().endswith(f"_{suffix}.shp")), None)
+        dbf_name = next((n for n in names if n.lower().endswith(f"_{suffix}.dbf")), None)
+        if not shp_name or not dbf_name:
+            continue
+        geometries = _parse_shp(zf.read(shp_name))
+        records = _parse_dbf(zf.read(dbf_name))
+
+        features = []
+        for geom, rec in zip(geometries, records):
+            if geom is None:
+                continue
+            dn_raw = rec.get("DN")
+            try:
+                dn = int(dn_raw) if dn_raw is not None else None
+            except (TypeError, ValueError):
+                dn = None
+            if dn is None:
+                continue
+            if suffix.startswith("sig") and dn <= 0:
+                # DN=0 on a sig* layer is SPC's "no significant risk"
+                # placeholder -- the shapefile format needs at least one
+                # record even when there's nothing to draw, so it ships a
+                # degenerate polygon instead of an empty file. Confirmed
+                # against a real archive day (2019-06-08): sigwind/sigtorn
+                # both carried a tiny throwaway DN=0 polygon that day, while
+                # sighail's real DN=10 significant-hail contour came through
+                # as expected. Rendering the DN=0 one would draw a false
+                # "significant" overlay where none exists.
+                continue
+            props = dict(rec, DN=dn)
+            if suffix == "cat":
+                label = _SPC_CAT_DN_LABELS.get(dn)
+                if label is None:
+                    continue
+                props["LABEL"] = label
+            features.append({"type": "Feature", "geometry": geom, "properties": props})
+        by_suffix[suffix] = features
+
+    return by_suffix
 
 
 def _parse_yyyymmddHHMM(s: str) -> Optional[datetime]:

@@ -10,8 +10,11 @@ import io
 import struct
 import zipfile
 
+import json
+
 from archive.fetchers.hazard_archive_fetcher import (
     _archive_spc_shapefile_zip_url,
+    _normalize_archive_spc_geojson,
     _parse_outlook_shapefile_zip,
 )
 
@@ -134,3 +137,49 @@ def test_missing_member_pair_is_absent_not_a_crash():
 
 def test_bad_zip_bytes_return_empty_not_a_crash():
     assert _parse_outlook_shapefile_zip(b"not a zip file") == {}
+
+
+def _normalize(kind, features, **kwargs):
+    raw = json.dumps({"type": "FeatureCollection", "features": features})
+    return json.loads(_normalize_archive_spc_geojson(kind, raw, **kwargs))
+
+
+def test_shapefile_categorical_features_get_the_cat_property_the_frontend_colors_by():
+    # Regression test: _fetch_outlook's shapefile-fallback branch used to
+    # serialize _parse_outlook_shapefile_zip's raw features directly,
+    # which carry DN/LABEL but never props["cat"] -- the property
+    # spc-cat-fill's paint expression (ui/map/map_template.html) actually
+    # matches on. Every shapefile-sourced categorical feature silently
+    # fell through to that match expression's default color regardless of
+    # its real risk level, confirmed live on a real case (2010-05-10,
+    # where a DN=6/HIGH area rendered as plain MRGL green).
+    zip_bytes = _build_outlook_zip(1, "20190608_2000", {
+        "cat": [(_TRIANGLE, 2), (_TRIANGLE, 4), (_TRIANGLE, 6)],
+    })
+    by_suffix = _parse_outlook_shapefile_zip(zip_bytes)
+    fc = _normalize("categorical", by_suffix["cat"], day=1, product="categorical")
+    assert [f["properties"]["cat"] for f in fc["features"]] == ["MRGL", "ENH", "HIGH"]
+
+
+def test_shapefile_probabilistic_features_get_a_percent_string_label():
+    # Same bug as above for wind/hail/tornado: the frontend's probability
+    # color scales (windHailColor/torColor) match on props["LABEL"] as a
+    # percent string ("5", "15", "30", ...) -- the raw shapefile record
+    # only carries DN (a bare int), never LABEL, unless routed through
+    # _normalize_archive_spc_geojson (which derives it via
+    # _spc_prob_label, same as the live geojson path already does).
+    zip_bytes = _build_outlook_zip(1, "20190608_2000", {
+        "wind": [(_TRIANGLE, 15), (_TRIANGLE, 5)],
+    })
+    by_suffix = _parse_outlook_shapefile_zip(zip_bytes)
+    fc = _normalize("wind", by_suffix["wind"], day=1, product="wind")
+    assert [f["properties"]["LABEL"] for f in fc["features"]] == ["15", "5"]
+
+
+def test_shapefile_significant_features_are_force_labeled_sign_after_normalizing():
+    zip_bytes = _build_outlook_zip(1, "20190608_2000", {
+        "sighail": [(_TRIANGLE, 10)],
+    })
+    by_suffix = _parse_outlook_shapefile_zip(zip_bytes)
+    fc = _normalize("significant", by_suffix["sighail"], day=1, product="hail", force_label="SIGN")
+    assert fc["features"][0]["properties"]["LABEL"] == "SIGN"

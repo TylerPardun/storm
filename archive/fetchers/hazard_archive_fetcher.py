@@ -367,16 +367,33 @@ class ArchiveHazardFetcher(QObject):
                         "ArchiveHazardFetcher: day %s outlook found via pre-2020 shapefile archive at %s",
                         day, ct.strftime("%Y%m%d_%H%M"),
                     )
+                    # Route through the same normalization the geojson path
+                    # uses (_normalize_archive_spc_geojson) rather than
+                    # serializing the raw shapefile records directly -- the
+                    # frontend colors categorical fills off props["cat"]
+                    # and probabilistic fills off props["LABEL"] (a percent
+                    # string like "5"/"15"/"30"), neither of which the raw
+                    # DBF fields carry as-is (only DN, and LABEL for cat).
+                    # Without this, every shapefile-sourced feature rendered
+                    # with its match expression's fallback color instead of
+                    # its real risk level -- confirmed live against a real
+                    # case (2010-05-10) where this fallback path is the only
+                    # way outlook data is found at all.
                     for key, suffix in products.items():
                         features = by_suffix.get(suffix, [])
-                        results[key] = json.dumps({"type": "FeatureCollection", "features": features})
+                        raw_geojson = json.dumps({"type": "FeatureCollection", "features": features})
+                        results[key] = _normalize_archive_spc_geojson(
+                            key, raw_geojson, day=day, product=key,
+                        )
                     for key, suffix in sig_products.items():
+                        base_key = key if key in ("prob", "sig") else key
                         sig_features = by_suffix.get(suffix, [])
                         if not sig_features:
                             continue
-                        for f in sig_features:
-                            f["properties"]["LABEL"] = "SIGN"
-                        sig_geojson = json.dumps({"type": "FeatureCollection", "features": sig_features})
+                        raw_sig_geojson = json.dumps({"type": "FeatureCollection", "features": sig_features})
+                        sig_geojson = _normalize_archive_spc_geojson(
+                            "significant", raw_sig_geojson, day=day, product=base_key, force_label="SIGN",
+                        )
                         if key == "sig":
                             results["sig"] = sig_geojson
                         else:

@@ -376,7 +376,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         from archive.fetchers.clamps_wind_archive_fetcher import ArchiveClampsWindFetcher
         from archive.fetchers.mqtt_reader import ArchiveMQTTReader
         from ui.controls.archive_controls import ArchiveControls
-        from ui.dialogs.archive_loading_dialog import ArchiveLoadingDialog
+        from ui.widgets.archive_loading_indicator import ArchiveLoadingIndicator
 
         self._archive_session = ArchiveSession(start_time=self._archive_time)
 
@@ -617,20 +617,23 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._time_ctrl.time_changed.connect(self._archive_satellite.on_time_changed)
         self._time_ctrl.time_changed.connect(self._archive_sounding.on_time_changed)
 
-        # show loading dialog while initial data fetches run. Ordered to match
-        # actual completion order, not just alphabetically/arbitrarily: Hazard
-        # and Satellite are fast independent checks, Mesonets is a slower
-        # network fetch, and Radar can only start once Mesonets has picked a
-        # station (see _try_auto_select_radar_station) -- so Radar always
-        # finishes last. Listing them in that order keeps the checkmarks
-        # cascading top-to-bottom instead of appearing out of sequence.
-        # Mobile Radar (NOXP) is a bounded THREDDS crawl -- slower and less
-        # predictable than any of the above -- so it goes last of all.
+        # Small top-left status text while initial data fetches run, in
+        # place of a blocking modal -- the session is interactive
+        # immediately, this just narrates what's still loading in the
+        # background. Ordered to match actual completion order, not just
+        # alphabetically/arbitrarily: Hazard and Satellite are fast
+        # independent checks, Mesonets is a slower network fetch, and
+        # Radar can only start once Mesonets has picked a station (see
+        # _try_auto_select_radar_station) -- so Radar always finishes
+        # last. Mobile Radar (NOXP) is a bounded THREDDS crawl -- slower
+        # and less predictable than any of the above, and never blocks
+        # the case from being viewed (see NoxpArchive's disk-backed
+        # discovery cache for why a later visit to the same campaign is
+        # nowhere near this slow) -- so it goes last of all.
         loading_tasks = ["SPC & NWS", "Satellite", "Mesonets", "Radar", "Mobile Radar"]
-        self._archive_loading = ArchiveLoadingDialog(
-            session_label=self._archive_time.strftime("%Y-%m-%d  %H:%M UTC"),
+        self._archive_loading = ArchiveLoadingIndicator(
             tasks=loading_tasks,
-            parent=self,
+            parent=self._map_container,
         )
 
         # start background fetches; mark tasks done via callbacks.
@@ -770,11 +773,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 _retry_noxp_discovery()
 
         self._archive_loading.show()
-        # trigger an initial data load for all fetchers once loading completes.
-        self._archive_loading.accepted.connect(
+        # once every background task finishes, re-nudge every fetcher with a
+        # fresh time-changed signal -- catches any that only just finished
+        # wiring up mid-startup and missed the very first one.
+        self._archive_loading.all_done.connect(
             lambda: self._time_ctrl.set_time(self._time_ctrl.current_time)
         )
-        self._archive_loading.rejected.connect(self._on_archive_loading_aborted)
 
         self.hazard_controls.spc_day_changed.connect(self._on_archive_spc_day_changed)
         self.hazard_controls.spc_mode_changed.connect(self._on_archive_spc_mode_changed)
@@ -1288,12 +1292,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._archive_controls.set_radar_status("Radar: error", error=True)
         self.status_msg_label.setText(msg)
         self._layout_overlays()
-
-    def _on_archive_loading_aborted(self) -> None:
-        """User clicked Abort on the loading dialog — return to the launch
-        dialog (via closeEvent's session-exit path) instead of quitting."""
-        self._change_day_requested = True
-        self.close()
 
     def _on_change_day_requested(self) -> None:
         """User confirmed the DAY button in ArchiveControls — same clean
@@ -2094,6 +2092,14 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         # map always fills the full container (overlays float on top)
         self.map_widget.setGeometry(r)
+
+        # archive-mode background-loading indicator -- subtle, upper-left,
+        # never blocks the map underneath it (see ArchiveLoadingIndicator)
+        if hasattr(self, "_archive_loading"):
+            al = self._archive_loading
+            al.adjustSize()
+            al.move(MARGIN, MARGIN)
+            al.raise_()
 
         # toolbar: shrink-wrap to content, center horizontally, float with margin
         if hasattr(self, "_floating_toolbar"):

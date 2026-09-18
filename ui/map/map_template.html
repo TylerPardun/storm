@@ -1955,8 +1955,16 @@
         // own damage-track hover) instead of folding into the single-line
         // shared hazard tooltip below, queried separately so _hits' own
         // hazard-specific semantics/filtering stay untouched.
+        // Layer visibility is checked against 'none' (not "=== 'visible'")
+        // because damage-paths-hit's own visibility is never explicitly
+        // set (see the addLayer call above -- no `visibility` key, and
+        // nothing ever calls setLayoutProperty on it, unlike e.g.
+        // cwa-fill) -- getLayoutProperty then returns undefined, not the
+        // style spec's implicit "visible" default, so an "=== 'visible'"
+        // check here would incorrectly read as hidden forever and this
+        // hover would never fire.
         var _dmgHits = (map.getLayer('damage-paths-hit') &&
-                        map.getLayoutProperty('damage-paths-hit', 'visibility') === 'visible')
+                        map.getLayoutProperty('damage-paths-hit', 'visibility') !== 'none')
           ? map.queryRenderedFeatures(e.point, {layers: ['damage-paths-hit']})
           : [];
         if (_dmgHits.length > 0) {

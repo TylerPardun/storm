@@ -143,6 +143,7 @@ class ArchiveNoxpRadarFetcher(QObject):
     assets_ready = pyqtSignal(str, object)   # platform_id, list[RadarAsset]
     volume_loaded = pyqtSignal(str, object)  # platform_id, RadarVolume
     error = pyqtSignal(str)
+    root_index_progress = pyqtSignal(str, bool)  # catalog_root, fully_indexed
 
     def __init__(self, parent=None, noxp_factory=None):
         super().__init__(parent)
@@ -201,6 +202,43 @@ class ArchiveNoxpRadarFetcher(QObject):
         with self._lock:
             self._closed = True
             self._pending = None
+
+    @property
+    def closed(self) -> bool:
+        with self._lock:
+            return self._closed
+
+    def try_background_index(self, catalog_root: str, *, budget: int = 60) -> bool:
+        """Best-effort continuation of a whole-root index build (see
+        NoxpArchive._cache_root_index): only starts if the worker is
+        currently idle, and never touches the `_pending` slot -- unlike
+        discover()/load_volume(), a background-indexing tick must never
+        preempt or silently overwrite a real foreground request that's
+        already queued there. If the worker is busy, this is a no-op and
+        the caller (a slow, repeating timer) just tries again later; no
+        progress is lost since NoxpArchive resumes via its own catalog
+        memo either way.
+        """
+        with self._lock:
+            if self._closed or self._busy:
+                return False
+            self._busy = True
+        threading.Thread(target=self._run, args=(lambda: self._do_index_root(catalog_root, budget),), daemon=True).start()
+        return True
+
+    def _do_index_root(self, catalog_root: str, budget: int) -> None:
+        archive = self._get_noxp()
+        try:
+            archive.discover(catalog_root=catalog_root, budget=budget)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("ArchiveNoxpRadarFetcher: background index failed for %s: %s", catalog_root, exc)
+            return
+        if self._closed:
+            return
+        fully_indexed = archive.is_root_fully_indexed(catalog_root)
+        if fully_indexed:
+            log.info("ArchiveNoxpRadarFetcher: background index of %s complete", catalog_root)
+        self.root_index_progress.emit(catalog_root, fully_indexed)
 
     def discover(self, platform_id: str, catalog_root: str, archive_date: datetime) -> bool:
         """Bounded crawl of one platform's campaign root for one date."""

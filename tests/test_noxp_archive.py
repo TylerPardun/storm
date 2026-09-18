@@ -8,6 +8,7 @@ import xarray as xr
 from archive.catalog import ScanCancelled
 from archive.fetchers.noxp_archive_fetcher import (
     ROOT, DATA_ROOT, NoxpArchive, asset_from_url, parse_catalog, read_noxp,
+    _DISCOVERY_CACHE_TTL_SECONDS,
 )
 
 
@@ -263,3 +264,279 @@ def test_sibling_catalog_pages_are_fetched_even_beyond_serial_expectations(tmp_p
 
     assert result.complete
     assert {a.catalog_url for a in result.assets} == set(files.values())
+
+
+def _dated_pages():
+    root, child = ROOT + 'catalog.html', ROOT + '2013/catalog.html'
+    file = child + '?dataset=NSSL/NOXP/2013/NOX130531214405.RAWETW4'
+    return root, {root: f'<a href="{child}">c</a>', child: f'<a href="{file}">f</a>'}, file
+
+
+def test_decisive_discovery_with_matches_is_cached_across_instances(tmp_path):
+    """A date-scoped crawl that actually found assets is decisive -- a
+    brand new NoxpArchive pointed at the same cache_dir (standing in for
+    a fresh app launch) must return the same answer without touching the
+    network at all."""
+    root, pages, file = _dated_pages()
+
+    def fetch(url, cancel):
+        return pages[url]
+
+    first = NoxpArchive(tmp_path, fetch)
+    result = first.discover(date(2013, 5, 31), budget=10)
+    assert result.complete and {a.catalog_url for a in result.assets} == {file}
+
+    def fail(url, cancel):
+        raise AssertionError(f'unexpected network fetch for {url}')
+
+    second = NoxpArchive(tmp_path, fail)
+    cached = second.discover(date(2013, 5, 31), budget=10)
+    assert {a.catalog_url for a in cached.assets} == {file}
+    assert cached.pending == 0
+
+
+def test_confirmed_empty_date_is_also_cached_across_instances(tmp_path):
+    """A fully exhausted crawl that found nothing for the target date is
+    just as decisive as finding something -- and is the common case (NOXP
+    is rarely deployed), so it's worth skipping the re-crawl too."""
+    root, pages, file = _dated_pages()
+
+    def fetch(url, cancel):
+        return pages[url]
+
+    first = NoxpArchive(tmp_path, fetch)
+    result = first.discover(date(2013, 5, 30), budget=10)  # file is dated 5/31
+    assert result.complete and not result.assets
+
+    def fail(url, cancel):
+        raise AssertionError(f'unexpected network fetch for {url}')
+
+    second = NoxpArchive(tmp_path, fail)
+    cached = second.discover(date(2013, 5, 30), budget=10)
+    assert not cached.assets and cached.pending == 0
+
+
+def test_inconclusive_partial_result_is_not_cached(tmp_path):
+    """A budget-limited call that found nothing *yet* must not poison the
+    disk cache with an empty answer -- a later call (same instance, or a
+    fresh one after a relaunch) still has to keep making real progress."""
+    root, pages, file = _dated_pages()
+    fetched = []
+
+    def fetch(url, cancel):
+        fetched.append(url)
+        return pages[url]
+
+    first = NoxpArchive(tmp_path, fetch)
+    result = first.discover(date(2013, 5, 31), budget=1)  # only the root page
+    assert not result.complete and not result.assets
+
+    second = NoxpArchive(tmp_path, fetch)
+    resumed = second.discover(date(2013, 5, 31), budget=10)
+    assert resumed.complete and {a.catalog_url for a in resumed.assets} == {file}
+    assert fetched.count(root) == 2  # no cache hit -- the second instance re-fetched
+
+
+def test_refresh_clears_the_disk_date_index_too(tmp_path):
+    root, pages, file = _dated_pages()
+    fetched = []
+
+    def fetch(url, cancel):
+        fetched.append(url)
+        return pages[url]
+
+    adapter = NoxpArchive(tmp_path, fetch)
+    adapter.discover(date(2013, 5, 31), budget=10)
+    adapter.clear_catalog_cache()
+    adapter.discover(date(2013, 5, 31), budget=10)
+
+    assert fetched.count(root) == 2
+
+
+def _multi_date_pages():
+    """Two files, different dates, both under one ambiguous (unprunable)
+    parent -- close to the shape a real campaign root has when a folder
+    isn't itself named after one exact day."""
+    root, moment = ROOT + 'catalog.html', ROOT + 'moment/catalog.html'
+    may30 = moment + '?dataset=NSSL/NOXP/moment/NOX130530214405.RAWETW4'
+    may31 = moment + '?dataset=NSSL/NOXP/moment/NOX130531214405.RAWETW4'
+    pages = {root: f'<a href="{moment}">m</a>', moment: f'<a href="{may30}">a</a><a href="{may31}">b</a>'}
+    return root, pages, may30, may31
+
+
+def test_unfiltered_crawl_that_completes_indexes_every_date_at_once(tmp_path):
+    """A target=None crawl that reaches the end of the tree should let a
+    *later, different-date* targeted lookup for a date it already saw
+    answer instantly -- the whole point of browsing several cases from
+    one campaign without re-crawling per case."""
+    root, pages, may30, may31 = _multi_date_pages()
+
+    def fetch(url, cancel):
+        return pages[url]
+
+    indexer = NoxpArchive(tmp_path, fetch)
+    full = indexer.discover(catalog_root=root, budget=10)  # target=None
+    assert full.complete
+    assert indexer.is_root_fully_indexed(root)
+
+    def fail(url, cancel):
+        raise AssertionError(f'unexpected network fetch for {url}')
+
+    # A date never explicitly searched for before, from a fresh instance --
+    # still answered from the root index alone, no crawl needed.
+    lookup = NoxpArchive(tmp_path, fail)
+    result = lookup.discover(date(2013, 5, 30), catalog_root=root, budget=10)
+    assert {a.catalog_url for a in result.assets} == {may30}
+    other = lookup.discover(date(2013, 5, 31), catalog_root=root, budget=10)
+    assert {a.catalog_url for a in other.assets} == {may31}
+    # A date genuinely absent from the root is answered as empty, not
+    # re-crawled, since the index is known-complete for this root.
+    absent = lookup.discover(date(2013, 6, 1), catalog_root=root, budget=10)
+    assert not absent.assets
+
+
+def test_budget_limited_unfiltered_crawl_does_not_mark_the_root_indexed(tmp_path):
+    root, pages, may30, may31 = _multi_date_pages()
+
+    def fetch(url, cancel):
+        return pages[url]
+
+    indexer = NoxpArchive(tmp_path, fetch)
+    partial = indexer.discover(catalog_root=root, budget=1)  # only the root page
+    assert not partial.complete
+    assert not indexer.is_root_fully_indexed(root)
+
+    # A fresh instance must still do real work -- an incomplete crawl was
+    # never decisive enough to cache.
+    fetched = []
+
+    def fetch2(url, cancel):
+        fetched.append(url)
+        return pages[url]
+
+    second = NoxpArchive(tmp_path, fetch2)
+    result = second.discover(date(2013, 5, 30), catalog_root=root, budget=10)
+    assert {a.catalog_url for a in result.assets} == {may30}
+    assert fetched  # it actually crawled, rather than trusting a partial index
+
+
+def test_a_fully_indexed_root_short_circuits_a_repeat_background_pass(tmp_path):
+    """Once a root is fully indexed, re-submitting the same unfiltered
+    background-indexing crawl (e.g. on the next app launch) should be an
+    instant no-op, not a full re-walk of the tree."""
+    root, pages, may30, may31 = _multi_date_pages()
+
+    def fetch(url, cancel):
+        return pages[url]
+
+    NoxpArchive(tmp_path, fetch).discover(catalog_root=root, budget=10)
+
+    def fail(url, cancel):
+        raise AssertionError(f'unexpected network fetch for {url}')
+
+    again = NoxpArchive(tmp_path, fail).discover(catalog_root=root, budget=10)
+    assert again.complete
+    assert {a.catalog_url for a in again.assets} == {may30, may31}
+
+
+def test_refresh_clears_the_root_index_too(tmp_path):
+    root, pages, may30, may31 = _multi_date_pages()
+    fetched = []
+
+    def fetch(url, cancel):
+        fetched.append(url)
+        return pages[url]
+
+    adapter = NoxpArchive(tmp_path, fetch)
+    adapter.discover(catalog_root=root, budget=10)
+    assert adapter.is_root_fully_indexed(root)
+
+    adapter.clear_catalog_cache()
+    assert not adapter.is_root_fully_indexed(root)
+
+    adapter.discover(catalog_root=root, budget=10)
+    assert fetched.count(root) == 2
+
+
+class _FakeClock:
+    """A settable clock, so a cache entry's age can be advanced past its
+    TTL deterministically instead of waiting 30 real days."""
+    def __init__(self, start=1_700_000_000.0):
+        self.now = start
+
+    def __call__(self):
+        return self.now
+
+
+def test_per_date_cache_entry_expires_and_is_revalidated(tmp_path):
+    root, pages, file = _dated_pages()
+    fetched = []
+
+    def fetch(url, cancel):
+        fetched.append(url)
+        return pages[url]
+
+    clock = _FakeClock()
+    first = NoxpArchive(tmp_path, fetch, now=clock)
+    first.discover(date(2013, 5, 31), budget=10)
+    assert fetched.count(root) == 1
+
+    # Still fresh -- a later instance sharing the same (unexpired) clock
+    # basis must not re-fetch.
+    clock.now += _DISCOVERY_CACHE_TTL_SECONDS - 1
+    second = NoxpArchive(tmp_path, fetch, now=clock)
+    second.discover(date(2013, 5, 31), budget=10)
+    assert fetched.count(root) == 1
+
+    # Past the TTL -- must revalidate against upstream again, not trust the
+    # stale answer forever.
+    clock.now += 2
+    third = NoxpArchive(tmp_path, fetch, now=clock)
+    result = third.discover(date(2013, 5, 31), budget=10)
+    assert fetched.count(root) == 2
+    assert {a.catalog_url for a in result.assets} == {file}
+
+
+def test_root_index_entry_expires_and_is_revalidated(tmp_path):
+    root, pages, may30, may31 = _multi_date_pages()
+    fetched = []
+
+    def fetch(url, cancel):
+        fetched.append(url)
+        return pages[url]
+
+    clock = _FakeClock()
+    first = NoxpArchive(tmp_path, fetch, now=clock)
+    first.discover(catalog_root=root, budget=10)
+    assert fetched.count(root) == 1
+    assert first.is_root_fully_indexed(root)
+
+    clock.now += _DISCOVERY_CACHE_TTL_SECONDS + 1
+    second = NoxpArchive(tmp_path, fetch, now=clock)
+    assert not second.is_root_fully_indexed(root)  # stale -- no longer trusted
+    result = second.discover(date(2013, 5, 30), catalog_root=root, budget=10)
+    assert fetched.count(root) == 2  # revalidated against upstream, not replayed
+    assert {a.catalog_url for a in result.assets} == {may30}
+
+
+def test_missing_checked_at_is_treated_as_expired_not_a_crash(tmp_path):
+    """A cache file written before this TTL existed has no checked_at at
+    all -- must self-heal (treated as stale) rather than KeyError."""
+    import json
+    root, pages, file = _dated_pages()
+    cache_dir = tmp_path
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / 'date_index.json').write_text(json.dumps({
+        'version': 1,
+        'entries': {f'{root}|2013-05-31': {'assets': [], 'catalogs_checked': 1}},
+    }))
+    fetched = []
+
+    def fetch(url, cancel):
+        fetched.append(url)
+        return pages[url]
+
+    adapter = NoxpArchive(cache_dir, fetch)
+    result = adapter.discover(date(2013, 5, 31), budget=10)
+    assert fetched  # revalidated instead of trusting the ageless entry
+    assert {a.catalog_url for a in result.assets} == {file}

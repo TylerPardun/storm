@@ -6,19 +6,26 @@ import numpy as np
 
 
 class _FakeNoxp:
-    def __init__(self, inventory=None, volume=None, raise_on_discover=None, raise_on_load=None):
+    def __init__(self, inventory=None, volume=None, raise_on_discover=None, raise_on_load=None, fully_indexed=None):
         self.inventory = inventory
         self.volume = volume
         self.raise_on_discover = raise_on_discover
         self.raise_on_load = raise_on_load
         self.discover_calls = []
         self.load_calls = []
+        # Roots this fake considers fully indexed after a discover() call --
+        # a real NoxpArchive derives this from the crawl outcome itself, but
+        # the fake just reports whatever the test configured.
+        self._fully_indexed = set(fully_indexed or ())
 
-    def discover(self, *, target, budget, catalog_root):
+    def discover(self, *, target=None, budget, catalog_root):
         self.discover_calls.append((target, budget, catalog_root))
         if self.raise_on_discover:
             raise self.raise_on_discover
         return self.inventory
+
+    def is_root_fully_indexed(self, catalog_root):
+        return catalog_root in self._fully_indexed
 
     def load(self, asset):
         self.load_calls.append(asset)
@@ -152,3 +159,60 @@ def test_noxp_instance_is_reused_across_discover_calls_not_rebuilt():
 
     assert len(built) == 1
     assert len(built[0].discover_calls) == 2
+
+
+def test_do_index_root_calls_discover_with_no_target_and_reports_progress():
+    root = "https://example.test/2013/catalog.html"
+    fake = _FakeNoxp(inventory=RadarInventory(assets=[], pending=0), fully_indexed={root})
+    fetcher = _fetcher(fake)
+    progress = []
+    fetcher.root_index_progress.connect(lambda r, done: progress.append((r, done)))
+    fetcher._do_index_root(root, budget=60)
+    assert fake.discover_calls == [(None, 60, root)]
+    assert progress == [(root, True)]
+
+
+def test_do_index_root_reports_not_yet_complete():
+    root = "https://example.test/2010/catalog.html"
+    fake = _FakeNoxp(inventory=RadarInventory(assets=[], pending=200), fully_indexed=set())
+    fetcher = _fetcher(fake)
+    progress = []
+    fetcher.root_index_progress.connect(lambda r, done: progress.append((r, done)))
+    fetcher._do_index_root(root, budget=60)
+    assert progress == [(root, False)]
+
+
+def test_try_background_index_is_a_no_op_when_the_worker_is_busy():
+    """Unlike discover()/load_volume(), a background-indexing attempt must
+    never occupy the single `_pending` slot -- doing so risks silently
+    dropping a real foreground request queued there instead."""
+    fetcher = ArchiveNoxpRadarFetcher(noxp_factory=lambda: _FakeNoxp(RadarInventory()))
+    fetcher._busy = True
+    started = fetcher.try_background_index("https://example.test/2013/catalog.html")
+    assert started is False
+    assert fetcher._pending is None
+
+
+def test_try_background_index_runs_and_completes_when_idle():
+    import time
+    from PyQt6.QtCore import QCoreApplication
+    root = "https://example.test/2013/catalog.html"
+    fake = _FakeNoxp(inventory=RadarInventory(assets=[], pending=0), fully_indexed={root})
+    fetcher = _fetcher(fake)
+    progress = []
+    fetcher.root_index_progress.connect(lambda r, done: progress.append((r, done)))
+
+    started = fetcher.try_background_index(root, budget=60)
+    assert started is True
+
+    # The worker runs on its own thread; root_index_progress is a queued
+    # cross-thread signal that only delivers while the event loop is
+    # pumped, which a plain pytest run doesn't do on its own.
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not progress:
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+
+    assert fake.discover_calls == [(None, 60, root)]
+    assert progress == [(root, True)]
+    assert fetcher._busy is False

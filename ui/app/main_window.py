@@ -695,6 +695,50 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 _noxp_target_day = self._archive_time.date()
                 _noxp_retries = {"n": 0}
 
+                # Once the foreground per-day search below concludes (either
+                # way -- found something, or gave up), pay down a full,
+                # unfiltered crawl of this campaign root in the background.
+                # A per-day search alone only ever answers the one date the
+                # user is looking at right now -- most of the time actually
+                # spent here is browsing a whole campaign one case at a time
+                # (per Tyler, 2026-09-18), so the date that matters next is
+                # usually a *different* one, not a repeat of this one. Once
+                # this root reports back as fully indexed
+                # (root_index_progress), every other date in it answers
+                # instantly from then on, this session and every future one
+                # (see NoxpArchive._cache_root_index -- it's a disk cache).
+                # Deliberately NOT started until the foreground search is
+                # done: both share the fetcher's one worker thread, and
+                # starting this earlier would compete with -- and could
+                # measurably slow down -- the very loading-dialog checkmark
+                # this whole feature exists to speed up on a *later* visit.
+                # Once running, it continues well past when the loading
+                # dialog itself closes. try_background_index() only starts
+                # when the worker is otherwise idle, and skips (retried on
+                # the next tick) rather than preempting a real foreground
+                # request already queued there -- but the reverse isn't
+                # true: a foreground click that lands *while* a tick is
+                # already running (e.g. loading a NOXP volume) still has to
+                # wait for that tick to finish, since there's no mid-crawl
+                # cancellation wired up. Kept to a modest budget (not the
+                # foreground path's own 40) specifically to bound that
+                # worst case to a handful of seconds rather than tens.
+                _NOXP_BACKGROUND_INDEX_BUDGET = 20
+
+                def _tick_noxp_background_index(_root=_noxp_catalog_root):
+                    if self._archive_noxp is None or self._archive_noxp.closed:
+                        return
+                    if not self._archive_noxp.try_background_index(_root, budget=_NOXP_BACKGROUND_INDEX_BUDGET):
+                        QTimer.singleShot(3000, _tick_noxp_background_index)  # worker busy -- retry later
+
+                def _on_noxp_root_indexed(catalog_root, fully_indexed, _root=_noxp_catalog_root):
+                    if catalog_root != _root or self._archive_noxp is None or self._archive_noxp.closed:
+                        return
+                    if not fully_indexed:
+                        QTimer.singleShot(2000, _tick_noxp_background_index)
+
+                self._archive_noxp.root_index_progress.connect(_on_noxp_root_indexed)
+
                 def _on_noxp_startup_assets(platform_id, assets, _platform=_noxp_platform, _day=_noxp_target_day):
                     if platform_id != _platform.platform_id or not self._archive_loading.isVisible():
                         return
@@ -708,6 +752,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                         pass
                     nearest = min(matching, key=lambda a: abs((a.nominal_time - self._archive_time).total_seconds()))
                     self._on_noxp_asset_selected(nearest)
+                    QTimer.singleShot(2000, _tick_noxp_background_index)
 
                 self._archive_noxp.assets_ready.connect(_on_noxp_startup_assets)
 
@@ -717,6 +762,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                     _noxp_retries["n"] += 1
                     if _noxp_retries["n"] > 15:   # ~45s of retries at 3s apart
                         self._archive_loading.set_task_done("Mobile Radar")
+                        QTimer.singleShot(2000, _tick_noxp_background_index)
                         return
                     self._archive_noxp.discover(_platform.platform_id, _root, self._archive_time)
                     QTimer.singleShot(3000, _retry_noxp_discovery)

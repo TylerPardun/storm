@@ -44,6 +44,32 @@ def noxp_site_at(volume) -> dict | None:
     return {"instrument": "NOXP", "lat": lat0, "lon": lon0}
 
 
+def _sweep_elevation(volume, i: int) -> float:
+    s, e = int(volume.sweep_start[i]), int(volume.sweep_end[i]) + 1
+    sweep_el = np.asarray(volume.elevation_deg[s:e], dtype=np.float64)
+    return float(np.nanmean(sweep_el)) if np.isfinite(sweep_el).any() else float("nan")
+
+
+def noxp_sweep_elevations(volume) -> list[float]:
+    """Mean elevation angle per sweep, cheap enough to call as soon as a
+    volume loads (no field/geometry projection needed) -- used to populate
+    the RADAR tab's tilt combo while NOXP is the selected site, the same
+    way archive WSR-88D scans populate it from available_tilts."""
+    n_sweeps = int(volume.sweep_start.size)
+    return [_sweep_elevation(volume, i) for i in range(n_sweeps)]
+
+
+def nearest_noxp_asset(assets, when: datetime):
+    """The discovered RadarAsset closest in nominal_time to `when`, or None
+    if `assets` is empty or none of them have a usable nominal_time --
+    drives both the startup pick and clock-following auto-advance once
+    NOXP is the displayed radar."""
+    candidates = [a for a in assets if a.nominal_time is not None]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda a: abs((a.nominal_time - when).total_seconds()))
+
+
 def noxp_volume_to_scan(volume, sweep_index: int, field_name: str) -> NoxpRadarScan:
     """Slice one sweep out of a decoded RadarVolume and georeference it via
     an aeqd projection centered on the volume's own file-declared position
@@ -104,11 +130,6 @@ def noxp_volume_to_scan(volume, sweep_index: int, field_name: str) -> NoxpRadarS
     xform = Transformer.from_proj(aeqd, Proj("epsg:4326"), always_xy=True)
     lons, lats = xform.transform(x_km, y_km)
 
-    def sweep_elevation(i):
-        s, e = int(volume.sweep_start[i]), int(volume.sweep_end[i]) + 1
-        sweep_el = np.asarray(volume.elevation_deg[s:e], dtype=np.float64)
-        return float(np.nanmean(sweep_el)) if np.isfinite(sweep_el).any() else float("nan")
-
     meta = field_meta(field_name)
     finite_times = times[np.isfinite(times)]
     scan_time = (
@@ -124,8 +145,8 @@ def noxp_volume_to_scan(volume, sweep_index: int, field_name: str) -> NoxpRadarS
         lons=lons.astype(np.float32),
         vmin=meta["vmin"], vmax=meta["vmax"], units=meta["units"], colormap=meta["colormap"],
         sweep_index=sweep_index,
-        elevation_deg=sweep_elevation(sweep_index),
-        available_sweeps=[(i, sweep_elevation(i)) for i in range(n_sweeps)],
+        elevation_deg=_sweep_elevation(volume, sweep_index),
+        available_sweeps=[(i, _sweep_elevation(volume, i)) for i in range(n_sweeps)],
         native_field=field_name,
         # Same reasoning as ArchiveRadarFetcher._decode (radar_archive_fetcher.py):
         # az is sorted above, so az[0] is whichever azimuth happens to be

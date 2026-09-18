@@ -3,8 +3,10 @@ from datetime import datetime, timezone
 import numpy as np
 import pytest
 
-from archive.fetchers.noxp_archive_fetcher import RadarVolume
-from archive.fetchers.noxp_radar_archive_fetcher import noxp_volume_to_scan
+from archive.fetchers.noxp_archive_fetcher import RadarAsset, RadarVolume
+from archive.fetchers.noxp_radar_archive_fetcher import (
+    nearest_noxp_asset, noxp_sweep_elevations, noxp_volume_to_scan,
+)
 from core.noxp_radar_scan import field_meta
 
 
@@ -28,6 +30,33 @@ def _ppi_volume(n_sweeps=2, n_rays_per_sweep=4, n_gates=3, scan_type="ppi"):
         scan_type=scan_type,
         provenance={"format": "sigmet"},
     )
+
+
+def test_noxp_sweep_elevations_matches_each_sweeps_mean_angle():
+    volume = _ppi_volume(n_sweeps=2, n_rays_per_sweep=4)
+    assert noxp_sweep_elevations(volume) == [pytest.approx(0.5), pytest.approx(1.5)]
+
+
+def _asset(minute, name=None):
+    when = datetime(2019, 6, 8, 22, minute, tzinfo=timezone.utc)
+    return RadarAsset(catalog_url=f"cat/{minute}", name=name or f"vol-{minute}", format="sigmet", nominal_time=when)
+
+
+def test_nearest_noxp_asset_picks_the_closest_by_nominal_time():
+    assets = [_asset(0), _asset(10), _asset(30)]
+    target = datetime(2019, 6, 8, 22, 12, tzinfo=timezone.utc)
+    assert nearest_noxp_asset(assets, target).name == "vol-10"
+
+
+def test_nearest_noxp_asset_ignores_entries_with_no_nominal_time():
+    dateless = RadarAsset(catalog_url="cat/x", name="no-time", format="sigmet", nominal_time=None)
+    assets = [dateless, _asset(0)]
+    target = datetime(2019, 6, 8, 23, 0, tzinfo=timezone.utc)
+    assert nearest_noxp_asset(assets, target).name == "vol-0"
+
+
+def test_nearest_noxp_asset_with_nothing_discovered_returns_none():
+    assert nearest_noxp_asset([], datetime(2019, 6, 8, 22, 0, tzinfo=timezone.utc)) is None
 
 
 def test_sweep_slicing_picks_exactly_that_sweeps_rays():

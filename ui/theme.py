@@ -93,7 +93,6 @@ QMainWindow, QWidget {
 #floatingToolbar QWidget#routingDrawer,
 #floatingToolbar QWidget#soundingDrawer,
 #floatingToolbar QWidget#surfaceDrawer,
-#floatingToolbar QWidget#noxpDrawer,
 #floatingToolbar QWidget#rawLidarDrawer {
     background: transparent;
     border: none;
@@ -111,7 +110,6 @@ QMainWindow, QWidget {
 #floatingToolbar QWidget#routingDrawer > QWidget,
 #floatingToolbar QWidget#soundingDrawer > QWidget,
 #floatingToolbar QWidget#surfaceDrawer > QWidget,
-#floatingToolbar QWidget#noxpDrawer > QWidget,
 #floatingToolbar QWidget#rawLidarDrawer > QWidget {
     background: transparent;
 }

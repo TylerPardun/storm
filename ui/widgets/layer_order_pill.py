@@ -68,7 +68,7 @@ MAPLIBRE_LAYERS: dict[str, list[str]] = {
     "nlcd":         ["nlcd-landcover"],
     "mesoanalysis": ["mesoanalysis-line", "mesoanalysis-label"],
     "sfcoa":       ["sfcoa-fill", "sfcoa-line", "sfcoa-label"],
-    "radar":        ["radar-overlay"],
+    "radar":        ["radar-overlay", "noxp-overlay"],
     "cwa":          ["cwa-fill", "cwa-line", "cwa-label"],
     "spc_outlook":  ["spc-cat-fill", "spc-cat-line"],
     "spc_tor":      ["spc-tor-fill", "spc-tor-line", "spc-tor-sig-base",

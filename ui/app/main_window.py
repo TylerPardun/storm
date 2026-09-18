@@ -22,7 +22,7 @@ from PyQt6.QtSvg import QSvgRenderer
 
 from ui.theme import DARK_THEME, ACCENT
 from ui.map.widget import MapWidget, TILES_PATH
-from ui.controls.radar_controls import RadarControls, NEXRAD_SITES
+from ui.controls.radar_controls import RadarControls, NEXRAD_SITES, NOXP_SITE_ID
 from ui.controls.hazard_controls import HazardControls
 from ui.controls.routing_controls import RoutingControls, _make_loc_icon
 from ui.widgets.nav_pill import NavPill
@@ -33,7 +33,6 @@ from ui.controls.landcover_controls import LandcoverControls
 from ui.controls.mesoanalysis_controls import MesoanalysisControls
 from ui.controls.sfcoa_controls import SfcoaControls
 from ui.controls.surface_controls import SurfaceControls
-from ui.controls.noxp_controls import NoxpControls
 from ui.controls.raw_lidar_controls import RawLidarControls
 from ui.widgets.outlook_panel import OutlookPanel
 from ui.map.radar_overlay import RadarOverlay, render_scan_to_png as _render_scan_to_png
@@ -464,10 +463,21 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             lambda msg: self.status_msg_label.setText(f"CLAMPS wind: {msg}")
         )
 
-        # NOXP mobile radar (on-demand, platform picked in noxp_controls;
-        # noxp_controls itself, and its platform list, are set up in
-        # _init_toolbar -- that always runs before this).
+        # NOXP mobile radar (auto-discovered at startup, selected the same
+        # way as any NEXRAD site -- click its marker/"Stations" entry).
+        # True whenever NOXP is the site currently displayed on the map;
+        # always defined (not just under the feature flag) since it's
+        # checked from the general WSR-88D render/selector-population path
+        # regardless of whether NOXP itself is enabled.
+        self._noxp_active = False
         self._archive_noxp = None
+        # The site-picker/"Stations" entry for NOXP -- only appended once a
+        # volume has actually loaded and given it a position (see
+        # _push_radar_station_sites), so it can't be picked before there's
+        # somewhere to point the fetch. Always defined for the same reason
+        # as _noxp_active above -- _push_radar_station_sites reads it from
+        # the general (not NOXP-gated) radar-site-marker setup path.
+        self._noxp_station_site: dict | None = None
         if feature_flags.is_enabled("noxp_radar"):
             from archive.fetchers.noxp_radar_archive_fetcher import ArchiveNoxpRadarFetcher
             self._noxp_current_volume = None
@@ -476,23 +486,26 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._noxp_render_busy = False
             self._noxp_render_pending = None
             self._noxp_asset_url = None
-            # True while MAP is checked -- makes newly-loaded volumes keep
-            # rendering instead of set_volume_summary's default "a fresh
-            # load always clears MAP" behavior, and drives
-            # _on_time_changed_update_noxp_overlay's auto-advance below.
-            self._noxp_map_follow_clock = False
+            # The campaign/platform this case's year resolved to at startup
+            # (archive/catalog.py KnownPlatform), and the assets discovered
+            # for it -- previously held by noxp_controls, now that there's
+            # no drawer widget to hold them.
+            self._noxp_platform = None
+            self._noxp_assets: list = []
             # Cached separately from ArchiveControls' scan-step buttons,
             # which only ever hold one active list -- swapped in/out of
-            # them as NOXP MAP toggles (see _on_noxp_map_toggled) so
-            # switching back to WSR-88D doesn't need a re-fetch.
+            # them as NOXP activates/deactivates (see _activate_noxp_radar)
+            # so switching back to WSR-88D doesn't need a re-fetch.
             self._wsr88d_scan_times: list[str] = []
             self._noxp_scan_times: list[str] = []
             self._archive_noxp = ArchiveNoxpRadarFetcher(parent=self)
             self._archive_noxp.assets_ready.connect(self._on_archive_noxp_assets_ready)
             self._archive_noxp.volume_loaded.connect(self._on_archive_noxp_volume_loaded)
-            self._archive_noxp.error.connect(
-                lambda msg: self.status_msg_label.setText(f"NOXP: {msg}")
-            )
+            # NOXP discovery/load errors (e.g. a bounded THREDDS crawl
+            # running out of budget mid-tree) are routine background noise,
+            # not something worth interrupting the shared status line for --
+            # they're already logged (see ArchiveNoxpRadarFetcher's own
+            # log.warning calls) for anyone who actually needs them.
             self._time_ctrl.time_changed.connect(self._on_time_changed_update_noxp_overlay)
 
         # CLAMPS raw lidar quicklook (discovers every known source once per
@@ -693,7 +706,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             if _noxp_platform is None:
                 self._archive_loading.set_task_done("Mobile Radar")
             else:
-                self.noxp_controls.select_campaign_for_year(self._archive_time.year)
+                self._noxp_platform = _noxp_platform
                 _noxp_catalog_root = catalogs_for_platform(_noxp_platform)[0].url
                 _noxp_target_day = self._archive_time.date()
                 _noxp_retries = {"n": 0}
@@ -785,11 +798,13 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.hazard_controls.spc_watches_toggled.connect(self._on_archive_watches_toggled)
         self.hazard_controls.spc_mds_toggled.connect(self._on_archive_mds_toggled)
         self.hazard_controls.nws_warnings_toggled.connect(self._on_archive_nws_toggled)
-        # CWA boundaries are a static local shapefile (see _on_cwa_toggled) --
-        # nothing archive/live-specific about them, but this connection only
-        # ever got wired in the live-mode startup path (_init_hazards), so
-        # the CWA toggle silently did nothing in archive mode.
-        self.hazard_controls.cwa_toggled.connect(self._on_cwa_toggled)
+        # CWA boundaries are a static local shapefile, wired once in
+        # _init_hazards() (called from the mode-agnostic startup sequence
+        # that always runs, live or archive) -- connecting it again here
+        # double-fired _on_cwa_toggled per click, and since
+        # _begin_archive_startup() can run more than once per app lifetime
+        # (each new archive session), it kept adding another duplicate
+        # connection on top.
         self.hazard_controls.fetch_requested.connect(self._archive_hazard.refresh_now)
         self.map_widget.feature_clicked.connect(self._on_spc_feature_clicked)
 
@@ -807,7 +822,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.radar_controls.product_changed.connect(self._on_archive_product_changed)
         self.radar_controls.tilt_changed.connect(self._on_archive_tilt_changed)
 
-        self.map_widget.set_radar_stations(self._radar_station_sites)
+        self._push_radar_station_sites()
         self.map_widget.radar_station_clicked.connect(self._on_radar_station_clicked)
         self.radar_controls.stations_requested.connect(self._toggle_radar_station_picker)
 
@@ -1066,8 +1081,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         """
         self._current_radar_scan = scan
 
-        # add tilt/product selectors to archive controls the first time;
-        if hasattr(scan, "available_products"):
+        # add tilt/product selectors to archive controls the first time --
+        # skipped while NOXP is the displayed radar, or every incoming
+        # WSR-88D scan (decoding keeps running in the background so
+        # switching back is instant) would clobber the NOXP field/sweep
+        # lists the RADAR tab is currently showing.
+        if hasattr(scan, "available_products") and not self._noxp_active:
             from core.level2_radar_scan import L2_PRODUCTS
             products = [
                 (f, L2_PRODUCTS[f]["label"]) for f in scan.available_products
@@ -1120,6 +1139,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             if "error" in result:
                 if hasattr(self, "_archive_controls"):
                     self._archive_controls.set_radar_status("Radar: render error", error=True)
+            elif self._noxp_active:
+                pass  # NOXP is the displayed radar -- WSR-88D keeps decoding warm in the background, just not injected
             else:
                 self._radar_overlay.inject(result["png"], result["bounds"])
                 if hasattr(self, "radar_controls"):
@@ -1144,7 +1165,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         serve the cached super-res PNG if we have one, else render one in the
         background. Never touches the Tier-1 pipeline above."""
         pending = getattr(self, "_archive_superres_pending", None)
-        if pending is None:
+        if pending is None or self._noxp_active:
             return
         gen, station, scan = pending
         if gen != self._archive_render_generation or station != self._archive_radar.station:
@@ -1187,6 +1208,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             return  # station changed mid-render
         if result["station"] != self._archive_radar.station:
             return
+        if self._noxp_active:
+            return  # NOXP took over the map since this was submitted
         pending = getattr(self, "_archive_superres_pending", None)
         if pending is None or pending[2] is not result["scan"]:
             return  # archive clock moved to a different frame since this was submitted
@@ -1276,12 +1299,21 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._refresh_scan_sectors()
 
     def _on_archive_tilt_changed(self, tilt_idx: int) -> None:
+        if self._noxp_active:
+            self._on_noxp_render_requested(tilt_idx, self.radar_controls.current_product())
+            return
         if self._archive_radar:
             self._archive_radar.set_tilt_index(tilt_idx)
         if hasattr(self, "_archive_controls"):
             self._archive_controls.set_radar_status(f"Radar: loading tilt {tilt_idx}")
 
     def _on_archive_product_changed(self, pyart_field: str) -> None:
+        if self._noxp_active:
+            # pyart_field is a NOXP native field name (DBZ, VEL, ...) here,
+            # not a WSR-88D product code -- never hand it to the WSR-88D
+            # fetcher below.
+            self._on_noxp_render_requested(self.radar_controls.current_tilt_index(), pyart_field)
+            return
         if self._archive_radar:
             self._archive_radar.set_product(pyart_field)
         if hasattr(self, "_archive_controls"):
@@ -1616,27 +1648,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._add_separator(tb)
 
         if self._archive and feature_flags.is_enabled("noxp_radar"):
-            from archive.catalog import ALL_PLATFORMS as _ALL_PLATFORMS
-            self.btn_noxp = self._toolbar_toggle(
-                "NOXP", "NOXP radar controls", tb
-            )
-            self.noxp_controls = NoxpControls(self._map_container)
-            self.noxp_controls.setObjectName("floatingToolbar")
-            self.noxp_controls.set_platforms(
-                [p for p in _ALL_PLATFORMS if p.family == "NOXP Radar"]
-            )
-            # Pre-select the campaign matching this case's year so opening
-            # the drawer searches it first, instead of always starting from
-            # whatever the first registered campaign happens to be --
-            # that's the "search through all years" friction this removes.
-            self.noxp_controls.select_campaign_for_year(self._archive_time.year)
-            self.btn_noxp.toggled.connect(self.noxp_controls.toggle_drawer)
+            # No drawer -- NOXP is a site in the RADAR tab's own picker
+            # (see _push_radar_station_sites/_on_radar_station_clicked).
+            # The always-on truck marker (set_noxp_site, updated as
+            # volumes load) is still a second way in, clicked the same as
+            # any other platform marker.
             self.map_widget.platform_marker_clicked.connect(self._on_platform_marker_clicked)
-            self.btn_noxp.toggled.connect(self._start_layout_pulse)
-            self.noxp_controls.platform_selected.connect(self._on_noxp_platform_selected)
-            self.noxp_controls.asset_selected.connect(self._on_noxp_asset_selected)
-            self.noxp_controls.render_requested.connect(self._on_noxp_render_requested)
-            self.noxp_controls.map_toggled.connect(self._on_noxp_map_toggled)
 
         if self._archive and feature_flags.is_enabled("raw_lidar_quicklook"):
             self.btn_raw_lidar = self._toolbar_toggle(
@@ -2165,8 +2182,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 _stack(self.mesoanalysis_controls)
             if hasattr(self, "sfcoa_controls") and self.btn_sfcoa.isChecked():
                 _stack(self.sfcoa_controls)
-            if hasattr(self, "noxp_controls") and self.btn_noxp.isChecked():
-                _stack(self.noxp_controls)
             if hasattr(self, "raw_lidar_controls") and self.btn_raw_lidar.isChecked():
                 _stack(self.raw_lidar_controls)
             if hasattr(self, "surface_controls") and self.btn_surface.isChecked():
@@ -2625,7 +2640,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._radar_error_clear_timer.setSingleShot(True)
         self._radar_error_clear_timer.timeout.connect(self._clear_radar_error)
 
-        self.map_widget.set_radar_stations(self._radar_station_sites)
+        self._push_radar_station_sites()
         self.radar_controls.set_selected_site("KTLX")
 
         initial_site = self.radar_controls.current_site()
@@ -4341,41 +4356,48 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         dlg.exec()
 
     # -- NOXP mobile radar (archive) ------------------------------------
+    # NOXP is a site in the same RADAR-tab picker as every NEXRAD station
+    # (see _push_radar_station_sites / the NOXP branch in
+    # _on_radar_station_clicked) -- there is no separate drawer anymore.
+    # self._noxp_active is true exactly while NOXP is the displayed radar;
+    # WSR-88D fetching/decoding keeps running in the background regardless
+    # (see the _noxp_active guards in _on_archive_render_ready and the
+    # super-res path) so switching back is instant, not a fresh fetch.
 
-    def _on_noxp_platform_selected(self, platform_id: str) -> None:
-        from archive.catalog import catalogs_for_platform
-        platform = next((p for p in self._archive_noxp_platforms() if p.platform_id == platform_id), None)
-        if platform is None:
-            return
-        catalog_root = catalogs_for_platform(platform)[0].url
-        self.status_msg_label.setText(f"NOXP: searching {platform.display_name}…")
-        self.map_widget.set_noxp_site(None)   # stale marker from a previous campaign
-        if not self._archive_noxp.discover(platform_id, catalog_root, self._archive_time):
-            self.status_msg_label.setText("NOXP: search already in progress")
-
-    def _archive_noxp_platforms(self):
-        from archive.catalog import ALL_PLATFORMS
-        return [p for p in ALL_PLATFORMS if p.family == "NOXP Radar"]
+    def _push_radar_station_sites(self) -> None:
+        """Push the NEXRAD site list to the map, plus NOXP's entry once it
+        has a known position. Never mutates self._radar_station_sites
+        itself -- _nearest_nexrad/_nearest_radar_site iterate that list to
+        auto-pick a WSR-88D station, and "NOXP" isn't a valid station for
+        ArchiveRadarFetcher."""
+        sites = list(self._radar_station_sites or [])
+        if self._noxp_station_site is not None:
+            sites.append(self._noxp_station_site)
+        self.map_widget.set_radar_stations(sites)
 
     def _on_archive_noxp_assets_ready(self, platform_id: str, assets: list) -> None:
-        if self.noxp_controls.current_platform() is None or self.noxp_controls.current_platform().platform_id != platform_id:
+        if self._noxp_platform is None or self._noxp_platform.platform_id != platform_id:
             return  # a later platform selection has already superseded this result
-        self.noxp_controls.set_assets(assets)
-        self.status_msg_label.setText(f"NOXP: {len(assets)} volume(s) found")
+        self._noxp_assets = assets
         self._noxp_scan_times = [
             a.nominal_time.strftime("%Y-%m-%dT%H:%M:%SZ") for a in assets if a.nominal_time is not None
         ]
-        if self._noxp_map_follow_clock:
+        if self._noxp_active:
             self._archive_controls.set_available_scan_times(self._noxp_scan_times)
 
     def _on_archive_radar_index_loaded(self, iso_times: list[str]) -> None:
         self._wsr88d_scan_times = iso_times
-        if not self._noxp_map_follow_clock:
+        if not self._noxp_active:
             self._archive_controls.set_available_scan_times(iso_times)
 
+    def _noxp_asset_near(self, when):
+        """Nearest discovered NOXP asset to `when`, or None if nothing's
+        been discovered yet this session."""
+        from archive.fetchers.noxp_radar_archive_fetcher import nearest_noxp_asset
+        return nearest_noxp_asset(self._noxp_assets, when)
+
     def _on_noxp_asset_selected(self, asset) -> None:
-        platform = self.noxp_controls.current_platform()
-        if platform is None:
+        if self._noxp_platform is None:
             return
         # RadarAsset has no .url (unlike LidarAsset) -- catalog_url is the
         # identifier available both now (from the asset) and later (NoxpArchive
@@ -4383,62 +4405,103 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         # since the actual resolved download URL isn't known until deep
         # inside load() and can't be compared against at request time.
         self._noxp_asset_url = asset.catalog_url
-        self.status_msg_label.setText(f"NOXP: loading {asset.name}…")
-        if not self._archive_noxp.load_volume(platform.platform_id, asset):
-            self.status_msg_label.setText("NOXP: load already in progress")
+        self._archive_noxp.load_volume(self._noxp_platform.platform_id, asset)
 
     def _on_archive_noxp_volume_loaded(self, platform_id: str, volume) -> None:
-        platform = self.noxp_controls.current_platform()
-        if platform is None or platform.platform_id != platform_id or volume.provenance.get('catalog_url') != self._noxp_asset_url:
+        if (
+            self._noxp_platform is None
+            or self._noxp_platform.platform_id != platform_id
+            or volume.provenance.get('catalog_url') != self._noxp_asset_url
+        ):
             return
         self._noxp_current_volume = volume
-        self.noxp_controls.set_volume_summary(volume, keep_map_on=self._noxp_map_follow_clock)
-        self.status_msg_label.setText(f"NOXP: {volume.scan_type} volume loaded ({volume.provenance.get('format', '?')})")
         # Plot the instrument's location as soon as we know it -- no LOCATE
         # click needed, since the case's day/time is already what's being
-        # looked at. Independent of scan_type (meaningful for RHI too).
+        # looked at (independent of scan_type -- meaningful for RHI too).
+        # This is also what makes NOXP a selectable radar site in the
+        # first place: it only joins the picker once it has a position.
         from archive.fetchers.noxp_radar_archive_fetcher import noxp_site_at
-        self.map_widget.set_noxp_site(noxp_site_at(volume))
-
-    def _on_noxp_map_toggled(self, checked):
-        self._noxp_generation += 1
-        self._noxp_map_follow_clock = checked
-        # Don't show two competing radar images at once -- hide (not stop)
-        # WSR-88D while NOXP is plotting; fetching/decoding keeps running so
-        # switching back is instant, not a fresh fetch.
-        if hasattr(self, "_radar_overlay"):
-            if checked:
-                self._radar_overlay.hide(transient=False)
-            elif self._current_radar_scan is not None:
-                self._archive_pending_render_scan = self._current_radar_scan
-                self._submit_pending_archive_render()
-        # The scan-step (prev/next scan) buttons follow whichever radar is
-        # actually being displayed.
-        if hasattr(self, "_archive_controls"):
-            self._archive_controls.set_available_scan_times(
-                self._noxp_scan_times if checked else self._wsr88d_scan_times
+        site = noxp_site_at(volume)
+        self.map_widget.set_noxp_site(site)
+        self._noxp_station_site = (
+            {"site_id": NOXP_SITE_ID, "name": "NOXP (mobile)", "lat": site["lat"], "lon": site["lon"]}
+            if site is not None else None
+        )
+        self._push_radar_station_sites()
+        if self._noxp_active:
+            self._populate_noxp_selectors(volume)
+            self._on_noxp_render_requested(
+                self.radar_controls.current_tilt_index(), self.radar_controls.current_product()
             )
-        if not checked and self._noxp_overlay is not None:
+
+    def _populate_noxp_selectors(self, volume) -> None:
+        """(Re)populate the RADAR tab's product/tilt combos from a NOXP
+        volume. set_archive_products already preserves the current product
+        code by itself if the new volume still has it (radar_controls
+        tracks that internally); sweep index has no such combo-level
+        memory, so it's clamped here from whatever tilt was showing before
+        this volume loaded -- this is what keeps field/sweep selection
+        steady across clock-driven volume switches."""
+        if volume.scan_type != "ppi":
+            return
+        from archive.fetchers.noxp_radar_archive_fetcher import noxp_sweep_elevations
+        from core.noxp_radar_scan import field_meta
+        fields = sorted(volume.fields)
+        if not fields:
+            return
+        self.radar_controls.set_archive_products([(f, field_meta(f)["label"]) for f in fields])
+        elevations = noxp_sweep_elevations(volume)
+        prior_sweep = self.radar_controls.current_tilt_index()
+        sweep_idx = max(0, min(prior_sweep, len(elevations) - 1)) if elevations else 0
+        self.radar_controls.set_archive_tilts(elevations, sweep_idx)
+
+    def _activate_noxp_radar(self) -> None:
+        """Make NOXP the displayed radar -- the same action a NEXRAD site
+        marker click performs for a WSR-88D station, just for the mobile
+        platform. Only reachable once _noxp_station_site exists (a volume
+        has already loaded and given NOXP a position), so
+        _noxp_current_volume is never None here."""
+        if self._noxp_current_volume is None:
+            return
+        self._noxp_generation += 1
+        self._noxp_active = True
+        self.radar_controls.set_selected_site(NOXP_SITE_ID, emit=False)
+        self._radar_overlay.hide(transient=False)
+        if hasattr(self, "_archive_controls"):
+            self._archive_controls.set_available_scan_times(self._noxp_scan_times)
+        self._populate_noxp_selectors(self._noxp_current_volume)
+        self._on_noxp_render_requested(
+            self.radar_controls.current_tilt_index(), self.radar_controls.current_product()
+        )
+
+    def _deactivate_noxp_radar(self) -> None:
+        self._noxp_generation += 1
+        self._noxp_active = False
+        if self._noxp_overlay is not None:
             self._noxp_overlay.clear()
+        if hasattr(self, "_archive_controls"):
+            self._archive_controls.set_available_scan_times(self._wsr88d_scan_times)
+        if self._current_radar_scan is not None:
+            self._archive_pending_render_scan = self._current_radar_scan
+            self._submit_pending_archive_render()
 
     def _on_platform_marker_clicked(self, platform_id: str) -> None:
-        if platform_id == "noxp" and hasattr(self, "btn_noxp"):
-            self.btn_noxp.setChecked(True)
+        if platform_id == "noxp":
+            self._activate_noxp_radar()
 
     def _on_time_changed_update_noxp_overlay(self, when) -> None:
         """Auto-advance NOXP's loaded volume as the archive clock moves,
-        same idea as the CLAMPS lidar overlay -- MAP should track "now,"
-        not stay pinned to whatever volume was picked when it was checked.
-        Unlike lidar (one file already holds a whole day of rays to slice),
-        each NOXP volume is a separate discovered file, so this means
-        picking the nearest-time asset and fetching it, not just re-slicing
-        already-loaded data."""
-        if not self._noxp_map_follow_clock:
+        same idea as the CLAMPS lidar overlay -- once NOXP is the displayed
+        radar it should track "now," not stay pinned to whatever volume
+        was active when it was selected. Unlike lidar (one file already
+        holds a whole day of rays to slice), each NOXP volume is a
+        separate discovered file, so this means picking the nearest-time
+        asset and fetching it, not just re-slicing already-loaded data."""
+        if not self._noxp_active:
             return
-        asset = self.noxp_controls.asset_near(when)
+        asset = self._noxp_asset_near(when)
         if asset is None or asset.catalog_url == self._noxp_asset_url:
             return
-        self.noxp_controls.set_current_asset_silently(asset)
         self._on_noxp_asset_selected(asset)
 
     def _on_noxp_render_requested(self, sweep_index: int, field_name: str) -> None:
@@ -4472,17 +4535,21 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._noxp_render_pending = None
         if pending is not None and pending[-1] == self._noxp_generation:
             self._start_noxp_render(pending)
-        if result['generation'] != self._noxp_generation or not self.noxp_controls._btn_render.isChecked():
+        if result['generation'] != self._noxp_generation or not self._noxp_active:
             return
         if 'error' in result:
-            self.status_msg_label.setText(f"NOXP: {result['error']}")
+            # Already logged (see _bg_render_noxp's log.exception) -- not
+            # worth interrupting the shared status line for.
             return
         if self._noxp_overlay is None:
             self._noxp_overlay = RadarOverlay(self.map_widget, layer_id='noxp-overlay', source_id='noxp-image', use_scheme_handler=False)
         self._noxp_overlay.inject(result['png'], result['bounds'])
         scan = result['scan']
         meta = result['metadata']
-        self.noxp_controls.set_status(f"{scan.native_field} · {meta['vmin']:g} … {meta['vmax']:g} {meta['units']} · {scan.scan_time:%H:%M:%S}Z")
+        if hasattr(self, "_archive_controls"):
+            self._archive_controls.set_radar_status(
+                f"NOXP: {scan.native_field} · {meta['vmin']:g} … {meta['vmax']:g} {meta['units']} · {scan.scan_time:%H:%M:%S}Z"
+            )
 
     # -- CLAMPS raw lidar quicklook (archive) ---------------------------
 
@@ -4813,7 +4880,14 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _on_radar_station_clicked(self, site: str):
         # js already called stormSetRadarStationsVisible(false) and set
         self._radar_station_picker_visible = False
+        if self._archive and site == NOXP_SITE_ID:
+            # NOXP is archive-only -- never reachable from the live picker,
+            # which only ever lists NEXRAD_SITES.
+            self._activate_noxp_radar()
+            return
         if self._archive:
+            if self._noxp_active:
+                self._deactivate_noxp_radar()
             # in archive mode, start fetching from the selected station.
             self._archive_session.radar_station = site
             self._start_archive_radar(site)

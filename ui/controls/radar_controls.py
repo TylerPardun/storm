@@ -81,6 +81,11 @@ PRODUCTS = [("N0B", "REFLECTIVITY (SR)"), ("N0U", "VELOCITY")]
 OPTIONAL_PRODUCTS = [("N0C", "CORR COEFF"), ("N0K", "SPEC DIFF PHASE")]
 ALL_PRODUCTS = PRODUCTS + OPTIONAL_PRODUCTS
 THREDDS_CATALOG_ROOT = "https://thredds.ucar.edu/thredds/catalog/nexrad/level3"
+
+# The mobile NOXP radar's site-picker/"Stations" entry -- not a real NEXRAD
+# ID, so set_selected_site short-circuits before any WSR-88D-specific
+# probing when it sees this value.
+NOXP_SITE_ID = "NOXP"
 class RadarControls(QWidget):
     """
     Toolbar widget containing:
@@ -289,10 +294,21 @@ class RadarControls(QWidget):
     def current_product(self) -> str:
         return self._product
 
+    def current_tilt_index(self) -> int:
+        return self._tilt_combo.currentIndex()
+
     def set_selected_site(self, site_id: str, emit: bool = False):
         normalized = _normalize_site(site_id) or "KTLX"
         self._site = normalized
         self._stations_button.setText(f"Stations: {normalized}")
+        if normalized == NOXP_SITE_ID:
+            # Not a real NEXRAD site -- no WSR-88D product-availability
+            # probe (it would silently mis-report N0C/N0K availability for
+            # a station that doesn't exist), and no site_changed/
+            # fetch_requested (those would ask the WSR-88D fetcher to load
+            # a station named "NOXP"). Its own product/tilt lists come from
+            # set_archive_products/set_archive_tilts, called separately.
+            return
         # fetcher always fetches all 4; availability only drives combo disabled state
         self.products_available_changed.emit([code for code, _ in ALL_PRODUCTS])
         # apply any cached availability immediately so combo disables stale unavailable items

@@ -645,6 +645,36 @@ def _shapefile_lonlat_transform(prj_wkt: str):
     return lambda x, y: transformer.transform(x, y)
 
 
+# Degrees, applied post-reprojection. SPC's pre-2020 archive shapefiles are
+# raw, unsmoothed marching-squares contours off their underlying probability
+# grid -- confirmed live: a real outlook ring had thousands of vertices in an
+# alternating-diagonal staircase pattern (e.g. consecutive vertex deltas of
+# (0.050, -0.021) then (0.026, 0.040) repeating), nothing like the smoother
+# curves SPC's own 2020+ .lyr.geojson archive already publishes pre-smoothed.
+# ~0.05 deg (~5 km over CONUS) removes that staircase noise without visibly
+# eating into the outlook's real shape at the zoom levels this renders at.
+_OUTLOOK_SIMPLIFY_TOLERANCE_DEG = 0.05
+
+
+def _simplify_outlook_geometry(geom: dict, tolerance_deg: float) -> dict:
+    """Douglas-Peucker-simplify a reprojected Polygon's ring(s) to smooth
+    out grid-contour staircasing. Falls back to the original geometry
+    whenever shapely can't produce a valid, non-empty result (e.g. a
+    sliver ring simplifying away entirely) -- a jagged polygon is still
+    correct; a missing one wouldn't be."""
+    if geom.get("type") != "Polygon":
+        return geom
+    try:
+        from shapely.geometry import mapping, shape
+        simplified = shape(geom).simplify(tolerance_deg, preserve_topology=True)
+        if simplified.is_empty or not simplified.is_valid or simplified.geom_type != "Polygon":
+            return geom
+        return mapping(simplified)
+    except Exception as exc:
+        log.warning("Outlook shapefile zip: geometry simplification failed, using raw ring: %s", exc)
+        return geom
+
+
 def _parse_outlook_shapefile_zip(zip_bytes: bytes) -> dict[str, list[dict]]:
     """Parse a pre-2020 outlook zip into {suffix: [GeoJSON Feature, ...]},
     keyed by the same suffix strings _archive_product_suffixes /
@@ -691,6 +721,7 @@ def _parse_outlook_shapefile_zip(zip_bytes: bytes) -> dict[str, list[dict]]:
         for geom, rec in zip(geometries, records):
             if geom is None:
                 continue
+            geom = _simplify_outlook_geometry(geom, _OUTLOOK_SIMPLIFY_TOLERANCE_DEG)
             dn_raw = rec.get("DN")
             try:
                 dn = int(dn_raw) if dn_raw is not None else None

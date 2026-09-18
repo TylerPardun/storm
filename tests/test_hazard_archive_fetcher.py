@@ -245,3 +245,42 @@ def test_missing_prj_refuses_to_guess_a_coordinate_system(caplog):
     zip_bytes = _build_outlook_zip(1, "20190608_2000", {"cat": [(_TRIANGLE, 2)]}, include_prj=False)
     assert _parse_outlook_shapefile_zip(zip_bytes) == {}
     assert "no .prj found" in caplog.text
+
+
+def test_jagged_grid_contour_boundary_is_smoothed_not_left_staircased():
+    # Regression test for the actual "jagged/noisy" complaint: SPC's raw
+    # pre-2020 shapefiles are unsmoothed marching-squares output --
+    # confirmed live on a real 2010-05-10 outlook, whose largest ring
+    # carried 2121 vertices in an alternating-diagonal staircase pattern.
+    # Build a similar fine zigzag (steps well under the ~5 km smoothing
+    # tolerance) along an otherwise plain ~50 km square, in the same LCC
+    # easting/northing units a real .shp stores, and confirm simplify
+    # collapses the staircase while keeping the square's real extent.
+    from pyproj import CRS, Transformer
+    crs = CRS.from_wkt(_SPC_OUTLOOK_PRJ_WKT)
+    to_lcc = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    cx, cy = to_lcc.transform(-97.5, 35.5)
+    half = 25_000.0  # ~25 km half-width
+
+    zigzag = []
+    steps = 60
+    for i in range(steps):
+        x = cx - half + (2 * half) * (i / steps)
+        y = cy - half + (300.0 if i % 2 == 0 else -300.0)  # 300 m staircase
+        zigzag.append((x, y))
+    ring_lcc = (
+        [(cx - half, cy - half)] + zigzag
+        + [(cx + half, cy + half), (cx - half, cy + half), (cx - half, cy - half)]
+    )
+    assert len(ring_lcc) > 60
+
+    zip_bytes = _build_outlook_zip(1, "20190608_2000", {"cat": [(ring_lcc, 2)]})
+    by_suffix = _parse_outlook_shapefile_zip(zip_bytes)
+    ring_out = by_suffix["cat"][0]["geometry"]["coordinates"][0]
+
+    assert len(ring_out) < len(ring_lcc) / 3  # the zigzag should collapse away
+    lons = [p[0] for p in ring_out]
+    lats = [p[1] for p in ring_out]
+    # the real ~50 km square extent survives simplification, not just the zigzag
+    assert max(lons) - min(lons) > 0.3
+    assert max(lats) - min(lats) > 0.3

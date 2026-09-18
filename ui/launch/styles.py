@@ -255,7 +255,12 @@ QComboBox {
     color: #E8EAF0;
     font-size: 12px;
     padding: 5px 10px;
-    selection-background-color: #00CFFF;
+    /* Qt renders the dropdown list's own highlighted-item color from
+       these two properties on QComboBox itself, not from the descendant
+       QComboBox QAbstractItemView rule below -- both are kept in sync so
+       the popup matches the calendar month-popup's softer highlight. */
+    selection-background-color: #123C50;
+    selection-color: #9BE8FF;
 }
 QComboBox:focus {
     border: 1px solid #00CFFF;
@@ -281,8 +286,11 @@ QComboBox QAbstractItemView {
     background-color: #1A1A2E;
     border: 1px solid #2A2A3E;
     color: #E8EAF0;
-    selection-background-color: #00CFFF;
-    selection-color: #0A0A0F;
+    /* Match the calendar's month-popup hover treatment (QCalendarWidget
+       QMenu::item:selected above) instead of a solid, harsher fill --
+       this is the same "item under the cursor/keyboard focus" role. */
+    selection-background-color: #123C50;
+    selection-color: #9BE8FF;
     outline: none;
 }
 QComboBox QAbstractItemView::item {
@@ -315,8 +323,8 @@ QListWidget#browseDatesList::item:hover {
     background-color: #12121E;
 }
 QListWidget#browseDatesList::item:selected {
-    background-color: #00CFFF;
-    color: #0A0A0F;
+    background-color: #123C50;
+    color: #9BE8FF;
 }
 QScrollBar:vertical {
     background: transparent;
@@ -340,21 +348,6 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 QWidget#launchForm, QScrollArea#launchFormScroll {
     background-color: #0A0A0F;
     border: none;
-}
-QTabWidget#browseResults::pane {
-    border: 1px solid #1E1E2E;
-    background: #0D0D1A;
-    border-radius: 5px;
-}
-QTabWidget#browseResults QTabBar::tab {
-    background: #1A1A2E;
-    color: #8E97AB;
-    padding: 6px 10px;
-    border-bottom: 2px solid transparent;
-}
-QTabWidget#browseResults QTabBar::tab:selected {
-    color: #00CFFF;
-    border-bottom-color: #00CFFF;
 }
 """
 

@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QToolButton, QFileDialog, QFrame,
     QApplication, QMessageBox, QSizePolicy, QWidget,
     QDateTimeEdit, QSpinBox, QComboBox, QCheckBox,
-    QCalendarWidget, QListWidget, QListWidgetItem, QTabWidget, QScrollArea,
+    QCalendarWidget, QListWidget, QListWidgetItem, QScrollArea,
 )
 from PyQt6.QtCore import (
     Qt, QSettings, QTimer, QSize, QDate, QDateTime, QPointF, QRectF, QObject, QEvent, pyqtSignal,
@@ -28,10 +28,19 @@ from ui.launch.styles import (
     _UPD_CURRENT, _UPD_ERROR, _UPD_SUCCESS, _UPD_WARNING, _YEAR_GRID_STYLE,
 )
 from ui.launch.availability import AvailabilityWorker
-from archive.catalog import ALL_PLATFORMS, CAMPAIGN_YEARS
+from archive.catalog import CAMPAIGN_YEARS, platforms_by_site
 from ui.launch.update_dialogs import _CondaUpdateDialog, _LogViewerDialog, UpdateWorker
 
 
+
+# Browse-panel instrument dropdown: how a KnownPlatform.site is labeled.
+# Single-family sites normally show their family for context (e.g. "FOFS
+# Mobile Mesonet" shortened to "Mobile Mesonet" here -- the raw family
+# string is a fetcher name, not something a user picking an instrument
+# needs); these sites already read as a complete name on their own and
+# skip that prefix even though they're single-family.
+_BROWSE_FAMILY_LABEL = {"FOFS Mobile Mesonet": "Mobile Mesonet"}
+_BROWSE_BARE_LABEL_SITES = {"NOXP", "NOXP Scout", "CopterSonde"}
 
 _PBKDF2_ITERATIONS = 600_000
 
@@ -609,21 +618,36 @@ class LaunchDialog(QDialog):
         arc_hint.setWordWrap(True)
         av_layout.addWidget(arc_hint)
 
-        self._surprise_btn = QPushButton("SURPRISE ME")
-        self._surprise_btn.setToolTip(
-            "Choose a random date with data"
-        )
-        self._surprise_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._surprise_btn.setStyleSheet(
+        _link_style = (
             "QPushButton {"
-            "  background-color: #1A1A2E; color: #8E97AB;"
-            "  border: 1px solid #1E1E2E; border-radius: 6px;"
-            "  font-size: 11px; font-weight: 700; padding: 6px 10px;"
+            "  background: transparent; border: none; color: #00CFFF;"
+            "  font-size: 11px; font-weight: 600; padding: 0;"
             "}"
-            "QPushButton:hover { border-color: #00CFFF; color: #00CFFF; background-color: #0D1A2E; }"
+            "QPushButton:hover { color: #5CE1FF; text-decoration: underline; }"
         )
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
+
+        self._surprise_btn = QPushButton("Surprise me")
+        self._surprise_btn.setToolTip("Choose a random date with data")
+        self._surprise_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._surprise_btn.setFlat(True)
+        self._surprise_btn.setStyleSheet(_link_style)
         self._surprise_btn.clicked.connect(self._on_surprise_me_clicked)
-        av_layout.addWidget(self._surprise_btn)
+        action_row.addWidget(self._surprise_btn)
+        action_row.addStretch()
+
+        self._availability_refresh_btn = QPushButton("↻  Refresh data")
+        self._availability_refresh_btn.setToolTip("Refresh available dates")
+        self._availability_refresh_btn.setAccessibleName("Refresh archive availability")
+        self._availability_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._availability_refresh_btn.setFlat(True)
+        self._availability_refresh_btn.setStyleSheet(_link_style)
+        self._availability_refresh_btn.clicked.connect(self._refresh_availability)
+        action_row.addWidget(self._availability_refresh_btn)
+
+        av_layout.addLayout(action_row)
 
         av_layout.addSpacing(8)
         self._build_browse_section(av_layout)
@@ -814,7 +838,6 @@ class LaunchDialog(QDialog):
         and can squeeze nested layouts below their height-for-width. Compute the
         form's height explicitly instead of pumping a nested event loop.
         """
-        self._browse_coverage_lbl.setMinimumHeight(0)
         self._form.setMinimumHeight(0)
         layout = self._form.layout()
         layout.invalidate()
@@ -829,8 +852,6 @@ class LaunchDialog(QDialog):
         self.resize(width + scrollbar, min(height + footer_height, max_height))
         self.layout().activate()
         self._form_scroll.widget().layout().activate()
-        lbl = self._browse_coverage_lbl
-        lbl.setMinimumHeight(max(0, lbl.heightForWidth(lbl.width())) if lbl.text() else 0)
         if not self._user_moved_window:
             self._recenter()
 
@@ -991,22 +1012,6 @@ class LaunchDialog(QDialog):
     # -- Archive availability: progressive session metadata, automatic date queries --
 
     def _build_browse_section(self, parent_layout: QVBoxLayout):
-        summary_row = QHBoxLayout()
-        self._browse_coverage_lbl = QLabel("Availability will be checked when archive mode opens.")
-        self._browse_coverage_lbl.setObjectName("hint")
-        self._browse_coverage_lbl.setWordWrap(True)
-        summary_row.addWidget(self._browse_coverage_lbl, 1)
-        self._availability_refresh_btn = QToolButton()
-        self._availability_refresh_btn.setText("↻")
-        self._availability_refresh_btn.setStyleSheet(self._cal_btn.styleSheet())
-        self._availability_refresh_btn.setFixedSize(28, 28)
-        self._availability_refresh_btn.setAccessibleName("Refresh archive availability")
-        self._availability_refresh_btn.setToolTip("Refresh available dates")
-        self._availability_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._availability_refresh_btn.clicked.connect(self._refresh_availability)
-        summary_row.addWidget(self._availability_refresh_btn)
-        parent_layout.addLayout(summary_row)
-
         self._browse_toggle_btn = QPushButton("▸  BROWSE AVAILABLE CASES")
         self._browse_toggle_btn.setObjectName("dataToggleBtn")
         self._browse_toggle_btn.setFixedHeight(18)
@@ -1020,23 +1025,29 @@ class LaunchDialog(QDialog):
 
         filter_row = QHBoxLayout()
         self._browse_campaign_combo = QComboBox()
-        self._browse_campaign_combo.addItem("Any campaign years", None)
+        self._browse_campaign_combo.addItem("Any Campaign", None)
         self._browse_campaign_combo.setToolTip("Filter by campaign year; other campaigns may appear.")
         for name in CAMPAIGN_YEARS:
             self._browse_campaign_combo.addItem(name, name)
         self._browse_year_combo = QComboBox()
         self._populate_browse_year_combo(None)
-        for combo in (self._browse_campaign_combo, self._browse_year_combo):
-            combo.setCursor(Qt.CursorShape.PointingHandCursor)
-            filter_row.addWidget(combo, 1)
-        bs.addLayout(filter_row)
         self._browse_platform_combo = QComboBox()
-        self._browse_platform_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self._browse_platform_combo.setMinimumContentsLength(24)
         self._browse_platform_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self._browse_platform_combo.addItem("All instruments", None)
-        for p in sorted(ALL_PLATFORMS, key=lambda p: (p.family, p.display_name)):
-            self._browse_platform_combo.addItem(f"{p.family} — {p.display_name}", p)
+        for combo in (self._browse_campaign_combo, self._browse_year_combo, self._browse_platform_combo):
+            combo.setCursor(Qt.CursorShape.PointingHandCursor)
+            # A flat list of 20+ years or sites is unusable as a plain
+            # drop-down -- cap the open popup's height and let it scroll.
+            # setMaxVisibleItems alone doesn't reliably cap a styled
+            # combo's popup (confirmed: it's ignored here even on a bare,
+            # unstyled QComboBox) -- setting the view's own maximum height
+            # is what actually constrains it.
+            combo.setMaxVisibleItems(10)
+            combo.view().setMaximumHeight(260)
+        filter_row.addWidget(self._browse_campaign_combo, 1)
+        filter_row.addWidget(self._browse_year_combo, 1)
+        bs.addLayout(filter_row)
+        self._populate_browse_platform_combo()
         bs.addWidget(self._browse_platform_combo)
         self._browse_status_lbl = QLabel()
         self._browse_status_lbl.setObjectName("hint")
@@ -1044,18 +1055,12 @@ class LaunchDialog(QDialog):
         bs.addWidget(self._browse_status_lbl)
         self._browse_dates_list = QListWidget()
         self._browse_dates_list.setObjectName("browseDatesList")
-        self._browse_results = QTabWidget()
-        self._browse_results.setObjectName("browseResults")
-        self._browse_results.setFixedHeight(140)
+        self._browse_dates_list.setFixedHeight(140)
         self._browse_dates_list.itemClicked.connect(self._on_browse_date_chosen)
         self._browse_dates_list.itemActivated.connect(self._on_browse_date_chosen)
-        self._browse_results.addTab(self._browse_dates_list, "Dates")
-        self._browse_sources_list = QListWidget()
-        self._browse_sources_list.setObjectName("browseDatesList")
-        self._browse_results.addTab(self._browse_sources_list, "Selected date · instruments")
-        bs.addWidget(self._browse_results)
+        bs.addWidget(self._browse_dates_list)
         note = QLabel("Shaded calendar dates and cyan years mark catalog-listed data matching these filters. "
-                      "Unmarked dates may be unchecked. NOXP startup discovery is limited; use archive radar controls for more files.")
+                      "Unmarked dates may be unchecked.")
         note.setObjectName("hint")
         note.setWordWrap(True)
         bs.addWidget(note)
@@ -1075,7 +1080,10 @@ class LaunchDialog(QDialog):
         self._browse_year_combo.blockSignals(True)
         self._browse_year_combo.clear()
         self._browse_year_combo.addItem("Any year", None)
-        years = CAMPAIGN_YEARS.get(campaign, ()) if campaign else range(1999, datetime.now().year + 2)
+        # No future years -- consistent with the day-grid calendar and
+        # year-grid popup, neither of which can show a day/year that
+        # hasn't happened yet.
+        years = CAMPAIGN_YEARS.get(campaign, ()) if campaign else range(1999, QDate.currentDate().year() + 1)
         for year in years:
             self._browse_year_combo.addItem(str(year), year)
         self._browse_year_combo.blockSignals(False)
@@ -1083,6 +1091,38 @@ class LaunchDialog(QDialog):
     def _on_browse_campaign_changed(self):
         self._populate_browse_year_combo(self._browse_campaign_combo.currentData())
         self._render_availability()
+
+    def _populate_browse_platform_combo(self):
+        """(Re)build the instrument dropdown, narrowed to sites with a
+        known date under the current campaign/year filters -- called from
+        _render_availability() so it tracks every trigger that can change
+        those filters or the availability snapshot itself, in whatever
+        order the user clicked them in. With no filter active (or before
+        any snapshot exists to narrow by), every site is listed."""
+        combo = self._browse_platform_combo
+        previous = combo.currentText() if combo.count() else None
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("All instruments", None)
+        snapshot = self._availability_snapshot
+        year = self._browse_year_combo.currentData()
+        campaign_years = CAMPAIGN_YEARS.get(self._browse_campaign_combo.currentData())
+        narrowing = snapshot is not None and (year is not None or campaign_years is not None)
+        for site, plats in sorted(platforms_by_site().items()):
+            if narrowing:
+                site_dates = (d for p in plats for d in getattr(snapshot.platforms.get(p.platform_id), 'dates', ()))
+                if not any((year is None or d.year == year)
+                           and (campaign_years is None or d.year in campaign_years) for d in site_dates):
+                    continue
+            families = sorted({p.family for p in plats})
+            label = site if (len(families) > 1 or site in _BROWSE_BARE_LABEL_SITES) \
+                else f"{_BROWSE_FAMILY_LABEL.get(families[0], families[0])} — {site}"
+            index = combo.count()
+            combo.addItem(label, plats)
+            combo.setItemData(index, ", ".join(families), Qt.ItemDataRole.ToolTipRole)
+        restored = combo.findText(previous) if previous else -1
+        combo.setCurrentIndex(restored if restored >= 0 else 0)
+        combo.blockSignals(False)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1135,9 +1175,17 @@ class LaunchDialog(QDialog):
         snapshot = self._availability_snapshot
         if snapshot is None:
             return frozenset()
-        platform = self._browse_platform_combo.currentData()
-        result = snapshot.platforms.get(platform.platform_id) if platform else None
-        dates = result.dates if result else (frozenset() if platform else snapshot.dates)
+        # currentData() is None ("All instruments") or the list of
+        # KnownPlatform for one vehicle/site -- union every product that
+        # vehicle carries (see platforms_by_site()), not just one.
+        platforms = self._browse_platform_combo.currentData()
+        if platforms:
+            dates = frozenset(
+                d for p in platforms
+                for d in getattr(snapshot.platforms.get(p.platform_id), 'dates', ())
+            )
+        else:
+            dates = snapshot.dates
         year = self._browse_year_combo.currentData()
         campaign = self._browse_campaign_combo.currentData()
         return frozenset(d for d in dates if (year is None or d.year == year)
@@ -1146,6 +1194,11 @@ class LaunchDialog(QDialog):
     def _render_availability(self):
         snapshot = self._availability_snapshot
         target = self._archive_dt_edit.date().toPyDate()
+        # Narrow the instrument list to the current campaign/year filters
+        # before reading the platform selection back out below -- if the
+        # previously-selected site no longer matches, this already fell
+        # back to "All instruments".
+        self._populate_browse_platform_combo()
         dates = self._filtered_dates()
         self._archive_dt_edit.calendarWidget().set_known_dates(dates)
         if self._calendar_popup is not None:
@@ -1157,6 +1210,16 @@ class LaunchDialog(QDialog):
             year = self._browse_year_combo.itemData(i)
             self._browse_year_combo.setItemData(i, QColor("#00CFFF" if year in years else "#E8EAF0"), Qt.ItemDataRole.ForegroundRole)
         self._browse_platform_combo.setToolTip(self._browse_platform_combo.currentText())
+        self._browse_status_lbl.setText(
+            f"{len(dates)} known dates in {len(years)} years — matching dates are shaded on the calendar above."
+        )
+        running = snapshot is None or snapshot.checked < snapshot.total
+        self._archive_scan_progress.setVisible(running)
+        self._archive_scan_progress.setRange(0, snapshot.total if snapshot else 0)
+        self._archive_scan_progress.setValue(snapshot.checked if snapshot else 0)
+        self._archive_scan_progress.setToolTip(
+            f"Finding dates · {snapshot.checked}/{snapshot.total} catalogs" if snapshot else "Finding dates…"
+        )
         # Preserve scroll position and selection when only coverage progress changed.
         listed = tuple(self._browse_dates_list.item(i).data(Qt.ItemDataRole.UserRole)
                        for i in range(self._browse_dates_list.count()))
@@ -1171,54 +1234,9 @@ class LaunchDialog(QDialog):
                 if d == target:
                     self._browse_dates_list.setCurrentItem(item)
             self._browse_dates_list.verticalScrollBar().setValue(scroll)
-
         target_row = ordered.index(target) if target in dates else -1
         if self._browse_dates_list.currentRow() != target_row:
             self._browse_dates_list.setCurrentRow(target_row)
-        self._browse_status_lbl.setText(f"{len(dates)} known dates in {len(years)} years. Select a date to explore.")
-        self._browse_sources_list.clear()
-        present, unknown = [], []
-        for p in ALL_PLATFORMS:
-            result = snapshot.platforms.get(p.platform_id) if snapshot else None
-            if result and target in result.dates:
-                present.append(p)
-                item = QListWidgetItem(f"{p.family} — {p.display_name}" + (" (partial)" if not result.complete else ""))
-                item.setToolTip("Files listed; search incomplete." if not result.complete else "Files listed; data not yet checked.")
-                self._browse_sources_list.addItem(item)
-            if result is None or not result.complete:
-                unknown.append(p)
-        for p in unknown:
-            if p in present:
-                continue
-            result = snapshot.platforms.get(p.platform_id) if snapshot else None
-            item = QListWidgetItem(f"{'Incomplete' if result and result.errors else 'Checking'} — {p.family} — {p.display_name}")
-            item.setForeground(QColor("#8E97AB"))
-            item.setToolTip("Search incomplete. Refresh to retry." if result and result.errors else "Still checking this instrument…")
-            self._browse_sources_list.addItem(item)
-        self._browse_results.setTabText(1, "Selected date")
-        running = snapshot is None or snapshot.checked < snapshot.total
-        self._archive_scan_progress.setVisible(running)
-        self._archive_scan_progress.setRange(0, snapshot.total if snapshot else 0)
-        self._archive_scan_progress.setValue(snapshot.checked if snapshot else 0)
-        self._archive_scan_progress.setToolTip(
-            f"Finding dates · {snapshot.checked}/{snapshot.total} catalogs" if snapshot else "Finding dates…"
-        )
-        text = f"{target.isoformat()} · " + ("Data listed" if present else "No data found yet" if running or unknown else "No files listed in checked catalogs")
-        if snapshot and snapshot.cached:
-            text += " · cached listings"
-        if running:
-            text += f"\nIndexing catalogs{f' · {snapshot.checked}/{snapshot.total}' if snapshot else '…'}"
-        elif unknown:
-            text += "\nAvailability incomplete: some sources remain unchecked or partial. Use ↻ to refresh."
-        else:
-            text += "\nCatalog check complete. Calendar shading is ready."
-        self._browse_coverage_lbl.setText(text)
-        self._browse_coverage_lbl.setStyleSheet("color: #4ADE80;" if present else "")
-        self._browse_coverage_lbl.setToolTip(
-            "Some sources are unchecked or partial." if unknown
-            else "Files listed; coverage may vary within each day." if present
-            else "No files listed for this date."
-        )
         self._layout_timer.start(0)
 
     def _on_browse_date_chosen(self, item):

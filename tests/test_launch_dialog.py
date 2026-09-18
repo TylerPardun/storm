@@ -113,11 +113,13 @@ def test_populate_browse_year_combo_with_a_campaign_shows_only_its_years():
     assert years == [None, 2024, 2025, 2026]
 
 
-def test_populate_browse_year_combo_with_no_campaign_shows_a_broad_year_range():
+def test_populate_browse_year_combo_with_no_campaign_shows_a_broad_year_range(monkeypatch):
     # Not campaign-scoped: covers real pre-2009 history (confirmed live
     # 2026-09-08 -- probe9 has 2009-2010 VORTEX2-era data, mg1-3/
     # noxp_scout have 2015 data, none tied to any CAMPAIGN_YEARS entry)
-    # rather than being capped to the union of campaign years.
+    # rather than being capped to the union of campaign years. Capped at
+    # today, though -- no field deployment has data from the future.
+    _freeze_today(monkeypatch, 2026)
     _, dlg = _dialog()
 
     dlg._populate_browse_year_combo(None)
@@ -126,6 +128,7 @@ def test_populate_browse_year_combo_with_no_campaign_shows_a_broad_year_range():
     assert years[0] is None
     assert 1999 in years
     assert 2009 in years and 2017 in years and 2026 in years
+    assert 2027 not in years
     assert years == sorted(years, key=lambda y: (y is not None, y))
 
 
@@ -139,53 +142,20 @@ def test_on_browse_campaign_changed_repopulates_years_for_the_selected_campaign(
     assert years == [None, 2017]
 
 
-def test_post_layout_adjust_gives_the_coverage_label_enough_height_for_its_full_text():
-    # Regression test: a word-wrapped QLabel's height as settled by a
-    # plain QVBoxLayout reliably lands a few px under its own
-    # heightForWidth() (confirmed live 2026-09-08 on a long multi-family
-    # "Found! ..." summary) -- _post_layout_adjust must force it to the
-    # correct height, not just resize the dialog around a short label.
-    # No dlg.show()/QTest.qWait: adjustSize()/heightForWidth() are plain
-    # layout computation and don't need a real on-screen window, and
-    # skipping it keeps this test out of this file's rare pre-existing
-    # calendar-construction crash (see planning/archive-browse-backlog.md)
-    # since that only reproduces when many dialogs are actually shown.
-    _, dlg = _dialog()
-    dlg._select_mode("archive")
-    dlg._toggle_browse_section()
-    lbl = dlg._browse_coverage_lbl
-    # a long enough string to actually need multiple wrapped lines at
-    # this dialog's width, exercising the same shortfall as a real
-    # multi-family coverage result
-    lbl.setText(
-        "Found! 24 of 29 platforms have data for 2026-09-09:\n"
-        "FOFS Mobile Mesonet: DL Truck (mesonet), Far Field, Hail Cam, MG1, MG2, "
-        "MG3, NOXP Scout, Probe 1, Probe 2, Probe 3, Probe 4, Probe 5, Probe 7, "
-        "Probe 9, Wind Sonde 1, Wind Sonde 2\n"
-        "CLAMPS Winds: DL Truck — Lidar 1 (VAD), DL Truck — Lidar 2 (VAD), "
-        "DL Truck — Lidar 1 (CSM), DL Truck — Lidar 2 (CSM), CLAMPS 1 (VAD), "
-        "CLAMPS 2 (VAD)\n"
-        "CLAMPS TROPoe: CLAMPS 1, CLAMPS 2"
-    )
-
-    dlg._post_layout_adjust()
-
-    assert lbl.height() >= lbl.heightForWidth(lbl.width())
-
-
-def test_post_layout_adjust_resets_the_coverage_labels_minimum_height_when_cleared():
-    # so a later, shorter result doesn't stay stuck at a prior tall size
-    _, dlg = _dialog()
-    dlg._select_mode("archive")
-    dlg._toggle_browse_section()
-    dlg._browse_coverage_lbl.setText("a\nb\nc\nd\ne\nf")
-    dlg._post_layout_adjust()
-    assert dlg._browse_coverage_lbl.minimumHeight() > 0
-
-    dlg._browse_coverage_lbl.setText("")
-    dlg._post_layout_adjust()
-
-    assert dlg._browse_coverage_lbl.minimumHeight() == 0
+def test_combo_box_dropdown_highlight_matches_the_calendar_month_popup():
+    # Regression test: QComboBox's own selection-background-color/
+    # selection-color (not just the QComboBox QAbstractItemView rule) is
+    # what actually renders a combo box dropdown's highlighted row --
+    # these previously stayed at the old solid #00CFFF while every other
+    # popup in this dialog (the calendar's month picker) used the softer
+    # #123C50/#9BE8FF treatment, so campaign/year/instrument dropdowns
+    # visibly clashed with the rest of the design.
+    from ui.launch.styles import _DIALOG_STYLE
+    import re
+    combo_block = re.search(r"QComboBox \{[^}]*\}", _DIALOG_STYLE).group()
+    menu_item_block = re.search(r"QCalendarWidget QMenu::item:selected \{[^}]*\}", _DIALOG_STYLE).group()
+    assert "#123C50" in combo_block and "#9BE8FF" in combo_block
+    assert "#123C50" in menu_item_block and "#9BE8FF" in menu_item_block
 
 
 def test_availability_calendar_disallows_dates_after_today():
@@ -346,7 +316,6 @@ def test_late_result_cannot_overwrite_new_date_or_resume_closed_dialog():
     dlg._archive_dt_edit.setDate(QDate(2025, 5, 1))
     dlg._on_availability_updated(old_generation, _snapshot([date(2024, 4, 27)]))
     assert dlg._availability_snapshot is None
-    assert "2025-05-01" in dlg._browse_coverage_lbl.text()
     dlg.show()
     generation = dlg._availability_generation
     dlg.close()
@@ -372,54 +341,110 @@ def test_known_dates_mark_both_calendars_year_grid_and_year_filter():
 def test_campaign_year_and_platform_filters_update_without_requests():
     _, dlg = _dialog()
     _apply(dlg, _snapshot([date(2024, 4, 27), date(2025, 5, 1), date(2015, 5, 15)]))
-    assert dlg._browse_dates_list.item(0).text() == "2025-05-01"
-    dlg._browse_campaign_combo.setCurrentIndex(dlg._browse_campaign_combo.findData("LIFT"))
-    assert dlg._browse_dates_list.count() == 2
-    dlg._browse_year_combo.setCurrentIndex(dlg._browse_year_combo.findData(2024))
-    assert dlg._browse_dates_list.count() == 1
-    # First sorted instrument has no dates in this fixture unless it is FOFS dltruck.
+    known = lambda: dlg._archive_dt_edit.calendarWidget()._known_dates
+    assert date(2025, 5, 1) in known()
+    # Only ALL_PLATFORMS[0]'s platform_id has dates in this fixture -- pick
+    # a site whose whole group excludes it. Done before any campaign/year
+    # filter is applied, since once one narrows the instrument dropdown to
+    # sites with matching dates, a deliberately dateless site like this one
+    # would no longer be a selectable option at all.
     other = next(i for i in range(1, dlg._browse_platform_combo.count())
-                 if dlg._browse_platform_combo.itemData(i).platform_id != ALL_PLATFORMS[0].platform_id)
+                 if ALL_PLATFORMS[0].platform_id not in {p.platform_id for p in dlg._browse_platform_combo.itemData(i)})
     dlg._browse_platform_combo.setCurrentIndex(other)
-    assert dlg._browse_dates_list.count() == 0
-    assert not dlg._archive_dt_edit.calendarWidget()._known_dates
+    assert not known()
+    dlg._browse_platform_combo.setCurrentIndex(0)  # back to "All instruments"
+    dlg._browse_campaign_combo.setCurrentIndex(dlg._browse_campaign_combo.findData("LIFT"))
+    assert len(known()) == 2
+    dlg._browse_year_combo.setCurrentIndex(dlg._browse_year_combo.findData(2024))
+    assert len(known()) == 1
+
+
+def test_instrument_dropdown_is_grouped_by_vehicle_not_by_family():
+    _, dlg = _dialog()
+    combo = dlg._browse_platform_combo
+    labels = [combo.itemText(i) for i in range(1, combo.count())]
+    # One "LiDAR Truck" entry, not four separate family-prefixed entries
+    # for its mesonet probe, two lidars, and sondes.
+    assert labels.count("LiDAR Truck") == 1
+    assert not any(label.endswith("— LiDAR Truck") or "LiDAR Truck (mesonet)" in label for label in labels)
+    assert "CLAMPS 1" in labels and "CLAMPS 2" in labels
+    # A single-family vehicle still shows its family for context, exactly
+    # as before this change -- except the three sites whose own name
+    # already reads as complete (NOXP, NOXP Scout, CopterSonde).
+    assert "Mobile Mesonet — Probe 1" in labels
+    assert "NOXP" in labels and "NOXP Scout" in labels and "CopterSonde" in labels
+
+
+def test_selecting_a_vehicle_unions_dates_across_all_its_products():
+    _, dlg = _dialog()
+    from archive.catalog import ALL_PLATFORMS, AvailabilitySnapshot, PlatformAvailability
+    mesonet_date = date(2024, 4, 27)
+    lidar_date = date(2024, 4, 28)
+    results = {p.platform_id: PlatformAvailability(frozenset(), 1, 1, ()) for p in ALL_PLATFORMS}
+    results["FOFS-dltruck"] = PlatformAvailability(frozenset({mesonet_date}), 1, 1, ())
+    results["RAW-LIDAR-DLTRUCK1-DL1-CSM"] = PlatformAvailability(frozenset({lidar_date}), 1, 1, ())
+    snapshot = AvailabilitySnapshot(results, len(results), len(results))
+    _apply(dlg, snapshot)
+
+    index = dlg._browse_platform_combo.findText("LiDAR Truck")
+    assert index > 0
+    dlg._browse_platform_combo.setCurrentIndex(index)
+
+    known = dlg._archive_dt_edit.calendarWidget()._known_dates
+    assert known == {mesonet_date, lidar_date}
+
+
+def test_instrument_dropdown_narrows_to_the_selected_years_platforms():
+    _, dlg = _dialog()
+    from archive.catalog import ALL_PLATFORMS, AvailabilitySnapshot, PlatformAvailability
+    results = {p.platform_id: PlatformAvailability(frozenset(), 1, 1, ()) for p in ALL_PLATFORMS}
+    results["FOFS-dltruck"] = PlatformAvailability(frozenset({date(2024, 4, 27)}), 1, 1, ())
+    results["FOFS-probe1"] = PlatformAvailability(frozenset({date(2015, 5, 15)}), 1, 1, ())
+    snapshot = AvailabilitySnapshot(results, len(results), len(results))
+    _apply(dlg, snapshot)
+    combo = dlg._browse_platform_combo
+    assert "LiDAR Truck" in [combo.itemText(i) for i in range(combo.count())]
+    assert "Mobile Mesonet — Probe 1" in [combo.itemText(i) for i in range(combo.count())]
+
+    dlg._browse_year_combo.setCurrentIndex(dlg._browse_year_combo.findData(2024))
+
+    labels = [combo.itemText(i) for i in range(combo.count())]
+    assert "LiDAR Truck" in labels
+    assert "Mobile Mesonet — Probe 1" not in labels
+    assert "All instruments" in labels
+
+
+def test_instrument_selection_falls_back_to_all_when_narrowed_away():
+    _, dlg = _dialog()
+    from archive.catalog import ALL_PLATFORMS, AvailabilitySnapshot, PlatformAvailability
+    results = {p.platform_id: PlatformAvailability(frozenset(), 1, 1, ()) for p in ALL_PLATFORMS}
+    results["FOFS-dltruck"] = PlatformAvailability(frozenset({date(2024, 4, 27)}), 1, 1, ())
+    results["FOFS-probe1"] = PlatformAvailability(frozenset({date(2015, 5, 15)}), 1, 1, ())
+    snapshot = AvailabilitySnapshot(results, len(results), len(results))
+    _apply(dlg, snapshot)
+    combo = dlg._browse_platform_combo
+    combo.setCurrentIndex(combo.findText("Mobile Mesonet — Probe 1"))
+
+    dlg._browse_year_combo.setCurrentIndex(dlg._browse_year_combo.findData(2024))  # narrows Probe 1 away
+
+    assert combo.currentText() == "All instruments"
 
 
 def test_date_presence_keeps_errors_distinct_from_absence(caplog):
     _, dlg = _dialog()
     dlg._archive_dt_edit.setDate(QDate(2024, 4, 27))
     _apply(dlg, _snapshot([date(2024, 4, 27)], failed=True))
-    assert "Data listed" in dlg._browse_coverage_lbl.text()
-    assert "incomplete" in dlg._browse_coverage_lbl.text()
-    assert "unchecked or partial" in dlg._browse_coverage_lbl.toolTip()
-    assert "server timed out" not in dlg._browse_coverage_lbl.toolTip()
     assert "server timed out" in caplog.text
-    assert dlg._browse_sources_list.count() == 1
     _apply(dlg, _snapshot(failed=True))
-    assert "incomplete" in dlg._browse_coverage_lbl.text()
     assert not dlg._archive_scan_progress.isVisibleTo(dlg)
     _apply(dlg, _snapshot())
-    assert "check complete" in dlg._browse_coverage_lbl.text()
-    assert dlg._browse_coverage_lbl.styleSheet() == ""
 
 
 def test_partial_snapshot_keeps_progress_and_positive_dates():
     _, dlg = _dialog()
     _apply(dlg, _snapshot([date(2024, 4, 27)], partial=True))
-    assert "Indexing" in dlg._browse_coverage_lbl.text()
     assert dlg._archive_scan_progress.isVisibleTo(dlg)
-    assert dlg._browse_dates_list.count() == 1
-
-
-def test_list_selection_preserves_utc_time_and_automatically_changes_query():
-    _, dlg = _dialog()
-    dlg._archive_dt_edit.setTime(QTime(9, 15, 45))
-    _apply(dlg, _snapshot([date(2024, 4, 27)]))
-    generation = dlg._availability_generation
-    dlg._on_browse_date_chosen(dlg._browse_dates_list.item(0))
-    assert dlg._archive_dt_edit.date() == QDate(2024, 4, 27)
-    assert dlg._archive_dt_edit.time() == QTime(9, 15, 45)
-    assert dlg._availability_generation > generation
+    assert len(dlg._archive_dt_edit.calendarWidget()._known_dates) == 1
 
 
 def test_refresh_clears_old_markers_and_requests_fresh_metadata(monkeypatch):
@@ -448,7 +473,6 @@ def test_small_screen_scrolls_form_without_overlap_and_keeps_launch_visible(monk
     assert dlg._form_scroll.verticalScrollBar().maximum() > 0
     assert dlg._footer.geometry().bottom() < dlg.height()
     assert dlg._launch_btn.isVisibleTo(dlg)
-    assert dlg._browse_results.geometry().top() > dlg._browse_status_lbl.geometry().bottom()
     # Every visible direct child fits its form section, including wrapped hints.
     from PyQt6.QtWidgets import QWidget
     for child in dlg._browse_section.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly):
@@ -456,15 +480,6 @@ def test_small_screen_scrolls_form_without_overlap_and_keeps_launch_visible(monk
             assert child.geometry().bottom() < dlg._browse_section.height()
     dlg._form_scroll.verticalScrollBar().setValue(dlg._form_scroll.verticalScrollBar().maximum())
     assert dlg._footer.geometry().bottom() < dlg.height()
-
-
-def test_calendar_selection_updates_existing_date_list_highlight():
-    _, dlg = _dialog()
-    _apply(dlg, _snapshot([date(2024, 4, 27), date(2024, 4, 28)]))
-    dlg._archive_dt_edit.setDate(QDate(2024, 4, 28))
-    assert dlg._browse_dates_list.currentItem().text() == "2024-04-28"
-    dlg._archive_dt_edit.setDate(QDate(2024, 4, 27))
-    assert dlg._browse_dates_list.currentItem().text() == "2024-04-27"
 
 
 def test_year_grid_opens_from_keyboard():

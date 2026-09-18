@@ -27,6 +27,42 @@ def test_registry_unique_and_every_registered_source_has_catalogs():
         assert cat.catalogs_for_platform(platform)
 
 
+def test_platforms_by_site_groups_one_vehicle_across_families():
+    # The lidar truck carries a mesonet probe (FOFS), two lidars x four raw
+    # scan modes each (CLAMPS Raw Lidar), two lidars x {VAD, CSM wind}
+    # (CLAMPS Winds), and mobile radiosonde launches (CLAMPS Sondes) -- one
+    # vehicle, four families, and it should come back as one "LiDAR Truck" site.
+    by_site = cat.platforms_by_site()
+    lidar_truck = by_site["LiDAR Truck"]
+    assert len(lidar_truck) == 14
+    assert {p.family for p in lidar_truck} == {
+        "FOFS Mobile Mesonet", "CLAMPS Raw Lidar", "CLAMPS Winds", "CLAMPS Sondes",
+    }
+    assert all(p.platform_id.startswith(("FOFS-dltruck", "RAW-LIDAR-DLTRUCK1", "WIND-DLTRUCK1", "SONDE-DLTRUCK1"))
+               for p in lidar_truck)
+
+
+def test_platforms_by_site_merges_clamps_surface_sources_for_one_trailer():
+    # CLAMPS 2's met tower and MWR are two different files but the same
+    # physical trailer's surface obs -- fetch_clamps_surface_observations
+    # already prefers one over the other for a combined result, so the
+    # site grouping should present them as one choice too.
+    by_site = cat.platforms_by_site()
+    clamps2 = by_site["CLAMPS 2"]
+    surface_entries = [p for p in clamps2 if p.family == "CLAMPS Surface"]
+    assert {p.platform_id for p in surface_entries} == {"SFC-CLAMPS2-met_tower", "SFC-CLAMPS2-mwr"}
+
+
+def test_every_platform_has_a_site_and_single_family_sites_are_their_own_platform():
+    by_site = cat.platforms_by_site()
+    assert "" not in by_site
+    # A site that isn't one of the known multi-family vehicles/trailers
+    # should be exactly one platform -- e.g. Probe 1 has no counterpart in
+    # any other family.
+    assert len(by_site["Probe 1"]) == 1
+    assert len(by_site["CopterSonde"]) == 1
+
+
 def test_dates_ignore_invalid_dates_and_deduplicate():
     assert cat._dates_from_filenames(['x.20240427.nc', '20240427.txt', '20240230.nc', 'readme']) == [date(2024, 4, 27)]
 

@@ -121,6 +121,14 @@ class KnownPlatform:
     display_name: str
     family: str
     key: object
+    # The physical vehicle/instrument site this belongs to, e.g. "DL Truck"
+    # or "CLAMPS 1" -- distinct from `family` (which data-fetching system
+    # produced this entry, e.g. "CLAMPS Raw Lidar" vs "CLAMPS Winds").
+    # One vehicle commonly has several families; this is what groups them
+    # back together for a human choosing "which instrument," not "which
+    # fetcher." Defaults to "" for callers (tests, NOXP) that don't need
+    # cross-family grouping.
+    site: str = ""
 
 
 class ScanCancelled(Exception):
@@ -479,34 +487,42 @@ class AvailabilityIndex:
 # Researched 2026-09-08 against Tyler's mesonet_reader.py / io.py
 # (_CANONICAL_NAME_MAP) and archive/vehicle_aliases.py ("lid1" -> "dltruck"
 # confirms dltruck is the mobile Doppler-lidar truck, not a generic name).
-# "DLTRUCK1" appears under three different families because it's one
-# physical vehicle instrumented three ways: FOFS tracks its onboard
-# mesonet probe/GPS, CLAMPS Winds tracks its two Doppler lidars (DL1/DL2,
-# each producing both a VAD and a CSM-scan wind product), and CLAMPS
-# Sondes tracks the mobile radiosonde launches made from it.
+# "DLTRUCK1" appears under four different families because it's one
+# physical vehicle instrumented four ways: FOFS tracks its onboard
+# mesonet probe/GPS, CLAMPS Raw Lidar tracks its two Doppler lidars'
+# unprocessed scans, CLAMPS Winds tracks the wind profiles retrieved from
+# those same two lidars (DL1/DL2, each producing both a VAD and a
+# CSM-scan wind product), and CLAMPS Sondes tracks the mobile radiosonde
+# launches made from it. Called "LiDAR Truck" here (its instrument
+# registry site name -- see _vehicle_site()/_FOFS_VEHICLE_SITE below),
+# not the raw "dltruck"/"DLTRUCK1" token.
 # mg1/mg2/mg3 and noxp_scout are deliberately NOT expanded to a guessed
 # full name -- planning/source-and-pilot-register.md already documents
 # that their real meaning is unconfirmed (noxp_scout is not evidence of
 # a mobile-radar archive); only case/punctuation is normalized here.
 _FOFS_STAGE_NAMES: dict[str, str] = {
-    "dltruck": "DL Truck (mesonet)",
-    "farfield": "Far Field",
-    "hailcam": "Hail Cam",
+    "dltruck": "LiDAR Truck (mesonet)",
+    "farfield": "FarField",
+    "hailcam": "HailCam",
     "noxp_scout": "NOXP Scout",
     "probe1": "Probe 1", "probe2": "Probe 2", "probe3": "Probe 3",
     "probe4": "Probe 4", "probe5": "Probe 5", "probe7": "Probe 7",
     "probe9": "Probe 9",
-    "windsonde1": "Wind Sonde 1", "windsonde2": "Wind Sonde 2",
+    "windsonde1": "WindSonde 1", "windsonde2": "WindSonde 2",
     "mg1": "MG1", "mg2": "MG2", "mg3": "MG3",
 }
 
 _CLAMPS_WIND_STAGE_NAMES: dict[str, str] = {
     "CLAMPS1-VAD": "CLAMPS 1 (VAD)",
     "CLAMPS2-VAD": "CLAMPS 2 (VAD)",
-    "DLTRUCK1-DL1-VAD": "DL Truck — Lidar 1 (VAD)",
-    "DLTRUCK1-DL2-VAD": "DL Truck — Lidar 2 (VAD)",
-    "DLTRUCK1-DL1-CSMWINDS": "DL Truck — Lidar 1 (CSM)",
-    "DLTRUCK1-DL2-CSMWINDS": "DL Truck — Lidar 2 (CSM)",
+    "DLTRUCK1-DL1-VAD": "LiDAR Truck — Lidar 1 (VAD)",
+    "DLTRUCK1-DL2-VAD": "LiDAR Truck — Lidar 2 (VAD)",
+    # "CSM wind", not "CSM" -- CLAMPS Raw Lidar already uses "(CSM)" for the
+    # raw scan this is retrieved *from* (see RAW-LIDAR-DLTRUCK1-DL{1,2}-CSM
+    # below); the identical abbreviation on two different files read as a
+    # duplicate platform rather than a derived product.
+    "DLTRUCK1-DL1-CSMWINDS": "LiDAR Truck — Lidar 1 (CSM wind)",
+    "DLTRUCK1-DL2-CSMWINDS": "LiDAR Truck — Lidar 2 (CSM wind)",
 }
 
 _SURFACE_KIND_LABELS: dict[str, str] = {
@@ -518,6 +534,33 @@ _SURFACE_KIND_LABELS: dict[str, str] = {
 def _clamps_site_label(platform_id: str) -> str:
     """"CLAMPS1" -> "CLAMPS 1" (a site number, not part of the word)."""
     return re.sub(r"(CLAMPS)(\d)", r"\1 \2", platform_id)
+
+
+# The mobile Doppler-lidar truck's vehicle-grouping site name, shared by
+# every family that references it (FOFS, CLAMPS Raw Lidar, CLAMPS Winds,
+# CLAMPS Sondes) so they all land under the same site.
+_LIDAR_TRUCK_SITE = "LiDAR Truck"
+
+# FOFS vehicle key -> the vehicle-grouping site name, for the one vehicle
+# (the lidar truck) that also appears under other families. Every other
+# FOFS vehicle has no cross-family counterpart, so its site is just its
+# own stage name -- see _build_registry()'s fallback below.
+_FOFS_VEHICLE_SITE: dict[str, str] = {"dltruck": _LIDAR_TRUCK_SITE}
+
+
+def _vehicle_site(platform_dir: str) -> str:
+    """THREDDS platform_dir -> the physical vehicle/trailer it groups
+    under, e.g. 'dltruck/dltruck1' -> 'LiDAR Truck', 'clamps/clamps1' ->
+    'CLAMPS 1'. Both of the truck's lidars (DL1/DL2) share the same
+    platform_dir and so the same site -- they're two instruments on one
+    vehicle, not two vehicles."""
+    if platform_dir.startswith("dltruck/"):
+        return _LIDAR_TRUCK_SITE
+    if platform_dir == "clamps/clamps1":
+        return "CLAMPS 1"
+    if platform_dir == "clamps/clamps2":
+        return "CLAMPS 2"
+    raise ValueError(f"Unrecognized CLAMPS platform_dir: {platform_dir!r}")
 
 
 def _build_registry() -> list[KnownPlatform]:
@@ -533,12 +576,14 @@ def _build_registry() -> list[KnownPlatform]:
             display_name=_FOFS_STAGE_NAMES.get(vehicle, vehicle),
             family="FOFS Mobile Mesonet",
             key=vehicle,
+            site=_FOFS_VEHICLE_SITE.get(vehicle, _FOFS_STAGE_NAMES.get(vehicle, vehicle)),
         ))
 
     for source in KNOWN_RAW_LIDAR_SOURCES:
-        site = source.platform_id.rsplit('-', 1)[0].replace('DLTRUCK1-DL', 'DL Truck — Lidar ').replace('CLAMPS', 'CLAMPS ')
+        label_prefix = source.platform_id.rsplit('-', 1)[0].replace('DLTRUCK1-DL', 'LiDAR Truck — Lidar ').replace('CLAMPS', 'CLAMPS ')
         platforms.append(KnownPlatform(f'RAW-LIDAR-{source.platform_id}',
-                                       f'{site} ({source.product.upper()})', 'CLAMPS Raw Lidar', source))
+                                       f'{label_prefix} ({source.product.upper()})', 'CLAMPS Raw Lidar', source,
+                                       site=_vehicle_site(source.platform_dir)))
 
     for source in KNOWN_CLAMPS_WIND_SOURCES:
         platforms.append(KnownPlatform(
@@ -546,6 +591,7 @@ def _build_registry() -> list[KnownPlatform]:
             display_name=_CLAMPS_WIND_STAGE_NAMES.get(source.platform_id, source.platform_id),
             family="CLAMPS Winds",
             key=source,
+            site=_vehicle_site(source.platform_dir),
         ))
 
     for platform in KNOWN_CLAMPS_TROPOE_PLATFORMS:
@@ -554,6 +600,7 @@ def _build_registry() -> list[KnownPlatform]:
             display_name=_clamps_site_label(platform.platform_id),
             family="CLAMPS TROPoe",
             key=platform,
+            site=_vehicle_site(platform.platform_dir),
         ))
 
     for source in KNOWN_CLAMPS_SURFACE_SOURCES:
@@ -563,13 +610,15 @@ def _build_registry() -> list[KnownPlatform]:
             display_name=f"{_clamps_site_label(source.platform_id)} — {kind_label}",
             family="CLAMPS Surface",
             key=source,
+            site=_vehicle_site(source.platform_dir),
         ))
 
     platforms.append(KnownPlatform(
         platform_id="SONDE-DLTRUCK1",
-        display_name="DL Truck (mobile sonde)",
+        display_name="LiDAR Truck (mobile sonde)",
         family="CLAMPS Sondes",
         key=None,
+        site=_vehicle_site(_SONDE_PLATFORM_DIR),
     ))
 
     platforms.append(KnownPlatform(
@@ -577,6 +626,7 @@ def _build_registry() -> list[KnownPlatform]:
         display_name="CopterSonde",
         family="PERiLS UAS",
         key=None,
+        site="CopterSonde",
     ))
 
     for label, path in _NOXP_CAMPAIGN_ROOTS.items():
@@ -585,6 +635,11 @@ def _build_registry() -> list[KnownPlatform]:
             display_name=label,
             family="NOXP Radar",
             key=path,
+            # One "NOXP" choice covers every campaign-year root -- this is
+            # a Browse-dropdown presentation grouping only; the underlying
+            # per-year discovery/crawl logic (NoxpArchive, _NOXP_CAMPAIGN_ROOTS)
+            # is untouched and still paused for its own reconciliation.
+            site="NOXP",
         ))
 
     return platforms
@@ -596,4 +651,15 @@ def platforms_by_family() -> dict[str, list[KnownPlatform]]:
     grouped = {}
     for platform in ALL_PLATFORMS:
         grouped.setdefault(platform.family, []).append(platform)
+    return grouped
+
+
+def platforms_by_site() -> dict[str, list[KnownPlatform]]:
+    """Group by physical vehicle/instrument site rather than by which
+    fetcher produced the entry -- e.g. every DL Truck product (mesonet,
+    both raw lidars, both wind retrievals, mobile sondes) comes back under
+    one "DL Truck" key, instead of scattered across four families."""
+    grouped = {}
+    for platform in ALL_PLATFORMS:
+        grouped.setdefault(platform.site, []).append(platform)
     return grouped

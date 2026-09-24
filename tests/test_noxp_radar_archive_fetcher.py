@@ -53,14 +53,27 @@ def test_do_discover_emits_assets_ready_with_the_real_assets():
     fetcher.assets_ready.connect(lambda pid, assets: received.append((pid, assets)))
     fetcher._do_discover("NOXP-2013", "https://example.test/2013/catalog.html", datetime(2013, 5, 31, tzinfo=timezone.utc))
     assert received == [("NOXP-2013", [asset])]
-    assert fake.discover_calls == [(date(2013, 5, 31), 40, "https://example.test/2013/catalog.html")]
+    # the session day and the next morning (the session runs to 06Z)
+    assert fake.discover_calls == [(date(2013, 5, 31), 40, "https://example.test/2013/catalog.html"),
+                                   (date(2013, 6, 1), 40, "https://example.test/2013/catalog.html")]
+
+
+def test_do_discover_keeps_next_morning_volumes_and_drops_ones_outside_the_session():
+    evening = RadarAsset('https://example.test/a', 'a', 'sigmet', datetime(2013, 6, 1, 1, 30, tzinfo=timezone.utc))
+    too_late = RadarAsset('https://example.test/b', 'b', 'sigmet', datetime(2013, 6, 1, 7, 0, tzinfo=timezone.utc))
+    fake = _FakeNoxp(inventory=RadarInventory(assets=[evening, too_late], pending=0))
+    fetcher = _fetcher(fake)
+    received = []
+    fetcher.assets_ready.connect(lambda pid, assets: received.append(assets))
+    fetcher._do_discover("NOXP-2013", "https://example.test/2013/catalog.html", datetime(2013, 5, 31, tzinfo=timezone.utc))
+    assert received == [[evening]]
 
 
 def test_do_discover_still_emits_assets_ready_when_the_crawl_was_incomplete():
     # NoxpArchive.discover() catches its own request failures internally and
     # returns normally (never raises) -- even the real assets it did find
     # before running out of budget/time must still reach the caller.
-    asset = RadarAsset('https://example.test/x', 'NOX100430145529.RAW8K8H', 'sigmet', datetime(2010, 4, 30, 14, 55, 29, tzinfo=timezone.utc))
+    asset = RadarAsset('https://example.test/x', 'NOX130531145529.RAW8K8H', 'sigmet', datetime(2013, 5, 31, 14, 55, 29, tzinfo=timezone.utc))
     fake = _FakeNoxp(RadarInventory(assets=[asset], pending=5))
     fetcher = _fetcher(fake)
     assets_events, errors = [], []
@@ -158,7 +171,7 @@ def test_noxp_instance_is_reused_across_discover_calls_not_rebuilt():
                           datetime(2013, 5, 31, tzinfo=timezone.utc))
 
     assert len(built) == 1
-    assert len(built[0].discover_calls) == 2
+    assert len(built[0].discover_calls) == 4  # two sessions x (session day, next morning)
 
 
 def test_do_index_root_calls_discover_with_no_target_and_reports_progress():

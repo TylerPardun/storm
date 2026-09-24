@@ -26,7 +26,7 @@ import logging
 import ssl
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -235,17 +235,26 @@ class ArchiveClampsWindFetcher(QObject):
         return True
 
     def _bg_fetch(self, archive_date: datetime) -> None:
-        date_str = archive_date.strftime("%Y%m%d")
+        # CLAMPS runs continuously: cover the whole session span, its UTC day
+        # and the next morning to the 06Z cap (archive/session.py).
+        from archive.session import session_bounds
+        start, cap = session_bounds(archive_date)
+        date_strs = [start.strftime("%Y%m%d"), (start + timedelta(days=1)).strftime("%Y%m%d")]
         results: dict[str, VADSet] = {}
         errors: list[str] = []
         for source in KNOWN_CLAMPS_WIND_SOURCES:
-            try:
-                vad_set = _fetch_platform_wind_set(source, date_str)
-            except Exception as exc:  # noqa: BLE001 - keep going on unexpected errors
-                errors.append(f"{source.platform_id}: {exc}")
-                continue
-            if vad_set is not None:
-                results[source.platform_id] = vad_set
+            profiles = []
+            for n, date_str in enumerate(date_strs):
+                try:
+                    vad_set = _fetch_platform_wind_set(source, date_str)
+                except Exception as exc:  # noqa: BLE001 - keep going on unexpected errors
+                    if n == 0:
+                        errors.append(f"{source.platform_id}: {exc}")
+                    continue
+                if vad_set is not None:
+                    profiles += [p for p in vad_set.profiles if start <= p.timestamp <= cap]
+            if profiles:
+                results[source.platform_id] = VADSet(profiles=profiles)
 
         with self._lock:
             self._busy = False

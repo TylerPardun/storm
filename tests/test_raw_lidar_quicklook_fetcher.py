@@ -10,7 +10,7 @@ def test_do_fetch_unions_assets_across_every_known_source(monkeypatch):
     def fake_discover(source, day):
         calls.append((source.platform_id, day))
         if source is KNOWN_RAW_LIDAR_SOURCES[0]:
-            return [LidarAsset(source, 'x.20260517.000000.cdf', 'catalog')]
+            return [LidarAsset(source, f'x.{day:%Y%m%d}.000000.cdf', 'catalog')]
         return []
 
     monkeypatch.setattr(rlq, 'discover_raw_lidar', fake_discover)
@@ -18,9 +18,12 @@ def test_do_fetch_unions_assets_across_every_known_source(monkeypatch):
     received = []
     fetcher.assets_ready.connect(received.append)
     fetcher._do_fetch(datetime(2026, 5, 17, tzinfo=timezone.utc))
-    assert len(calls) == len(KNOWN_RAW_LIDAR_SOURCES)
-    assert all(day == date(2026, 5, 17) for _, day in calls)
-    assert received[0] == {KNOWN_RAW_LIDAR_SOURCES[0].platform_id: [LidarAsset(KNOWN_RAW_LIDAR_SOURCES[0], 'x.20260517.000000.cdf', 'catalog')]}
+    # the session day and the next morning (the session runs to 06Z)
+    assert len(calls) == 2 * len(KNOWN_RAW_LIDAR_SOURCES)
+    assert {day for _, day in calls} == {date(2026, 5, 17), date(2026, 5, 18)}
+    first = KNOWN_RAW_LIDAR_SOURCES[0]
+    assert received[0] == {first.platform_id: [LidarAsset(first, 'x.20260517.000000.cdf', 'catalog'),
+                                               LidarAsset(first, 'x.20260518.000000.cdf', 'catalog')]}
 
 
 def test_do_fetch_preserves_unresolved_sources(monkeypatch):
@@ -81,7 +84,7 @@ def test_partial_success_does_not_hide_discovery_errors(monkeypatch):
     asset = LidarAsset(source, 'a.cdf', 'catalog')
     def discover(candidate, day):
         if candidate == source:
-            return [asset]
+            return [asset] if day == date(2026, 6, 10) else []
         raise TimeoutError('down')
     monkeypatch.setattr(rlq, 'discover_raw_lidar', discover)
     fetcher = rlq.ArchiveRawLidarQuicklookFetcher()

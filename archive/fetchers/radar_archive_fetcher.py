@@ -9,7 +9,7 @@ import tempfile
 import threading
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import numpy as np
@@ -215,15 +215,17 @@ class ArchiveRadarFetcher(QObject):
 
 
     def _fetch_index(self) -> None:
-        """List all files for the station/date from the AWS S3 bucket."""
-        prefix = (
-            f"{self._date.strftime('%Y/%m/%d')}/{self._station}/"
-        )
-        url = f"{_S3_BASE}/?prefix={prefix}&list-type=2"
+        """List the station's files for the session's span from the AWS S3
+        bucket -- its UTC day and the next morning (archive/session.py)."""
+        from archive.session import session_bounds
+        start, cap = session_bounds(self._date)
         try:
-            resp = requests.get(url, timeout=15)
-            resp.raise_for_status()
-            times = self._parse_s3_listing(resp.text)
+            times = []
+            for day in (start, start + timedelta(days=1)):
+                prefix = f"{day.strftime('%Y/%m/%d')}/{self._station}/"
+                resp = requests.get(f"{_S3_BASE}/?prefix={prefix}&list-type=2", timeout=15)
+                resp.raise_for_status()
+                times += [t for t in self._parse_s3_listing(resp.text) if start <= t <= cap]
             with self._index_lock:
                 self._index = sorted(times)
             log.info(

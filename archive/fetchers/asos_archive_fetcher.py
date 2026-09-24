@@ -158,11 +158,13 @@ def _parse_valid(value: str | None) -> datetime | None:
 def fetch_asos_history(
     station_ids: list[str], roster: dict[str, dict], day: datetime, *, cancel: threading.Event | None = None,
 ) -> dict[str, list[Observation]]:
-    """Fetch and parse a full UTC day of ASOS history for the given
-    stations, in paced batches. `cancel`, if given, is checked between
-    batches so a redrawn bbox can abandon an in-flight load promptly."""
-    sts = day.replace(hour=0, minute=0, second=0, microsecond=0)
-    ets = sts + timedelta(days=1)
+    """Fetch and parse ASOS history for the given stations over the archive
+    session's span -- its UTC day and the next morning to the 06Z cap
+    (archive/session.py) -- in paced batches. `cancel`, if given, is
+    checked between batches so a redrawn bbox can abandon an in-flight
+    load promptly."""
+    from archive.session import session_bounds
+    sts, ets = session_bounds(day)
 
     merged: dict[str, list[Observation]] = {}
     batches = [station_ids[i:i + _BATCH_SIZE] for i in range(0, len(station_ids), _BATCH_SIZE)]

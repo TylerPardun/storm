@@ -177,12 +177,20 @@ class ArchiveSatelliteFetcher(QObject):
     def _list_day_refs(self, mode: str, product: str) -> list[_FrameRef]:
         refs: list[_FrameRef] = []
         base_url = _S3_URL_TEMPLATE.format(bucket=self._bucket)
-        year = self._date.strftime("%Y")
-        jday = self._date.strftime("%j")
         sector_token = _MODE_CONFIG[mode].get("sector_token")
 
-        for hour in range(24):
-            prefix = f"{product}/{year}/{jday}/{hour:02d}/"
+        # the session's UTC day plus the next morning up to its cap
+        # (archive/session.py); the next day can be in a new year.
+        from archive.session import session_bounds
+        start, cap = session_bounds(self._date)
+        hours = []
+        hour_start = start
+        while hour_start < cap:
+            hours.append(hour_start)
+            hour_start += timedelta(hours=1)
+
+        for hour_start in hours:
+            prefix = f"{product}/{hour_start:%Y}/{hour_start:%j}/{hour_start:%H}/"
             continuation = None
             while True:
                 params = f"?list-type=2&prefix={quote(prefix)}"
@@ -208,6 +216,7 @@ class ArchiveSatelliteFetcher(QObject):
                     break
                 continuation = token_el.text
 
+        refs = [ref for ref in refs if ref.timestamp <= cap]
         refs.sort(key=lambda item: item.timestamp)
         log.info("ArchiveSatelliteFetcher: indexed %s %d frames", product, len(refs))
         return refs

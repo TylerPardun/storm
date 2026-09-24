@@ -3,7 +3,7 @@ import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -167,11 +167,17 @@ class ArchiveMQTTReader(QObject):
     scan_sector_received = pyqtSignal(object)
     scan_sectors_cleared = pyqtSignal()
     error               = pyqtSignal(str)
+    loaded              = pyqtSignal()   # main thread, once every topic has been fetched
     _load_complete      = pyqtSignal()   # internal — fires on bg thread, triggers main-thread replay
 
     def __init__(self, session_date: datetime, parent=None):
         super().__init__(parent)
         self._date_str = session_date.strftime("%Y%m%d")
+        # the session runs into the next UTC morning (archive/session.py),
+        # whose records are in the next day's files
+        from archive.session import session_bounds
+        self._start, self._cap = session_bounds(session_date)
+        self._next_date_str = (self._start + timedelta(days=1)).strftime("%Y%m%d")
         self._data: dict[str, list[tuple[datetime, dict]]] = {t: [] for t in _TOPICS}
         self._loaded = False
         self._vehicle_observations: dict[str, list] = {}
@@ -240,6 +246,15 @@ class ArchiveMQTTReader(QObject):
                 continue
         return result
 
+    def activity_times(self) -> list[datetime]:
+        """Evidence of the crew working, for sizing the session: the last
+        scan-sector/annotation/cone/drawing change, and each vehicle's last
+        time actually driving (a parked vehicle keeps reporting)."""
+        from archive.session import last_moving_time
+        times = [rows[-1][0] for topic, rows in self._data.items() if topic != "vehicles" and rows]
+        times += [last_moving_time(history) for history in self._vehicle_observations.values()]
+        return [t for t in times if t is not None]
+
     def vehicle_metadata(self) -> dict[str, str | None]:
         """Return vehicle IDs and their first advertised icon type."""
         vehicles: dict[str, str | None] = {}
@@ -272,6 +287,7 @@ class ArchiveMQTTReader(QObject):
             histories.setdefault(observation.vehicle_id, []).append(observation)
         self._vehicle_observations = histories
         self._loaded = True
+        self.loaded.emit()
         if self._pending_time is not None:
             self.on_time_changed(self._pending_time)
             self._pending_time = None
@@ -284,25 +300,35 @@ class ArchiveMQTTReader(QObject):
         # date with no data anywhere). Fetching all 5 topics concurrently instead
         # bounds the wait to roughly one topic's worst case.
         errors = []
-        with ThreadPoolExecutor(max_workers=len(_TOPICS)) as pool:
+        with ThreadPoolExecutor(max_workers=2 * len(_TOPICS)) as pool:
             futures = {
-                pool.submit(_fetch_topic_text, topic, self._date_str): topic
+                pool.submit(_fetch_topic_text, topic, date_str): (topic, date_str)
                 for topic in _TOPICS
+                for date_str in (self._date_str, self._next_date_str)
             }
-            for future, topic in futures.items():
+            records: dict[str, list] = {topic: [] for topic in _TOPICS}
+            for future, (topic, date_str) in futures.items():
                 try:
                     text, source = future.result()
                     if text:
-                        self._data[topic] = _parse_jsonl(text)
+                        parsed = [(ts, obj) for ts, obj in _parse_jsonl(text)
+                                  if self._start <= ts <= self._cap]
+                        records[topic] += parsed
                         log.info(
-                            "ArchiveMQTTReader: loaded %d %s records (%s)",
-                            len(self._data[topic]), topic, source,
+                            "ArchiveMQTTReader: loaded %d %s records for %s (%s)",
+                            len(parsed), topic, date_str, source,
                         )
                     else:
-                        log.info("ArchiveMQTTReader: no %s file for %s", topic, self._date_str)
+                        log.info("ArchiveMQTTReader: no %s file for %s", topic, date_str)
                 except Exception as exc:
+                    if date_str == self._next_date_str:
+                        # the next morning is a bonus; don't fail the session over it
+                        log.warning("ArchiveMQTTReader: fetch failed for %s %s: %s", topic, date_str, exc)
+                        continue
                     log.error("ArchiveMQTTReader: fetch failed for %s: %s", topic, exc)
                     errors.append(f"{topic}: {exc}")
+            for topic, rows in records.items():
+                self._data[topic] = sorted(rows, key=lambda item: item[0])
 
         self._loaded = False  # set True on main thread via _load_complete signal
         if errors:

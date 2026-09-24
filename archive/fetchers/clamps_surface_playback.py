@@ -18,9 +18,16 @@ class ClampsSurfacePlayback(QObject):
         Thread(target=self._load, args=(day,), daemon=True).start()
 
     def _load(self, day):
+        # CLAMPS runs continuously, so the whole session span is loaded --
+        # its UTC day and the next morning to the 06Z cap (archive/session.py).
+        from datetime import timedelta
         from archive.fetchers.clamps_surface_archive_fetcher import fetch_clamps_surface_observations
+        from archive.session import session_bounds
         try:
-            rows = fetch_clamps_surface_observations(day) or []
+            start, cap = session_bounds(day)
+            rows = [obs for d in (start, start + timedelta(days=1))
+                    for obs in (fetch_clamps_surface_observations(d) or [])
+                    if start <= obs.timestamp <= cap]
             if not self._closed.is_set():
                 self.loaded.emit(rows)
         except Exception as exc:

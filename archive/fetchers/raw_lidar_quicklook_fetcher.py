@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -57,11 +57,21 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
     def _do_fetch(self, archive_date: datetime) -> None:
         """The real discovery logic, directly callable (no thread) for tests."""
         day = archive_date.date() if isinstance(archive_date, datetime) else archive_date
+        # The lidars run continuously and their files are daily, so the next
+        # day's files are offered too: the session runs into that morning
+        # (archive/session.py).
+        days = (day, day + timedelta(days=1))
         results: dict[str, list | None] = {}
         errors: list[str] = []
         for source in KNOWN_RAW_LIDAR_SOURCES:
+            assets = []
             try:
-                assets = discover_raw_lidar(source, day)
+                for n, d in enumerate(days):
+                    try:
+                        assets += discover_raw_lidar(source, d) or []
+                    except Exception:
+                        if n == 0:
+                            raise
             except Exception as exc:  # noqa: BLE001
                 results[source.platform_id] = None
                 errors.append(f"{source.platform_id}: {exc}")

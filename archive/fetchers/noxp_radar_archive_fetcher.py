@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -57,6 +57,38 @@ def noxp_sweep_elevations(volume) -> list[float]:
     way archive WSR-88D scans populate it from available_tilts."""
     n_sweeps = int(volume.sweep_start.size)
     return [_sweep_elevation(volume, i) for i in range(n_sweeps)]
+
+
+def _discover_session(archive, archive_date, catalog_root):
+    """Discover the volumes covering an archive session's span -- its UTC
+    day and the next morning to the 06Z cap (archive/session.py). The
+    archive searches one target date at a time, so both days are searched
+    and the results merged; volumes wholly outside the span are left out."""
+    from archive.fetchers.noxp_archive_fetcher import RadarInventory
+    from archive.session import session_bounds
+
+    if not isinstance(archive_date, datetime):
+        archive_date = datetime(archive_date.year, archive_date.month, archive_date.day, tzinfo=timezone.utc)
+    start, cap = session_bounds(archive_date)
+    merged = RadarInventory()
+    assets = {}
+    for day in (start.date(), (start + timedelta(days=1)).date()):
+        inventory = archive.discover(target=day, budget=_DISCOVERY_BUDGET, catalog_root=catalog_root)
+        for asset in inventory.assets:
+            begin = asset.nominal_time
+            end = asset.nominal_end or asset.nominal_time
+            if begin is None:
+                if day == start.date():
+                    assets.setdefault(asset.catalog_url, asset)
+            elif begin <= cap and end >= start:
+                assets.setdefault(asset.catalog_url, asset)
+        merged.errors += inventory.errors
+        merged.pending += inventory.pending
+        merged.catalogs_checked += inventory.catalogs_checked
+        merged.requests_made += inventory.requests_made
+    merged.assets = sorted(assets.values(), key=lambda a: (
+        a.nominal_time or datetime.min.replace(tzinfo=timezone.utc), a.catalog_url))
+    return merged
 
 
 def nearest_noxp_asset(assets, when: datetime):
@@ -281,10 +313,7 @@ class ArchiveNoxpRadarFetcher(QObject):
         """
         archive = self._get_noxp()
         try:
-            inventory = archive.discover(
-                target=archive_date.date() if isinstance(archive_date, datetime) else archive_date,
-                budget=_DISCOVERY_BUDGET, catalog_root=catalog_root,
-            )
+            inventory = _discover_session(archive, archive_date, catalog_root)
         except Exception as exc:  # noqa: BLE001
             log.warning("ArchiveNoxpRadarFetcher: discovery failed for %s: %s", platform_id, exc)
             self.error.emit(f"NOXP discovery failed: {exc}")

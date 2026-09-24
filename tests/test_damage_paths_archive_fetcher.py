@@ -167,3 +167,15 @@ def test_load_skips_ncei_when_dat_has_real_features(monkeypatch):
 
     assert calls == ["dat"]
     assert received[0]["features"] == [{"id": 1}]
+
+
+def test_paths_surveyed_during_the_sessions_next_morning_are_included():
+    # The archive session runs to 06Z the next day (archive/session.py).
+    from datetime import date, datetime, timezone
+    from archive.fetchers.damage_paths_archive_fetcher import _date_within_tolerance
+    from archive.session import session_bounds
+
+    day = date(2024, 4, 27)
+    _, cap = session_bounds(datetime(2024, 4, 27, tzinfo=timezone.utc))
+    at_cap = {"properties": {"starttime": cap.timestamp() * 1000}}
+    assert _date_within_tolerance(at_cap, day, 1)

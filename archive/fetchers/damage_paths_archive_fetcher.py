@@ -41,6 +41,9 @@ DAT_DAMAGE_LINES_URL = (
 )
 NCEI_EVENT_CSV_BASE_URL = "https://www.ncei.noaa.gov/pub/data/swdi/stormevents/csvfiles"
 
+# +/- one day around the session date: survey times are approximate, and
+# this also spans the whole archive session, which runs into the next UTC
+# morning to 06Z (archive/session.py) -- keep it at least that wide.
 _DATE_TOLERANCE_DAYS = 1
 _REQUEST_TIMEOUT = 20
 _NCEI_TIMEOUT = 30

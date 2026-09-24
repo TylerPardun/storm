@@ -220,6 +220,20 @@ class RecursiveCatalogSpec:
         return f"{_CATALOG_ROOT}{self.path}/catalog.html"
 
 
+@dataclass(frozen=True)
+class FofsIndexSpec:
+    """A mobile-mesonet vehicle's dates from the crawled FOFS file index
+    (archive/fofs_index.py) instead of one fixed folder, since that tree is
+    reorganised often. `vehicle=None` collects every vehicle folder no
+    registered platform covers, so a new vehicle's dates still show."""
+    vehicle: str | None
+    year: int | None = None
+
+    @property
+    def url(self):
+        return f"{_CATALOG_ROOT}FOFS/Mobile-Mesonet/catalog.html#{self.vehicle or 'other-vehicles'}"
+
+
 class _CatalogLinks(HTMLParser):
     def __init__(self, spec, *, dates_only=False):
         super().__init__()
@@ -255,9 +269,7 @@ def catalogs_for_platform(platform: KnownPlatform) -> tuple[CatalogSpec | Recurs
     key = platform.key
     root = "FRDD/CLAMPS"
     if platform.family == "FOFS Mobile Mesonet":
-        base = f"FOFS/Mobile-Mesonet/data/{key}"
-        # Raw-only dates can coexist with processed dates on the same vehicle.
-        return (CatalogSpec(f"{base}/processed", ".nc"), CatalogSpec(f"{base}/raw", ".txt"))
+        return (FofsIndexSpec(key),)
     if platform.family == "CLAMPS Raw Lidar":
         return (CatalogSpec(key.path, ".cdf"),)
     if platform.family == "CLAMPS Winds":
@@ -433,7 +445,16 @@ class AvailabilityIndex:
             if cancel.wait(self._pace):
                 raise ScanCancelled()
             try:
-                if isinstance(spec, RecursiveCatalogSpec):
+                if isinstance(spec, FofsIndexSpec):
+                    from archive import fofs_index
+                    index = fofs_index.get_index()
+                    if index is None:
+                        raise RuntimeError("FOFS file index unavailable")
+                    vehicles = ({spec.vehicle} if spec.vehicle is not None
+                                else index.vehicles() - set(KNOWN_FOFS_PLATFORMS))
+                    dates = frozenset(d for v in vehicles for d in index.dates(v))
+                    self._results[spec] = (dates, "")
+                elif isinstance(spec, RecursiveCatalogSpec):
                     if noxp_remaining <= 0:
                         self._budget_limited.add(spec)
                         self._results[spec] = (self._cached_dates.get(spec, frozenset()),
@@ -578,6 +599,12 @@ def _build_registry() -> list[KnownPlatform]:
             key=vehicle,
             site=_FOFS_VEHICLE_SITE.get(vehicle, _FOFS_STAGE_NAMES.get(vehicle, vehicle)),
         ))
+    # Vehicle folders THREDDS adds that aren't registered above still get
+    # their dates on the calendar (and are loaded like any other vehicle).
+    platforms.append(KnownPlatform(
+        platform_id="FOFS-other", display_name="Other mesonet vehicles",
+        family="FOFS Mobile Mesonet", key=None, site="Other mesonet vehicles",
+    ))
 
     for source in KNOWN_RAW_LIDAR_SOURCES:
         label_prefix = source.platform_id.rsplit('-', 1)[0].replace('DLTRUCK1-DL', 'LiDAR Truck — Lidar ').replace('CLAMPS', 'CLAMPS ')

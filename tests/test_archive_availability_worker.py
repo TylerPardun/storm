@@ -15,7 +15,7 @@ def _wait(predicate):
     assert predicate()
 
 
-def test_one_worker_cancels_active_request_and_keeps_only_latest_pending(qapp):
+def test_one_worker_cancels_active_request_and_keeps_only_latest_pending(qapp, listed_platform):
     started, cancelled, release = Event(), Event(), Event()
     calls = []
     def fetch(url, token):
@@ -27,7 +27,7 @@ def test_one_worker_cancels_active_request_and_keeps_only_latest_pending(qapp):
             assert release.wait(2)
             raise ScanCancelled()
         return '<html>THREDDS catalog</html>'
-    worker = AvailabilityWorker(AvailabilityIndex([ALL_PLATFORMS[0]], fetch, pace=0))
+    worker = AvailabilityWorker(AvailabilityIndex([listed_platform()], fetch, pace=0))
     updates = []
     worker.updated.connect(lambda generation, snapshot: updates.append((generation, snapshot)))
     try:
@@ -53,7 +53,7 @@ def test_one_worker_cancels_active_request_and_keeps_only_latest_pending(qapp):
     assert not worker._thread.is_alive()
 
 
-def test_close_interrupts_active_scan_and_joins_without_more_requests(qapp):
+def test_close_interrupts_active_scan_and_joins_without_more_requests(qapp, listed_platform):
     started = Event()
     calls = []
     def fetch(url, cancel):
@@ -61,7 +61,7 @@ def test_close_interrupts_active_scan_and_joins_without_more_requests(qapp):
         started.set()
         assert cancel.wait(2)
         raise ScanCancelled()
-    worker = AvailabilityWorker(AvailabilityIndex([ALL_PLATFORMS[0]], fetch, pace=0))
+    worker = AvailabilityWorker(AvailabilityIndex([listed_platform()], fetch, pace=0))
     worker.request(1)
     _wait(started.is_set)
     worker.close()

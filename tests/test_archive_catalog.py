@@ -16,13 +16,14 @@ def _page(spec, *names):
         for name in names) + '</html>'
 
 
-def _fofs():
-    return next(p for p in cat.ALL_PLATFORMS if p.family == "FOFS Mobile Mesonet")
+@pytest.fixture
+def _fofs(listed_platform):
+    return listed_platform
 
 
 def test_registry_unique_and_every_registered_source_has_catalogs():
     assert len({p.platform_id for p in cat.ALL_PLATFORMS}) == len(cat.ALL_PLATFORMS)
-    assert len(cat.platforms_by_family()["FOFS Mobile Mesonet"]) == 16
+    assert len(cat.platforms_by_family()["FOFS Mobile Mesonet"]) == 17  # 16 vehicles + "other"
     for platform in cat.ALL_PLATFORMS:
         assert cat.catalogs_for_platform(platform)
 
@@ -67,7 +68,7 @@ def test_dates_ignore_invalid_dates_and_deduplicate():
     assert cat._dates_from_filenames(['x.20240427.nc', '20240427.txt', '20240230.nc', 'readme']) == [date(2024, 4, 27)]
 
 
-def test_processed_and_raw_dates_are_unioned_with_encoded_and_direct_links():
+def test_processed_and_raw_dates_are_unioned_with_encoded_and_direct_links(_fofs):
     p = _fofs()
     processed, raw = cat.catalogs_for_platform(p)
     pages = {processed.url: _page(processed, '20240427.nc'), raw.url:
@@ -77,7 +78,7 @@ def test_processed_and_raw_dates_are_unioned_with_encoded_and_direct_links():
     assert result.platforms[p.platform_id].complete
 
 
-def test_links_restrict_directory_host_and_file_type():
+def test_links_restrict_directory_host_and_file_type(_fofs):
     spec = cat.catalogs_for_platform(_fofs())[0]
     parser = cat._CatalogLinks(spec)
     parser.feed(_page(spec, '20240427.nc', '20240101.txt', '../other/20240102.nc') +
@@ -93,7 +94,7 @@ def test_tropoe_accepts_both_netcdf_extensions():
     assert len(parser.filenames) == 2
 
 
-def test_failed_catalog_keeps_positive_dates_and_unknown_completeness():
+def test_failed_catalog_keeps_positive_dates_and_unknown_completeness(_fofs):
     p = _fofs()
     processed, raw = cat.catalogs_for_platform(p)
     def fetch(url, _):
@@ -107,7 +108,7 @@ def test_failed_catalog_keeps_positive_dates_and_unknown_completeness():
     assert 'timeout' in result.platforms[p.platform_id].errors[0]
 
 
-def test_session_reuses_completed_and_failed_attempts_until_refresh():
+def test_session_reuses_completed_and_failed_attempts_until_refresh(_fofs):
     calls = []
     def fetch(url, _):
         calls.append(url)
@@ -121,7 +122,7 @@ def test_session_reuses_completed_and_failed_attempts_until_refresh():
     assert len(calls) == 4
 
 
-def test_cancellation_retains_completed_listing_and_stops_remaining_requests():
+def test_cancellation_retains_completed_listing_and_stops_remaining_requests(_fofs):
     cancel = Event()
     calls = []
     spec = cat.catalogs_for_platform(_fofs())[0]
@@ -169,9 +170,9 @@ def test_non_catalog_response_is_an_error(monkeypatch):
         cat._fetch_catalog_html('https://example.test', Event())
 
 
-def test_scan_prioritizes_recent_sources_without_losing_older_dates():
+def test_scan_prioritizes_recent_sources_without_losing_older_dates(_fofs):
     by_id = {p.platform_id: p for p in cat.ALL_PLATFORMS}
-    platforms = [by_id['FOFS-mg1'], by_id['FOFS-farfield'], by_id['FOFS-probe1'], by_id['FOFS-dltruck']]
+    platforms = [_fofs('mg1'), _fofs('farfield'), _fofs('probe1'), _fofs('dltruck')]
     calls = []
     def fetch(url, _):
         calls.append(url)
@@ -179,7 +180,7 @@ def test_scan_prioritizes_recent_sources_without_losing_older_dates():
         return _page(spec, '20150501.txt' if '/raw/' in url else '20260501.nc')
     index = cat.AvailabilityIndex(platforms, fetch, pace=0)
     snapshots = list(index.scan(Event()))
-    assert [url.split('/data/')[1] for url in calls[:4]] == [
+    assert [url.split('/TEST/')[1] for url in calls[:4]] == [
         'probe1/processed/catalog.html', 'dltruck/processed/catalog.html',
         'probe1/raw/catalog.html', 'dltruck/raw/catalog.html',
     ]
@@ -266,9 +267,9 @@ def test_noxp_scan_reuses_the_same_noxp_instance_so_refreshes_stay_cheap():
     assert len(fake.calls) == 2  # scanned twice, but always the same underlying NoxpArchive
 
 
-def test_refresh_updates_recency_hints_from_live_dates_without_skipping_sources():
+def test_refresh_updates_recency_hints_from_live_dates_without_skipping_sources(_fofs):
     by_id = {p.platform_id: p for p in cat.ALL_PLATFORMS}
-    platforms = [by_id['FOFS-dltruck'], by_id['FOFS-mg1']]
+    platforms = [_fofs('dltruck'), _fofs('mg1')]
     def fetch(url, _):
         spec = next(s for p in platforms for s in cat.catalogs_for_platform(p) if s.url == url)
         stamp = '20270501' if '/mg1/' in url else '20260501'
@@ -280,7 +281,7 @@ def test_refresh_updates_recency_hints_from_live_dates_without_skipping_sources(
     assert list(index.scan(Event()))[-1].checked == 4
 
 
-def test_date_cache_shades_immediately_and_avoids_repeat_requests(tmp_path):
+def test_date_cache_shades_immediately_and_avoids_repeat_requests(tmp_path, _fofs):
     platform = _fofs()
     path = tmp_path / 'dates.json'
     calls = []
@@ -301,7 +302,7 @@ def test_date_cache_shades_immediately_and_avoids_repeat_requests(tmp_path):
     assert len(calls) == 2  # Explicit refresh bypasses the TTL.
 
 
-def test_expired_cache_remains_visible_but_failed_refresh_is_not_complete(tmp_path):
+def test_expired_cache_remains_visible_but_failed_refresh_is_not_complete(tmp_path, _fofs):
     platform = _fofs()
     path = tmp_path / 'dates.json'
     def fetch(url, _):
@@ -321,7 +322,7 @@ def test_expired_cache_remains_visible_but_failed_refresh_is_not_complete(tmp_pa
 
 
 @pytest.mark.parametrize("content", ["{not json", "[]", '{"version":1,"catalogs":[]}'])
-def test_corrupt_date_cache_cannot_block_discovery(tmp_path, content):
+def test_corrupt_date_cache_cannot_block_discovery(tmp_path, content, _fofs):
     path = tmp_path / 'dates.json'
     path.write_text(content)
     index = cat.AvailabilityIndex([_fofs()], lambda *a: '', pace=0, cache_path=path)
@@ -383,3 +384,40 @@ def test_calendar_parser_keeps_one_presence_token_per_day_not_all_files():
     parser.feed(_page(spec, 'r.20260517.000000.cdf', 'r.20260517.120000.cdf', 'r.20260518.000000.cdf'))
     assert parser.filenames == set()
     assert parser.date_stamps == {'20260517', '20260518'}
+
+
+def _install_fofs_index(monkeypatch, paths):
+    from archive import fofs_index
+    files = [fofs_index.FofsFile(fofs_index.vehicle_for_path(p), fofs_index._date_from_name(p.rsplit("/", 1)[-1]), p, "")
+             for p in paths]
+    monkeypatch.setattr(fofs_index, "get_index", lambda *a, **k: fofs_index.FofsIndex(files, 0.0))
+
+
+def test_mesonet_dates_come_from_the_crawled_index_wherever_files_live(monkeypatch):
+    _install_fofs_index(monkeypatch, [
+        "FOFS/Mobile-Mesonet/data/probe1/raw/20240427.txt",
+        "FOFS/Mobile-Mesonet/data/probe1/moved_here/20250605.txt",
+        "FOFS/Mobile-Mesonet/data/dltruck/raw/20250605.txt",
+    ])
+    probe1 = next(p for p in cat.ALL_PLATFORMS if p.platform_id == "FOFS-probe1")
+    result = list(cat.AvailabilityIndex([probe1], lambda *a: "", pace=0).scan(Event()))[-1]
+    assert result.dates == {date(2024, 4, 27), date(2025, 6, 5)}
+    assert result.platforms["FOFS-probe1"].complete
+
+
+def test_unregistered_vehicle_folders_still_put_their_dates_on_the_calendar(monkeypatch):
+    _install_fofs_index(monkeypatch, [
+        "FOFS/Mobile-Mesonet/data/probe1/raw/20240427.txt",
+        "FOFS/Mobile-Mesonet/data/newtruck/raw/20250701.txt",
+    ])
+    other = next(p for p in cat.ALL_PLATFORMS if p.platform_id == "FOFS-other")
+    result = list(cat.AvailabilityIndex([other], lambda *a: "", pace=0).scan(Event()))[-1]
+    assert result.dates == {date(2025, 7, 1)}
+
+
+def test_unavailable_mesonet_index_is_unknown_not_empty():
+    # conftest leaves no index available
+    probe1 = next(p for p in cat.ALL_PLATFORMS if p.platform_id == "FOFS-probe1")
+    result = list(cat.AvailabilityIndex([probe1], lambda *a: "", pace=0).scan(Event()))[-1]
+    assert not result.platforms["FOFS-probe1"].complete
+    assert "index unavailable" in result.platforms["FOFS-probe1"].errors[0]

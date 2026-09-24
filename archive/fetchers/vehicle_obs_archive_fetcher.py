@@ -398,6 +398,25 @@ class ArchiveVehicleObsFetcher(QObject):
                 return []
             raise
         observations = parse_vehicle_csv(text, vehicle_id, icon_type, expected_date=self._date_str)
+        if not observations and text.strip():
+            # A real, non-empty file came back but nothing in it matched
+            # this date -- almost always a corrupted/stale GPS date-stamp
+            # in the source file itself (confirmed live: two FOFS probes'
+            # raw CSVs for a real case date carried only much-later dates
+            # throughout, e.g. every row two-plus months off, while their
+            # lat/lon barely moved -- consistent with the logger running
+            # without a GPS fix that day), not a STORM bug. Worth a WARNING
+            # (not just the INFO line below) specifically because "0
+            # observations" alone doesn't distinguish this from a
+            # genuinely empty/no-op file, and the raw-CSV-vs-date-mismatch
+            # diagnosis otherwise takes downloading and inspecting the file
+            # by hand to notice.
+            log.warning(
+                "One-second archive: %s's raw CSV for %s has data but none of it matches "
+                "this date -- likely a bad/stale GPS date-stamp in the source file (probe "
+                "not actually usable this day), not a fetch failure: %s",
+                vehicle_id, self._date_str, url,
+            )
         log.info(
             "One-second archive: loaded %d observations for %s from %s (raw CSV fallback)",
             len(observations),

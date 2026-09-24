@@ -149,6 +149,56 @@ def test_parse_vehicle_csv_rejects_rows_that_dont_match_expected_date():
     assert observations == []
 
 
+def test_fetch_vehicle_csv_warns_when_a_real_file_has_no_matching_date_rows(monkeypatch, caplog):
+    # A 0-observation result is ambiguous by itself: a genuinely empty file
+    # and a real file whose every row is date-mismatched (see the test
+    # above) both produce it. The date-mismatch case is worth a WARNING of
+    # its own -- otherwise diagnosing it means downloading and inspecting
+    # the raw file by hand (as this exact real case, LIFT 2024 probe1 on
+    # 2024-04-27, originally required).
+    csv_text = (
+        "sfc_wspd,sfc_wdir,t_fast,dewpoint,pressure,gps_date,gps_time,lat,lon\n"
+        "0.59,99.3,24.15,19.95,967.97,020724,143848,35.1814,-97.4388\n"
+    )
+
+    class _FakeResponse:
+        def read(self_inner):
+            return csv_text.encode("utf-8")
+        def __enter__(self_inner):
+            return self_inner
+        def __exit__(self_inner, *exc):
+            return False
+
+    monkeypatch.setattr(vof, "urlopen", lambda request, timeout, context: _FakeResponse())
+
+    fetcher = ArchiveVehicleObsFetcher(datetime(2024, 4, 27, tzinfo=timezone.utc))
+    with caplog.at_level("WARNING"):
+        observations = fetcher._fetch_vehicle_csv("probe1", None)
+
+    assert observations == []
+    assert "none of it matches this date" in caplog.text
+    assert "probe1" in caplog.text
+
+
+def test_fetch_vehicle_csv_does_not_warn_for_a_genuinely_empty_file(monkeypatch, caplog):
+    class _FakeResponse:
+        def read(self_inner):
+            return b""
+        def __enter__(self_inner):
+            return self_inner
+        def __exit__(self_inner, *exc):
+            return False
+
+    monkeypatch.setattr(vof, "urlopen", lambda request, timeout, context: _FakeResponse())
+
+    fetcher = ArchiveVehicleObsFetcher(datetime(2024, 4, 27, tzinfo=timezone.utc))
+    with caplog.at_level("WARNING"):
+        observations = fetcher._fetch_vehicle_csv("probe1", None)
+
+    assert observations == []
+    assert "none of it matches this date" not in caplog.text
+
+
 def test_parse_vehicle_netcdf_uses_epochtime_directly(tmp_path):
     epoch0 = datetime(2022, 5, 24, tzinfo=timezone.utc).timestamp()
     path = tmp_path / "probe1.mesonet.20220524.nc"

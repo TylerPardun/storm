@@ -660,6 +660,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 self._archive_loading.set_task_done("Mesonets")
                 self._start_archive_vehicle_obs()
                 self._try_auto_select_radar_station()
+                self._update_archive_session_end()
             else:
                 QTimer.singleShot(500, _check_mqtt_loaded)
 
@@ -698,6 +699,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         # deployed) -- times out to done, not an error.
         if self._archive_noxp is not None:
             from archive.catalog import ALL_PLATFORMS, catalogs_for_platform
+            from archive.session import session_bounds
             _year_str = str(self._archive_time.year)
             _noxp_platform = next(
                 (p for p in ALL_PLATFORMS if p.family == "NOXP Radar" and _year_str in p.display_name),
@@ -708,7 +710,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             else:
                 self._noxp_platform = _noxp_platform
                 _noxp_catalog_root = catalogs_for_platform(_noxp_platform)[0].url
-                _noxp_target_day = self._archive_time.date()
                 _noxp_retries = {"n": 0}
 
                 # Once the foreground per-day search below concludes (either
@@ -755,10 +756,13 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
                 self._archive_noxp.root_index_progress.connect(_on_noxp_root_indexed)
 
-                def _on_noxp_startup_assets(platform_id, assets, _platform=_noxp_platform, _day=_noxp_target_day):
+                def _on_noxp_startup_assets(platform_id, assets, _platform=_noxp_platform):
                     if platform_id != _platform.platform_id or not self._archive_loading.isVisible():
                         return
-                    matching = [a for a in assets if a.nominal_time is not None and a.nominal_time.date() == _day]
+                    # any volume inside the session's span, which runs into
+                    # the next UTC morning (archive/session.py)
+                    _start, _cap = session_bounds(self._archive_time)
+                    matching = [a for a in assets if a.nominal_time is not None and _start <= a.nominal_time <= _cap]
                     if not matching:
                         return   # crawl still incomplete or genuinely nothing here -- _retry_noxp_discovery decides
                     self._archive_loading.set_task_done("Mobile Radar")
@@ -841,19 +845,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             return
         self._archive_vehicle_obs_started = True
 
+        # Recorded MQTT vehicles (which carry icon types); the fetcher adds
+        # every vehicle THREDDS publishes files for this session in its
+        # background load (archive/fofs_index.py), so probes never connected
+        # to STORM, and new vehicle folders, are included too.
         vehicles = self._archive_mqtt.vehicle_metadata()
-        used_catalog_roster = False
-        if not vehicles:
-            # No recorded MQTT history for this date (expected for dates
-            # STORM wasn't deployed/connected for -- confirmed common for
-            # older campaigns). Fall back to probing the full known FOFS
-            # platform roster directly; ArchiveVehicleObsFetcher already
-            # drops platforms with no file for this day, so this is safe
-            # even though not every platform was active on every date.
-            from archive.vehicle_aliases import KNOWN_FOFS_PLATFORMS
-            vehicles = {platform: None for platform in KNOWN_FOFS_PLATFORMS}
-            used_catalog_roster = True
-        self._archive_vehicle_obs_from_catalog = used_catalog_roster
+        self._archive_vehicle_obs_from_catalog = not vehicles
         self._archive_vehicle_obs_roster_size = len(vehicles)
 
         from archive.fetchers.vehicle_obs_archive_fetcher import ArchiveVehicleObsFetcher
@@ -878,12 +875,35 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         )
         self._archive_vehicle_obs.load(vehicles)
 
+    def _update_archive_session_end(self) -> None:
+        """Size the timeline to the day's activity (archive/session.py) once
+        the evidence is in: the recorded MQTT history, plus the one-second
+        vehicle tracks whenever those are being loaded -- waiting for both
+        so the timeline doesn't shrink and then grow again. With no
+        evidence at all the session keeps its full UTC day, as before."""
+        from archive.session import activity_end, session_bounds
+        if not getattr(self._archive_mqtt, "_loaded", False):
+            return
+        if self._archive_vehicle_obs_started and not self._archive_vehicle_obs_loaded:
+            return
+        times = self._archive_mqtt.activity_times()
+        if self._archive_vehicle_obs is not None and self._archive_vehicle_obs_loaded:
+            times += self._archive_vehicle_obs.activity_times()
+        end = activity_end(self._archive_time, times)
+        if end is None:
+            start, _ = session_bounds(self._archive_time)
+            end = start + timedelta(days=1)
+        log.info("Archive session runs to %s (%d activity markers)", end.isoformat(), len(times))
+        self._time_ctrl.set_window_end(end)
+
     def _on_archive_vehicle_obs_loaded(self, vehicle_ids: set[str]) -> None:
         self._archive_vehicle_obs_loaded = True
+        self._update_archive_session_end()
         if self._radar_station_awaiting_dense_obs:
             self._radar_station_awaiting_dense_obs = False
             self._try_auto_select_radar_station()
 
+        self._archive_vehicle_obs_roster_size = self._archive_vehicle_obs.roster_size
         total = self._archive_vehicle_obs_roster_size
         if not vehicle_ids:
             status = (
@@ -4331,7 +4351,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         clock, not "now" -- live NEXRAD semantics don't apply here)."""
         if self._archive:
             self.status_msg_label.setText("Fetching CLAMPS wind profiles…")
-            if not self._archive_clamps_wind.fetch(self._archive_time):
+            if not self._archive_clamps_wind.fetch(self._archive_time):  # covers the whole session span
                 self.status_msg_label.setText("CLAMPS wind: fetch already in progress")
             return
 

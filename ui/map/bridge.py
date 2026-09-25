@@ -27,6 +27,8 @@ class MapBridge(QObject):
     storm_cone_drag_ended = pyqtSignal(str, float, float)  # id, lat, lon
     storm_cone_place_drag_ended = pyqtSignal(float, float)
     private_pin_route_requested = pyqtSignal(float, float, str)
+    track_point_add_requested    = pyqtSignal(float, float)  # lat, lon
+    track_point_selected         = pyqtSignal(int)           # point_id
 
     @pyqtSlot(float, float)
     def on_map_click(self, lat: float, lon: float):
@@ -74,6 +76,14 @@ class MapBridge(QObject):
     @pyqtSlot(str)
     def on_storm_cone_click(self, cone_id: str):
         self.storm_cone_clicked.emit(cone_id)
+
+    @pyqtSlot(float, float)
+    def on_track_point_add(self, lat: float, lon: float):
+        self.track_point_add_requested.emit(lat, lon)
+
+    @pyqtSlot(int)
+    def on_track_point_select(self, point_id: int):
+        self.track_point_selected.emit(point_id)
 
     @pyqtSlot(float, float)
     def on_map_dblclick(self, lat: float, lon: float):

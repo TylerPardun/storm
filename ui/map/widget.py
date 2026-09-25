@@ -48,6 +48,8 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
     map_pick_for_route    = pyqtSignal(float, float)
     cwa_loaded            = pyqtSignal()
     _cwa_parsed           = pyqtSignal(object)
+    track_point_add_requested = pyqtSignal(float, float)  # lat, lon
+    track_point_selected      = pyqtSignal(int)           # point_id
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -118,6 +120,8 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         self.bridge.asos_bbox_selected.connect(self.asos_bbox_selected)
         self.bridge.user_dragged.connect(self.user_dragged)
         self.bridge.map_pick_for_route.connect(self.map_pick_for_route)
+        self.bridge.track_point_add_requested.connect(self.track_point_add_requested)
+        self.bridge.track_point_selected.connect(self.track_point_selected)
 
         # queue for JS calls that arrive before MapLibre has fully loaded.
         self._map_ready = False
@@ -711,6 +715,13 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
 
     def set_storm_cone_placement_mode(self, active: bool) -> None:
         self.run_js(f"if(window.stormSetStormConePlacementMode) stormSetStormConePlacementMode({'true' if active else 'false'});")
+
+    def set_track_geojson(self, geojson_str: str) -> None:
+        import json
+        self.run_js(f"if(window.stormSetTrackGeoJSON) stormSetTrackGeoJSON({json.dumps(geojson_str)});")
+
+    def set_track_edit_mode(self, active: bool) -> None:
+        self.run_js(f"if(window.stormSetTrackEditMode) stormSetTrackEditMode({'true' if active else 'false'});")
 
     def set_asos_bbox_mode(self, active: bool) -> None:
         """Toggle JS rectangle-selection mode for ASOS bbox selection."""

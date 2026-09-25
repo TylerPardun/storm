@@ -60,6 +60,12 @@ FEATURES = {
         default_enabled=True,
         admin_only=True,
     ),
+    "storm_track": Feature(
+        key="storm_track",
+        label="Storm track (archive)",
+        default_enabled=True,
+        admin_only=True,
+    ),
 }
 
 

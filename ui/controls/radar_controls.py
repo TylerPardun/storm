@@ -297,6 +297,14 @@ class RadarControls(QWidget):
     def current_tilt_index(self) -> int:
         return self._tilt_combo.currentIndex()
 
+    def set_current_product(self, code: str) -> None:
+        """Select `code` in the product combo as if the user had clicked it,
+        so the existing currentIndexChanged -> product_changed wiring fires
+        and dispatches to WSR-88D/NOXP rendering exactly as a real click would."""
+        idx = self._product_combo.findData(code)
+        if idx >= 0:
+            self._product_combo.setCurrentIndex(idx)
+
     def set_selected_site(self, site_id: str, emit: bool = False):
         normalized = _normalize_site(site_id) or "KTLX"
         self._site = normalized

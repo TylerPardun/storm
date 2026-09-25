@@ -631,6 +631,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._time_ctrl.time_changed.connect(self._archive_hazard.on_time_changed)
         self._time_ctrl.time_changed.connect(self._archive_satellite.on_time_changed)
         self._time_ctrl.time_changed.connect(self._archive_sounding.on_time_changed)
+        if hasattr(self, "btn_track"):
+            # _init_toolbar() (called from __init__, before _time_ctrl exists)
+            # already built the TRACK tab -- the time_changed connection has
+            # to wait until here, once _time_ctrl is actually constructed.
+            self._time_ctrl.time_changed.connect(self._on_time_changed_update_track_highlight)
 
         # Small top-left status text while initial data fetches run, in
         # place of a blocking modal -- the session is interactive
@@ -1727,7 +1732,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._track_toggle_shortcut_r.activated.connect(self._toggle_radar_product_shortcut)
             self._track_toggle_shortcut_v = QShortcut(QKeySequence("V"), self)
             self._track_toggle_shortcut_v.activated.connect(self._toggle_radar_product_shortcut)
-            self._time_ctrl.time_changed.connect(self._on_time_changed_update_track_highlight)
+            # self._time_ctrl doesn't exist yet here (_init_toolbar runs from
+            # __init__, before _begin_archive_startup creates it) -- that
+            # connection is made there instead, guarded by hasattr(self, "btn_track").
             self._init_track_state()
 
         self.btn_surface = self._toolbar_toggle(

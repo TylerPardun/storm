@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
     QLabel, QDockWidget, QVBoxLayout, QHBoxLayout,
     QToolButton, QFrame, QCheckBox, QPushButton, QGridLayout,
-    QFileDialog, QSizePolicy,
+    QFileDialog, QSizePolicy, QLineEdit, QTextEdit, QComboBox,
 )
 from PyQt6.QtCore import Qt, QTimer, QSettings, QObject, pyqtSignal, QSize
 from PyQt6.QtGui import QFont, QKeySequence, QShortcut, QIcon, QPixmap, QPainter
@@ -34,6 +34,7 @@ from ui.controls.mesoanalysis_controls import MesoanalysisControls
 from ui.controls.sfcoa_controls import SfcoaControls
 from ui.controls.surface_controls import SurfaceControls
 from ui.controls.raw_lidar_controls import RawLidarControls
+from ui.controls.track_controls import TrackControls
 from ui.widgets.outlook_panel import OutlookPanel
 from ui.map.radar_overlay import RadarOverlay, render_scan_to_png as _render_scan_to_png
 from ui.sounding.dialog import SoundingDialog
@@ -73,6 +74,7 @@ from core.scan_sector import ScanSector, feature_collection
 from core.drawing import DrawingAnnotation, DRAWING_TYPE_MAP, FRONT_TYPE_KEYS
 from core.observation import Observation
 from core.vehicle import Vehicle
+from core.storm_track import TrackPoint, track_filename, default_track_dir, write_track_csv, write_track_excel
 from network.mqtt_client import MQTTClient
 from network.annotation_sync import AnnotationSync
 from network.storm_cone_sync import StormConeSync
@@ -1705,6 +1707,28 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 "DAMAGE", "Draw a box for damage paths", tb
             )
             self.btn_damage_paths.toggled.connect(self._on_damage_paths_toggled)
+
+        if self._archive and feature_flags.is_enabled("storm_track"):
+            self.btn_track = self._toolbar_toggle(
+                "TRACK", "Subjectively track the mesocyclone", tb
+            )
+            self.track_controls = TrackControls(self._map_container)
+            self.track_controls.setObjectName("floatingToolbar")
+            self.btn_track.toggled.connect(self.track_controls.toggle_drawer)
+            self.btn_track.toggled.connect(self._start_layout_pulse)
+            self.btn_track.toggled.connect(self._on_track_edit_toggled)
+            self.track_controls.export_requested.connect(self._export_track_as)
+            self.track_controls.clear_requested.connect(self._on_clear_track_requested)
+            self.map_widget.track_point_add_requested.connect(self._on_track_point_add)
+            self.map_widget.track_point_selected.connect(self._on_track_point_select)
+            self._track_delete_shortcut = QShortcut(QKeySequence("D"), self)
+            self._track_delete_shortcut.activated.connect(self._delete_selected_track_point)
+            self._track_toggle_shortcut_r = QShortcut(QKeySequence("R"), self)
+            self._track_toggle_shortcut_r.activated.connect(self._toggle_radar_product_shortcut)
+            self._track_toggle_shortcut_v = QShortcut(QKeySequence("V"), self)
+            self._track_toggle_shortcut_v.activated.connect(self._toggle_radar_product_shortcut)
+            self._time_ctrl.time_changed.connect(self._on_time_changed_update_track_highlight)
+            self._init_track_state()
 
         self.btn_surface = self._toolbar_toggle(
             "SURFACE", "Surface observations", tb
@@ -4889,6 +4913,186 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.status_msg_label.setText("Damage paths: none found in this box")
         self._archive_damage_paths_showing = True
         self.map_widget.set_damage_paths(json.dumps(fc))
+
+    # -- Storm track (archive) --------------------------------------------
+    # Subjective mesocyclone/storm-track points, hand-placed while reviewing
+    # archive radar -- ported from MESO-VIEW's inline track-editing feature.
+    # See core/storm_track.py for the data model and file writers.
+
+    def _init_track_state(self) -> None:
+        self._track_points: list[TrackPoint] = []
+        self._track_next_id = 1
+        self._track_selected_id = None
+        self._track_saved_path = None
+        self._track_edit_active = False
+
+    def _on_track_edit_toggled(self, checked: bool) -> None:
+        self._track_edit_active = checked
+        self.map_widget.set_track_edit_mode(checked)
+
+    def _current_track_radar_context(self) -> tuple[str, str, str, float | None]:
+        """(radar_site, product, product_label, tilt_deg) for whichever radar
+        is on screen right now -- NOXP or the active WSR-88D station."""
+        product = self.radar_controls.current_product()
+        if self._noxp_active:
+            from core.noxp_radar_scan import field_meta
+            product_label = field_meta(product)["label"]
+            tilt_deg = None
+            if self._noxp_current_volume is not None:
+                from archive.fetchers.noxp_radar_archive_fetcher import noxp_sweep_elevations
+                elevations = noxp_sweep_elevations(self._noxp_current_volume)
+                idx = self.radar_controls.current_tilt_index()
+                if elevations and 0 <= idx < len(elevations):
+                    tilt_deg = elevations[idx]
+            return NOXP_SITE_ID, product, product_label, tilt_deg
+        from core.level2_radar_scan import L2_PRODUCTS
+        product_label = L2_PRODUCTS.get(product, {}).get("label", product)
+        tilt_deg = getattr(self._current_radar_scan, "tilt_deg", None)
+        return self._archive_radar.station, product, product_label, tilt_deg
+
+    def _nearest_track_point_id(self, when: datetime) -> int | None:
+        if not self._track_points:
+            return None
+        return min(
+            self._track_points, key=lambda p: abs((p.time - when).total_seconds())
+        ).point_id
+
+    def _push_track_geojson(self) -> None:
+        current_id = self._nearest_track_point_id(self._time_ctrl.current_time)
+        coords = []
+        features = []
+        for p in self._track_points:
+            coords.append([p.lon, p.lat])
+            if p.point_id == self._track_selected_id:
+                state = "selected"
+            elif p.point_id == current_id:
+                state = "current"
+            else:
+                state = "normal"
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [p.lon, p.lat]},
+                "properties": {"point_id": p.point_id, "state": state},
+            })
+        if len(coords) >= 2:
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": coords},
+                "properties": {},
+            })
+        self.map_widget.set_track_geojson(json.dumps({"type": "FeatureCollection", "features": features}))
+
+    def _autosave_track(self) -> None:
+        if not self._track_points:
+            return
+        if self._track_saved_path is None:
+            self._track_saved_path = default_track_dir() / track_filename(self._track_points[0].time)
+        try:
+            write_track_csv(self._track_points, self._track_saved_path)
+        except Exception as exc:
+            log.error("Track autosave failed: %s", exc)
+            self.status_msg_label.setText(f"Track autosave failed: {exc}")
+        if hasattr(self, "track_controls"):
+            self.track_controls.set_point_count(len(self._track_points))
+
+    def _on_track_point_add(self, lat: float, lon: float) -> None:
+        radar_site, product, product_label, tilt_deg = self._current_track_radar_context()
+        point = TrackPoint(
+            point_id=self._track_next_id,
+            time=self._time_ctrl.current_time,
+            lat=lat, lon=lon,
+            radar_site=radar_site, product=product, product_label=product_label,
+            tilt_deg=tilt_deg,
+        )
+        self._track_next_id += 1
+        is_first_point = not self._track_points
+        self._track_points.append(point)
+        self._push_track_geojson()
+        self._autosave_track()
+        if is_first_point and self._track_saved_path is not None:
+            self.status_msg_label.setText(f"Track saved to {self._track_saved_path}")
+
+    def _on_track_point_select(self, point_id: int) -> None:
+        self._track_selected_id = point_id
+        self._push_track_geojson()
+
+    def _delete_selected_track_point(self) -> None:
+        if self._shortcut_focus_is_text_entry():
+            return
+        if not self._track_edit_active or self._track_selected_id is None:
+            return
+        self._track_points = [
+            p for p in self._track_points if p.point_id != self._track_selected_id
+        ]
+        self._track_selected_id = None
+        self._push_track_geojson()
+        self._autosave_track()
+
+    def _shortcut_focus_is_text_entry(self) -> bool:
+        w = QApplication.focusWidget()
+        if isinstance(w, (QLineEdit, QTextEdit)):
+            return True
+        if isinstance(w, QComboBox) and w.isEditable():
+            return True
+        return False
+
+    def _toggle_radar_product_shortcut(self) -> None:
+        """R and V both flip whichever product (reflectivity/velocity) is
+        currently shown -- matches MESO-VIEW's own redundant R/V binding."""
+        if self._shortcut_focus_is_text_entry():
+            return
+        if not hasattr(self, "radar_controls"):
+            return
+        current = self.radar_controls.current_product()
+        if self._noxp_active:
+            other = "DBZ" if current == "VEL" else "VEL"
+        else:
+            other = "N0B" if current == "N0U" else "N0U"
+        self.radar_controls.set_current_product(other)
+
+    def _on_time_changed_update_track_highlight(self, when: datetime) -> None:
+        if self._track_points:
+            self._push_track_geojson()
+
+    def _export_track_as(self) -> None:
+        if not self._track_points:
+            self.status_msg_label.setText("Track: no points to export")
+            return
+        from pathlib import Path
+        default_path = str(default_track_dir() / track_filename(self._track_points[0].time))
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "Export Track", default_path, "CSV (*.csv);;Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        p = Path(path)
+        if p.suffix.lower() not in (".csv", ".xlsx"):
+            p = p.with_suffix(".xlsx" if "xlsx" in selected_filter else ".csv")
+        if p.suffix.lower() == ".xlsx":
+            write_track_excel(self._track_points, p)
+        else:
+            write_track_csv(self._track_points, p)
+        self.status_msg_label.setText(f"Track exported to {p}")
+
+    def _on_clear_track_requested(self) -> None:
+        if self._track_points:
+            from PyQt6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self, "Clear Track",
+                "Remove all track points? This cannot be undone.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        self._track_points = []
+        self._track_next_id = 1
+        self._track_selected_id = None
+        self._track_saved_path = None
+        self._push_track_geojson()
+        self.track_controls.set_point_count(0)
+        self.track_controls.set_status("")
+        self.status_msg_label.setText("Track cleared")
 
     def _toggle_radar_station_picker(self):
         self._set_radar_station_picker_visible(not self._radar_station_picker_visible)

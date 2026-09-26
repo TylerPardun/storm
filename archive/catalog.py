@@ -512,8 +512,9 @@ class AvailabilityIndex:
 # physical vehicle instrumented four ways: FOFS tracks its onboard
 # mesonet probe/GPS, CLAMPS Raw Lidar tracks its two Doppler lidars'
 # unprocessed scans, CLAMPS Winds tracks the wind profiles retrieved from
-# those same two lidars (DL1/DL2, each producing both a VAD and a
-# CSM-scan wind product), and CLAMPS Sondes tracks the mobile radiosonde
+# that same lidar (published under two stream names, DL1 and DL2 -- one
+# instrument, confirmed 2026-09-25 -- each with a VAD and a CSM-scan wind
+# product), and CLAMPS Sondes tracks the mobile radiosonde
 # launches made from it. Called "LiDAR Truck" here (its instrument
 # registry site name -- see _vehicle_site()/_FOFS_VEHICLE_SITE below),
 # not the raw "dltruck"/"DLTRUCK1" token.
@@ -536,14 +537,15 @@ _FOFS_STAGE_NAMES: dict[str, str] = {
 _CLAMPS_WIND_STAGE_NAMES: dict[str, str] = {
     "CLAMPS1-VAD": "CLAMPS 1 (VAD)",
     "CLAMPS2-VAD": "CLAMPS 2 (VAD)",
-    "DLTRUCK1-DL1-VAD": "LiDAR Truck — Lidar 1 (VAD)",
-    "DLTRUCK1-DL2-VAD": "LiDAR Truck — Lidar 2 (VAD)",
+    # DL1 and DL2 are one lidar published under two stream names (Tyler, 2026-09-25)
+    "DLTRUCK1-DL1-VAD": "LiDAR Truck — Lidar (VAD)",
+    "DLTRUCK1-DL2-VAD": "LiDAR Truck — Lidar, DL2 stream (VAD)",
     # "CSM wind", not "CSM" -- CLAMPS Raw Lidar already uses "(CSM)" for the
     # raw scan this is retrieved *from* (see RAW-LIDAR-DLTRUCK1-DL{1,2}-CSM
     # below); the identical abbreviation on two different files read as a
     # duplicate platform rather than a derived product.
-    "DLTRUCK1-DL1-CSMWINDS": "LiDAR Truck — Lidar 1 (CSM wind)",
-    "DLTRUCK1-DL2-CSMWINDS": "LiDAR Truck — Lidar 2 (CSM wind)",
+    "DLTRUCK1-DL1-CSMWINDS": "LiDAR Truck — Lidar (CSM wind)",
+    "DLTRUCK1-DL2-CSMWINDS": "LiDAR Truck — Lidar, DL2 stream (CSM wind)",
 }
 
 _SURFACE_KIND_LABELS: dict[str, str] = {
@@ -572,9 +574,8 @@ _FOFS_VEHICLE_SITE: dict[str, str] = {"dltruck": _LIDAR_TRUCK_SITE}
 def _vehicle_site(platform_dir: str) -> str:
     """THREDDS platform_dir -> the physical vehicle/trailer it groups
     under, e.g. 'dltruck/dltruck1' -> 'LiDAR Truck', 'clamps/clamps1' ->
-    'CLAMPS 1'. Both of the truck's lidars (DL1/DL2) share the same
-    platform_dir and so the same site -- they're two instruments on one
-    vehicle, not two vehicles."""
+    'CLAMPS 1'. The truck's lidar streams (DL1/DL2) share the same
+    platform_dir and so the same site -- one instrument on one vehicle."""
     if platform_dir.startswith("dltruck/"):
         return _LIDAR_TRUCK_SITE
     if platform_dir == "clamps/clamps1":
@@ -607,7 +608,10 @@ def _build_registry() -> list[KnownPlatform]:
     ))
 
     for source in KNOWN_RAW_LIDAR_SOURCES:
-        label_prefix = source.platform_id.rsplit('-', 1)[0].replace('DLTRUCK1-DL', 'LiDAR Truck — Lidar ').replace('CLAMPS', 'CLAMPS ')
+        label_prefix = (source.platform_id.rsplit('-', 1)[0]
+                        .replace('DLTRUCK1-DL1', 'LiDAR Truck — Lidar')
+                        .replace('DLTRUCK1-DL2', 'LiDAR Truck — Lidar, DL2 stream')
+                        .replace('CLAMPS', 'CLAMPS '))
         platforms.append(KnownPlatform(f'RAW-LIDAR-{source.platform_id}',
                                        f'{label_prefix} ({source.product.upper()})', 'CLAMPS Raw Lidar', source,
                                        site=_vehicle_site(source.platform_dir)))

@@ -213,11 +213,17 @@ class RawLidarControls(QWidget):
         instrument = self.current_instrument()
         self._asset_combo.blockSignals(True)
         self._asset_combo.clear()
-        for source in self._sources_by_instrument.get(instrument, []):
+        sources = self._sources_by_instrument.get(instrument, [])
+        with_data = [s for s in sources if self._assets_by_source.get(s.platform_id)]
+        for source in sources:
             assets = self._assets_by_source.get(source.platform_id)
             if assets:
+                # one instrument can publish a scan mode under two stream names
+                shared = sum(s.product == source.product for s in with_data) > 1
                 for index, asset in enumerate(assets):
                     label = source.product.upper()
+                    if shared:
+                        label += f" ({source.stream} stream)"
                     if len(assets) > 1:
                         label += f" · file {index + 1}/{len(assets)}"
                     self._asset_combo.addItem(label, (source, asset))

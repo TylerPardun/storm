@@ -17,9 +17,10 @@ from archive.fetchers.noxp_archive_fetcher import download_asset
 @dataclass(frozen=True)
 class RawLidarSource:
     platform_id: str
-    instrument: str   # the physical lidar unit, e.g. "DLTRUCK1-DL1" -- one
-                       # instrument produces up to 4 platform_id entries
-                       # below (one per scan-mode product), which is why a
+    instrument: str   # the physical lidar, e.g. "DLTRUCK1" -- one instrument
+                       # produces up to 4 platform_id entries below (one per
+                       # scan-mode product), and the truck's lidar was also
+                       # published under two stream names (DL1, DL2), so a
                        # single deployed lidar can show as several "sources".
     platform_dir: str
     datastream: str
@@ -30,14 +31,24 @@ class RawLidarSource:
     def path(self):
         return f'FRDD/CLAMPS/{self.platform_dir}/ingested/{self.datastream}'
 
+    @property
+    def stream(self) -> str:
+        """The stream name inside the datastream, e.g. "DL2", "C1"."""
+        return self.datastream.split('.')[0].split(f'dl{self.product}')[-1]
 
+
+# DL1 and DL2 are the same physical lidar on the truck (confirmed by Tyler,
+# 2026-09-25): DL2 files exist only 2022-05-13..06-16. On those days both
+# streams can have a file for the same scan mode, and they differ (the fp
+# files are 51.6 MB vs 5.6 MB on 2022-05-13), so both are kept and offered,
+# labelled by stream -- nothing is deduplicated.
 KNOWN_RAW_LIDAR_SOURCES = tuple(
-    RawLidarSource(f'{platform}-{product.upper()}', platform, directory, f'{prefix}dl{product}{unit}.b1', product, mobile)
-    for platform, directory, prefix, unit, mobile in (
-        ('DLTRUCK1-DL1', 'dltruck/dltruck1', 'dltruck', 'DL1', True),
-        ('DLTRUCK1-DL2', 'dltruck/dltruck1', 'dltruck', 'DL2', True),
-        ('CLAMPS1', 'clamps/clamps1', 'clamps', 'C1', False),
-        ('CLAMPS2', 'clamps/clamps2', 'clamps', 'C2', False),
+    RawLidarSource(f'{platform}-{product.upper()}', instrument, directory, f'{prefix}dl{product}{unit}.b1', product, mobile)
+    for platform, instrument, directory, prefix, unit, mobile in (
+        ('DLTRUCK1-DL1', 'DLTRUCK1', 'dltruck/dltruck1', 'dltruck', 'DL1', True),
+        ('DLTRUCK1-DL2', 'DLTRUCK1', 'dltruck/dltruck1', 'dltruck', 'DL2', True),
+        ('CLAMPS1', 'CLAMPS1', 'clamps/clamps1', 'clamps', 'C1', False),
+        ('CLAMPS2', 'CLAMPS2', 'clamps/clamps2', 'clamps', 'C2', False),
     )
     for product in ('csm', 'ppi', 'fp', 'other')
 )

@@ -3,9 +3,9 @@ from ui.controls.raw_lidar_controls import RawLidarControls
 
 
 def _dltruck1_dl1_sources():
-    """The first 4 entries are DLTRUCK1-DL1's csm/ppi/fp/other variants --
-    one physical instrument, four scan-mode platform_ids."""
-    return [s for s in KNOWN_RAW_LIDAR_SOURCES if s.instrument == "DLTRUCK1-DL1"]
+    """The truck lidar's DL1-stream csm/ppi/fp/other variants -- one
+    physical instrument, four scan-mode platform_ids."""
+    return [s for s in KNOWN_RAW_LIDAR_SOURCES if s.platform_id.startswith("DLTRUCK1-DL1-")]
 
 
 def test_initial_status_is_a_real_placeholder_not_blank():
@@ -19,7 +19,7 @@ def test_set_sources_groups_by_instrument_not_by_scan_mode():
     controls = RawLidarControls()
     controls.set_sources(_dltruck1_dl1_sources())
     assert controls._source_combo.count() == 1
-    assert controls._source_combo.currentData() == "DLTRUCK1-DL1"
+    assert controls._source_combo.currentData() == "DLTRUCK1"
 
 
 def test_scan_mode_combo_only_lists_products_that_have_data_and_shows_no_filenames():
@@ -41,12 +41,12 @@ def test_status_reports_instruments_not_a_raw_source_count():
     controls = RawLidarControls()
     sources = list(KNOWN_RAW_LIDAR_SOURCES)
     controls.set_sources(sources)
-    ppi_source = next(s for s in sources if s.instrument == "DLTRUCK1-DL1" and s.product == "ppi")
+    ppi_source = next(s for s in sources if s.platform_id == "DLTRUCK1-DL1-PPI")
     asset = LidarAsset(ppi_source, "dlppiDL1.b1.20260608.000000.cdf", "catalog")
     controls.set_assets_for_all_sources({ppi_source.platform_id: [asset]})
 
     status = controls._status_label.text()
-    assert "DLTRUCK1-DL1" in status
+    assert "DLTRUCK1" in status
     assert "of 16" not in status
     assert "source(s)" not in status
 
@@ -147,7 +147,7 @@ def test_switching_off_a_mappable_source_clears_the_map_toggle():
     events = []
     controls.map_overlay_requested.connect(lambda pid, a, en: events.append((pid, a, en)))
 
-    dltruck_index = controls._source_combo.findData("DLTRUCK1-DL1")
+    dltruck_index = controls._source_combo.findData("DLTRUCK1")
     controls._source_combo.setCurrentIndex(dltruck_index)
 
     assert controls._btn_map.isChecked() is False
@@ -162,7 +162,7 @@ def test_roster_hides_absent_instruments_but_preserves_unknown_sources():
     asset = LidarAsset(mobile, 'a.cdf', 'catalog')
     controls.set_assets_for_all_sources({mobile.platform_id: [asset], unknown.platform_id: None})
     assert controls._source_combo.count() == 2
-    assert controls._source_combo.findData('DLTRUCK1-DL2') == -1
+    assert controls._source_combo.findData('DLTRUCK1') == 0      # one entry for the truck lidar
     assert 'unavailable' in controls._source_combo.itemText(1)
     assert not controls._btn_map.isHidden()
     assert not hasattr(controls, '_map_reason')
@@ -202,3 +202,20 @@ def test_fields_come_from_selected_file_and_stale_load_cannot_replace_them():
     rays.provenance = {'url': 'old-file'}
     assert not controls.set_loaded_fields(rays)
     assert controls._field_combo.currentData() == 'intensity'
+
+
+def test_dl1_and_dl2_are_one_instrument_with_both_streams_offered():
+    """DL1 and DL2 are the same lidar; on the 2022 days both streams have an
+    fp file, and they differ, so both are offered, labelled by stream."""
+    controls = RawLidarControls()
+    controls.set_sources(KNOWN_RAW_LIDAR_SOURCES)
+    fp = {s.stream: s for s in KNOWN_RAW_LIDAR_SOURCES if s.instrument == "DLTRUCK1" and s.product == "fp"}
+    csm2 = next(s for s in KNOWN_RAW_LIDAR_SOURCES if s.platform_id == "DLTRUCK1-DL2-CSM")
+    controls.set_assets_for_all_sources({
+        fp["DL1"].platform_id: [LidarAsset(fp["DL1"], "dltruckdlfpDL1.b1.20220513.000000.cdf", "c")],
+        fp["DL2"].platform_id: [LidarAsset(fp["DL2"], "dltruckdlfpDL2.b1.20220513.000000.cdf", "c")],
+        csm2.platform_id: [LidarAsset(csm2, "dltruckdlcsmDL2.b1.20220513.000000.cdf", "c")],
+    })
+    assert [controls._source_combo.itemData(i) for i in range(controls._source_combo.count())] == ["DLTRUCK1"]
+    labels = [controls._asset_combo.itemText(i) for i in range(controls._asset_combo.count())]
+    assert labels == ["FP (DL1 stream)", "CSM", "FP (DL2 stream)"]

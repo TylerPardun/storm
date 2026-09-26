@@ -8,7 +8,7 @@ live in radar_controls.py and are driven by the R/V shortcuts, not this panel.
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve
-from PyQt6.QtWidgets import QCheckBox, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 
 
 class TrackControls(QWidget):
@@ -21,6 +21,9 @@ class TrackControls(QWidget):
     export_requested()   user clicked "Export As…"
     clear_requested()    user clicked "Clear Track"
     layers_changed(bool, bool)  line / points visibility
+    workspace_selected(str)      user picked another workspace
+    new_workspace_requested()    user picked "New workspace…"
+    open_track_requested(str)    user opened one of this date's workspace tracks
     """
 
     load_requested = pyqtSignal()
@@ -30,6 +33,11 @@ class TrackControls(QWidget):
     export_requested = pyqtSignal()
     clear_requested = pyqtSignal()
     layers_changed = pyqtSignal(bool, bool)
+    workspace_selected = pyqtSignal(str)
+    new_workspace_requested = pyqtSignal()
+    open_track_requested = pyqtSignal(str)
+
+    _NEW_WORKSPACE = "New workspace…"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -48,6 +56,27 @@ class TrackControls(QWidget):
         col = QVBoxLayout(self._drawer)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(5)
+
+        ws_row = QHBoxLayout()
+        ws_label = QLabel("WORKSPACE")
+        ws_label.setStyleSheet("color: #8E97AB; font-size: 9px; letter-spacing: 1px;")
+        ws_row.addWidget(ws_label)
+        self._workspace_combo = QComboBox()
+        self._workspace_combo.setToolTip("Your tracks are saved per workspace, under ~/STORM/workspaces")
+        self._workspace_combo.activated.connect(self._on_workspace_activated)
+        ws_row.addWidget(self._workspace_combo, 1)
+        col.addLayout(ws_row)
+
+        saved_row = QHBoxLayout()
+        self._saved_combo = QComboBox()
+        self._saved_combo.setToolTip("Tracks saved in this workspace for this date, most recent first")
+        saved_row.addWidget(self._saved_combo, 1)
+        self._btn_open_saved = QPushButton("OPEN")
+        self._btn_open_saved.setToolTip("Resume the selected track")
+        self._btn_open_saved.clicked.connect(self._on_open_saved)
+        saved_row.addWidget(self._btn_open_saved)
+        col.addLayout(saved_row)
+        self.set_saved_tracks([])
 
         self._count_label = QLabel("0 points")
         self._count_label.setStyleSheet("color: #B5BDCC; font-size: 10px; letter-spacing: 0.5px;")
@@ -161,6 +190,36 @@ class TrackControls(QWidget):
 
     def set_point_count(self, count: int) -> None:
         self._count_label.setText(f"{count} point" + ("" if count == 1 else "s"))
+
+    def set_workspaces(self, names: list[str], active: str) -> None:
+        self._workspace_combo.blockSignals(True)
+        self._workspace_combo.clear()
+        self._workspace_combo.addItems(names)
+        self._workspace_combo.addItem(self._NEW_WORKSPACE)
+        self._workspace_combo.setCurrentText(active)
+        self._workspace_combo.blockSignals(False)
+
+    def _on_workspace_activated(self, index: int) -> None:
+        text = self._workspace_combo.itemText(index)
+        if text == self._NEW_WORKSPACE:
+            self.new_workspace_requested.emit()
+        else:
+            self.workspace_selected.emit(text)
+
+    def set_saved_tracks(self, tracks: list[tuple[str, str]]) -> None:
+        """(label, path) pairs for this date's workspace tracks."""
+        self._saved_combo.clear()
+        for label, path in tracks:
+            self._saved_combo.addItem(label, userData=path)
+        if not tracks:
+            self._saved_combo.addItem("No saved tracks for this date")
+        self._saved_combo.setEnabled(bool(tracks))
+        self._btn_open_saved.setEnabled(bool(tracks))
+
+    def _on_open_saved(self) -> None:
+        path = self._saved_combo.currentData()
+        if path:
+            self.open_track_requested.emit(path)
 
     def set_motion(self, mean: str | None, now: str | None) -> None:
         """Motion readouts, e.g. "from 240° at 15.1 m/s (29 kt)"; None shows a dash."""

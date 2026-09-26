@@ -50,16 +50,21 @@ def default_track_dir() -> Path:
     return desktop if desktop.is_dir() else Path.home()
 
 
+def unused_path(path: Path) -> Path:
+    """`path`, or name_2, name_3, ... if that file already exists."""
+    path = Path(path)
+    candidate, n = path, 2
+    while candidate.exists():
+        candidate = path.with_name(f"{path.stem}_{n}{path.suffix}")
+        n += 1
+    return candidate
+
+
 def new_track_path(first_point_time: datetime, directory: Path | None = None) -> Path:
     """A path for a new track that doesn't overwrite an existing file --
     two tracks started in the same minute get _2, _3, ..."""
     directory = Path(directory) if directory is not None else default_track_dir()
-    path = directory / track_filename(first_point_time)
-    n = 2
-    while path.exists():
-        path = directory / f"{path.stem.split('_track')[0]}_track_{n}.csv"
-        n += 1
-    return path
+    return unused_path(directory / track_filename(first_point_time))
 
 
 def case_id_for(path: Path | None) -> str:
@@ -142,18 +147,29 @@ def _rows(points: list[TrackPoint], case_id: str) -> list[dict]:
 
 
 def write_track_csv(points: list[TrackPoint], path: Path, case_id: str = "") -> None:
+    """Write atomically: a crash mid-save leaves the previous file intact."""
     import csv
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=_COLUMNS)
-        writer.writeheader()
-        writer.writerows(_rows(points, case_id))
+    import io
+    from core.workspace import atomic_write_text
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=_COLUMNS)
+    writer.writeheader()
+    writer.writerows(_rows(points, case_id))
+    atomic_write_text(Path(path), buffer.getvalue())
 
 
 def write_track_excel(points: list[TrackPoint], path: Path, case_id: str = "") -> None:
+    import os
+    import tempfile
     import pandas as pd
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(_rows(points, case_id), columns=list(_COLUMNS))
-    df.to_excel(path, index=False, engine="openpyxl")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}.", suffix=".xlsx")
+    os.close(fd)
+    try:
+        df.to_excel(tmp, index=False, engine="openpyxl")
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise

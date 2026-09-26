@@ -20,6 +20,8 @@ _METHODS = [
     "_shortcut_focus_is_text_entry", "_delete_track_point", "_on_track_marker_add",
     "_on_track_marker_rename", "_on_track_marker_remove", "_add_track_point_at_marker",
     "track_storm_motion", "_refresh_track_motion", "_on_time_changed_update_track_highlight",
+    "_track_workspace", "_track_session_day", "_refresh_track_workspace_lists",
+    "_switch_track_workspace", "_new_track_workspace", "_open_track",
 ]
 
 _MESO_VIEW_CSV = """point_id,time,lat,lon,source,case_id,track_file_kind,edited_at
@@ -59,6 +61,20 @@ class _Clock:
         self.window = (now.replace(hour=0, minute=0, second=0), now.replace(hour=0) + timedelta(hours=30))
 
 
+class _Settings:
+    """Stands in for QSettings so tests never touch the real preferences."""
+    store: dict = {}
+
+    def __init__(self, *args):
+        pass
+
+    def value(self, key, default=None, type=None):
+        return self.store.get(key, default)
+
+    def setValue(self, key, value):
+        self.store[key] = value
+
+
 class _Button:
     def isChecked(self):
         return True
@@ -74,10 +90,15 @@ def _window(tmp_path, monkeypatch, now=datetime(2024, 4, 27, 20, 0, tzinfo=timez
     w.track_controls = TrackControls()
     w.btn_track = _Button()
     w._current_track_radar_context = lambda: ("KTLX", "N0B", "Reflectivity", 0.5)
+    w._archive_time = now
     w._init_track_state()
     w._track_edit_active = True
     monkeypatch.setattr("ui.app.main_window.default_track_dir", lambda: tmp_path)
     monkeypatch.setattr("core.storm_track.default_track_dir", lambda: tmp_path)
+    monkeypatch.setattr("core.workspace.workspaces_root", lambda: tmp_path / "ws")
+    monkeypatch.setattr("ui.app.main_window.QSettings", _Settings)
+    monkeypatch.setattr(_Settings, "store", {})
+    w.track_controls.open_track_requested.connect(lambda path: w._open_track(Path(path)))
     return w
 
 
@@ -102,11 +123,16 @@ def test_placing_points_autosaves_a_new_file(tmp_path, monkeypatch):
     w._time_ctrl.current_time += timedelta(minutes=2)
     w._on_track_point_add(35.1, -97.1)
 
-    assert w._track_saved_path == tmp_path / "storm_20240427_2000_track.csv"
+    case_dir = tmp_path / "ws" / "My work" / "20240427"
+    assert w._track_saved_path == case_dir / "storm_20240427_2000_track.csv"
     df = pd.read_csv(w._track_saved_path)
     assert df["lat"].tolist() == [35.0, 35.1]
     assert df["radar_site"].tolist() == ["KTLX", "KTLX"]
     assert len(_points(w)) == 2
+    manifest = json.loads((case_dir / "manifest.json").read_text())
+    assert manifest["tracks"][0]["file"] == "storm_20240427_2000_track.csv"
+    assert manifest["tracks"][0]["points"] == 2 and manifest["session_date"] == "2024-04-27"
+    assert [p.name for p in case_dir.iterdir()] and not list(case_dir.glob(".*tmp"))  # no stray temp files
 
 
 def test_dragging_a_point_retimes_it_unless_alt_is_held(tmp_path, monkeypatch):
@@ -139,7 +165,7 @@ def test_delete_undo_and_redo(tmp_path, monkeypatch):
     assert len(pd.read_csv(w._track_saved_path)) == 1  # the file follows every step
 
 
-def test_loading_a_meso_view_track_then_editing_saves_back_into_it(tmp_path, monkeypatch):
+def test_an_imported_track_is_edited_as_a_workspace_copy(tmp_path, monkeypatch):
     track = tmp_path / "T10_20190528_2200_autosave_edited.csv"
     track.write_text(_MESO_VIEW_CSV)
     from PyQt6.QtWidgets import QFileDialog
@@ -147,19 +173,59 @@ def test_loading_a_meso_view_track_then_editing_saves_back_into_it(tmp_path, mon
     w = _window(tmp_path, monkeypatch, now=datetime(2019, 5, 28, 22, 3, tzinfo=timezone.utc))
 
     w._load_track_file()
-    assert len(w._track_points) == 2 and w._track_saved_path == track
-    assert "Loaded 2 track points" in w.status_msg_label.text
+    assert len(w._track_points) == 2 and w._track_saved_path is None
+    assert "original is unchanged" in w.status_msg_label.text
     assert list(tmp_path.iterdir()) == [track]   # loading alone writes nothing
 
     w._on_track_point_add(39.05, -99.02)
-    df = pd.read_csv(track)
+    copy = tmp_path / "ws" / "My work" / "20190528" / track.name
+    assert w._track_saved_path == copy
+    df = pd.read_csv(copy)
     assert len(df) == 3 and set(df["case_id"]) == {"T10"}   # still a MESO-VIEW T10 track
+    assert track.read_text() == _MESO_VIEW_CSV              # original untouched
+    manifest = json.loads((copy.parent / "manifest.json").read_text())
+    assert manifest["tracks"][0]["origin"] == str(track)
 
     _yes(monkeypatch)
     w._reset_track_to_original()
-    assert len(pd.read_csv(track)) == 2
+    assert len(pd.read_csv(copy)) == 2
     w._undo_track_edit()                                  # reset itself can be undone
     assert len(w._track_points) == 3
+
+
+def test_a_workspace_track_reopens_and_edits_in_place(tmp_path, monkeypatch):
+    w = _window(tmp_path, monkeypatch)
+    w._on_track_point_add(35.0, -97.0)
+    saved = w._track_saved_path
+    listed = [w.track_controls._saved_combo.itemData(i) for i in range(w.track_controls._saved_combo.count())]
+    assert listed == [str(saved)]
+
+    w2 = _window(tmp_path, monkeypatch)                   # a later session on the same date
+    w2._refresh_track_workspace_lists()
+    w2.track_controls._btn_open_saved.click()
+    assert [p.lat for p in w2._track_points] == [35.0] and w2._track_saved_path == saved
+    w2._time_ctrl.current_time += timedelta(minutes=3)
+    w2._on_track_point_add(35.1, -97.1)
+    assert len(pd.read_csv(saved)) == 2 and len(list(saved.parent.glob("*.csv"))) == 1
+
+
+def test_workspaces_keep_tracks_apart(tmp_path, monkeypatch):
+    w = _window(tmp_path, monkeypatch)
+    w._on_track_point_add(35.0, -97.0)
+    mine = w._track_saved_path
+
+    from PyQt6.QtWidgets import QInputDialog
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Tyler / test", True))
+    w._new_track_workspace()                              # unsafe characters are dropped
+    assert w._track_workspace().name == "Tyler  test" and w._track_points == []
+    assert w.track_controls._saved_combo.isEnabled() is False
+
+    w._on_track_point_add(36.0, -98.0)
+    assert w._track_saved_path.parent == tmp_path / "ws" / "Tyler  test" / "20240427"
+    assert len(pd.read_csv(mine)) == 1                    # the other workspace's track is untouched
+
+    w._switch_track_workspace("My work")
+    assert w.track_controls._saved_combo.itemData(0) == str(mine)
 
 
 def test_a_track_from_another_date_says_so(tmp_path, monkeypatch):

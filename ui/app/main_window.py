@@ -9,6 +9,7 @@ import feature_flags
 import runtime_flags
 from collections import deque
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
@@ -75,7 +76,7 @@ from core.drawing import DrawingAnnotation, DRAWING_TYPE_MAP, FRONT_TYPE_KEYS
 from core.observation import Observation
 from core.vehicle import Vehicle
 from core.storm_track import (
-    TrackPoint, case_id_for, default_track_dir, new_track_path, read_track_file,
+    TrackPoint, case_id_for, default_track_dir, new_track_path, read_track_file, unused_path,
     track_filename, write_track_csv, write_track_excel,
 )
 from network.mqtt_client import MQTTClient
@@ -1740,6 +1741,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.track_controls.undo_requested.connect(self._undo_track_edit)
             self.track_controls.redo_requested.connect(self._redo_track_edit)
             self.track_controls.layers_changed.connect(self.map_widget.set_track_layers_visible)
+            self.track_controls.workspace_selected.connect(self._switch_track_workspace)
+            self.track_controls.new_workspace_requested.connect(self._new_track_workspace)
+            self.track_controls.open_track_requested.connect(
+                lambda path: self._open_track(Path(path)))
             self.map_widget.track_point_add_requested.connect(self._on_track_point_add)
             self.map_widget.track_point_selected.connect(self._on_track_point_select)
             self.map_widget.track_point_moved.connect(self._on_track_point_moved)
@@ -1768,6 +1773,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # connection is made there instead, guarded by hasattr(self, "btn_track").
             self._init_track_state()
             self._refresh_track_controls()
+            self._refresh_track_workspace_lists()
 
         self.btn_surface = self._toolbar_toggle(
             "SURFACE", "Surface observations", tb
@@ -4968,6 +4974,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._track_loaded_path = None     # file the track was loaded from, if any
         self._track_original: list[TrackPoint] = []  # as loaded, for Reset to Original
         self._track_case_id = ""           # MESO-VIEW case ID carried by the file
+        self._track_origin = ""            # file an imported track was copied from
         self._track_undo: list[list[TrackPoint]] = []
         self._track_redo: list[list[TrackPoint]] = []
 
@@ -5037,22 +5044,77 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             })
         self.map_widget.set_track_geojson(json.dumps({"type": "FeatureCollection", "features": features}))
 
+    def _track_workspace(self):
+        from core.workspace import DEFAULT_WORKSPACE, Workspace
+        name = QSettings("NSSL", "STORM").value("track/workspace", DEFAULT_WORKSPACE, type=str)
+        return Workspace(name or DEFAULT_WORKSPACE)
+
+    def _track_session_day(self):
+        return self._archive_time.astimezone(timezone.utc).date()
+
     def _autosave_track(self) -> None:
-        """Save after every edit: back into the file a track was loaded from
-        (as MESO-VIEW does), otherwise to a new file named from the first
-        point that never overwrites an existing one."""
+        """Save after every edit, atomically, into the active workspace's
+        folder for this session date: a new track gets a new file named from
+        its first point (never overwriting one); an imported track becomes a
+        workspace copy on its first edit, leaving the original file as it was."""
         if not self._track_points:
             return
+        workspace, day = self._track_workspace(), self._track_session_day()
         if self._track_saved_path is None:
-            self._track_saved_path = new_track_path(min(p.time for p in self._track_points))
+            folder = workspace.case_dir(day)
+            if self._track_origin:
+                self._track_saved_path = unused_path(folder / f"{Path(self._track_origin).stem}.csv")
+            else:
+                self._track_saved_path = new_track_path(min(p.time for p in self._track_points), folder)
         try:
             if self._track_saved_path.suffix.lower() == ".xlsx":
                 write_track_excel(self._track_points, self._track_saved_path, self._track_case_id)
             else:
                 write_track_csv(self._track_points, self._track_saved_path, self._track_case_id)
+            if workspace.contains(self._track_saved_path):
+                workspace.record_track(day, self._track_saved_path, len(self._track_points),
+                                       origin=self._track_origin)
+                self._refresh_track_workspace_lists()
         except Exception as exc:
             log.error("Track autosave failed: %s", exc)
             self.status_msg_label.setText(f"Track autosave failed: {exc}")
+
+    def _refresh_track_workspace_lists(self) -> None:
+        from core.workspace import list_workspaces
+        if not hasattr(self, "track_controls"):
+            return
+        workspace = self._track_workspace()
+        self.track_controls.set_workspaces(list_workspaces(), workspace.name)
+        tracks = []
+        for t in workspace.tracks(self._track_session_day()):
+            points = f", {t['points']} pts" if t["points"] is not None else ""
+            tracks.append((f"{t['path'].name}  ({t['updated_at'][11:16]}Z{points})", str(t["path"])))
+        self.track_controls.set_saved_tracks(tracks)
+
+    def _switch_track_workspace(self, name: str) -> None:
+        """Every edit is already saved, so switching just starts empty in the
+        other workspace, whose tracks for this date are listed to resume."""
+        from core.workspace import Workspace
+        if name == self._track_workspace().name:
+            return
+        QSettings("NSSL", "STORM").setValue("track/workspace", Workspace(name).name)
+        self._init_track_state()
+        self._track_edit_active = self.btn_track.isChecked()
+        self._push_track_geojson()
+        self._refresh_track_controls()
+        self._refresh_track_workspace_lists()
+        self.status_msg_label.setText(f"Track workspace: {name}")
+
+    def _new_track_workspace(self) -> None:
+        from PyQt6.QtWidgets import QInputDialog
+        from core.workspace import clean_name
+        text, ok = QInputDialog.getText(self, "New Workspace", "Name for the new workspace:")
+        name = clean_name(text) if ok else ""
+        if not name:
+            self._refresh_track_workspace_lists()   # put the combo back
+            return
+        self._track_workspace().root.parent.joinpath(name).mkdir(parents=True, exist_ok=True)
+        self._switch_track_workspace(name)
 
     def _refresh_track_controls(self) -> None:
         if not hasattr(self, "track_controls"):
@@ -5204,11 +5266,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._set_track_points(self._track_redo.pop(), record_undo=False)
 
     def _load_track_file(self) -> None:
-        """Open an existing track (STORM or MESO-VIEW, CSV or Excel). Edits
-        then save back into that file; Reset to Original returns to it as
-        loaded."""
-        from pathlib import Path
+        """Pick a track file to open (see _open_track)."""
         from PyQt6.QtWidgets import QMessageBox
+        folder = self._track_workspace().case_dir(self._track_session_day())
+        start_dir = folder if folder.is_dir() else default_track_dir()
         if self._track_points:
             reply = QMessageBox.question(
                 self, "Load Track",
@@ -5221,10 +5282,26 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Track", str(default_track_dir()), "Track files (*.csv *.xlsx);;All files (*)"
+            self, "Load Track", str(start_dir), "Track files (*.csv *.xlsx);;All files (*)"
         )
-        if not path:
-            return
+        if path:
+            self._open_track(Path(path), confirmed=True)
+
+    def _open_track(self, path: Path, *, confirmed: bool = False) -> None:
+        """Open a track (STORM or MESO-VIEW, CSV or Excel). One already in the
+        active workspace is edited in place; one from anywhere else is
+        imported -- edits go to a workspace copy and the original file is
+        never changed. Reset to Original returns to the file as loaded."""
+        from PyQt6.QtWidgets import QMessageBox
+        if self._track_points and not confirmed and path != self._track_saved_path:
+            reply = QMessageBox.question(
+                self, "Open Track",
+                f"Switch to {path.name}? The current track stays saved in {self._track_saved_path}.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         try:
             points = read_track_file(Path(path))
         except Exception as exc:
@@ -5233,8 +5310,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if not points:
             QMessageBox.warning(self, "Load Track", f"{Path(path).name} has no usable track points.")
             return
+        in_workspace = self._track_workspace().contains(path)
         self._track_loaded_path = Path(path)
-        self._track_saved_path = Path(path)
+        self._track_saved_path = Path(path) if in_workspace else None
+        self._track_origin = "" if in_workspace else str(path)
         self._track_case_id = case_id_for(path)
         self._track_original = list(points)
         self._track_undo.clear()
@@ -5247,6 +5326,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         start, end = self._time_ctrl.window
         inside = [p for p in points if start <= p.time < end]
         message = f"Loaded {len(points)} track points from {Path(path).name}"
+        if not in_workspace:
+            message += " (edits go to a copy in your workspace; the original is unchanged)"
         if not inside:
             first = min(p.time for p in points)
             message += f" -- none fall in this session ({first:%Y-%m-%d} track); open that date to review it"

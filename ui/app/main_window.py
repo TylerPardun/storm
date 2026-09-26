@@ -212,6 +212,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._monitor = monitor
         self._viewer = viewer
         self._archive_time = archive_time    # None = live mode
+        import log_context
+        log_context.set_case(f"archive {archive_time:%Y-%m-%d}" if archive_time else "live")
         self._archive = archive_time is not None
         self._current_radar_scan = None
         self._nws_active_phenoms: set[str] = set()  # phenom codes present in last NWS fetch

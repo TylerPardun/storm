@@ -241,12 +241,12 @@ def _configure_logging(level_name: str) -> None:
     # set the logging level
     level = getattr(logging, level_name.upper(), logging.WARNING)
 
-    # configure logging
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    # configure logging: every line carries the UTC date/time, this run's
+    # session ID and the open case (see log_context)
+    import log_context
+    logging.basicConfig(level=level)
+    for handler in logging.getLogger().handlers:
+        log_context.install(handler)
 
     # write WARNING+ logs to a persistent file for post-session review
     try:
@@ -256,10 +256,7 @@ def _configure_logging(level_name: str) -> None:
             _log_path, mode="a", maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8",
         )
         _fh.setLevel(logging.WARNING)
-        _fh.setFormatter(logging.Formatter(
-            "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-            datefmt="%H:%M:%S",
-        ))
+        log_context.install(_fh)
         logging.getLogger().addHandler(_fh)
     except Exception:
         pass

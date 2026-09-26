@@ -51,6 +51,14 @@ def main() -> int:
     scratch = Path(tempfile.mkdtemp(prefix="storm_stress_"))
     workspace.workspaces_root = lambda: scratch / "workspaces"
     from ui.app import main_window as mw
+    from PyQt6.QtCore import QSettings
+
+    class ScratchSettings(QSettings):            # don't overwrite the user's saved window/layout
+        def __init__(self, *_args):
+            super().__init__(str(scratch / "settings.ini"), QSettings.Format.IniFormat)
+    mw.QSettings = ScratchSettings
+    import ui.widgets.layer_order_pill as layer_order_pill
+    layer_order_pill.QSettings = ScratchSettings
 
     def pump(seconds):
         end = time.time() + seconds

@@ -777,9 +777,19 @@ class ArchiveVehicleObsFetcher(QObject):
             return files[file_date]
 
         thredds_vehicle = thredds_vehicle_id(vehicle_id)
+        days = (self._session_day, self._session_day + timedelta(days=1))
+        # Download every candidate file at once rather than one after
+        # another -- a session commonly needs three or four, and each can
+        # take many seconds from THREDDS during a busy archive startup.
+        candidates = list(dict.fromkeys(d for day in days for d in _candidate_file_dates(day, thredds_vehicle)))
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for file_date, result in zip(candidates, pool.map(
+                    lambda d: self._fetch_vehicle_file(vehicle_id, icon_type, d), candidates)):
+                files[file_date] = result
+
         collected: list[Observation] = []
         sources: list[str] = []
-        for day in (self._session_day, self._session_day + timedelta(days=1)):
+        for day in days:
             for file_date in _candidate_file_dates(day, thredds_vehicle):
                 observations, dating = fetch(file_date)
                 if dating is not None and _is_misfiled_duplicate(file_date, observations, dating, fetch):

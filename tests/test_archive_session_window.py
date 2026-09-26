@@ -87,3 +87,16 @@ def test_slider_positions_are_seconds_since_the_sessions_midnight():
     tc.set_seconds_since_start(int(timedelta(hours=25, minutes=30).total_seconds()))
     assert tc.current_time == _utc(2024, 4, 28, 1, 30)
     assert tc.seconds_since_start() == int(timedelta(hours=25, minutes=30).total_seconds())
+
+
+def test_the_previous_evenings_tail_does_not_end_the_session():
+    # 2025-06-06: the DL truck's only driving was 00:30-00:57 UTC -- the
+    # evening of 5 June local time -- then it sat parked. That must not end
+    # a session opened at 20Z at 20:30.
+    opened = _utc(2025, 6, 6, 20)
+    assert activity_end(opened, [_utc(2025, 6, 6, 0, 57)]) is None
+
+
+def test_activity_from_12z_on_still_ends_the_session():
+    opened = _utc(2025, 6, 6, 18)
+    assert activity_end(opened, [_utc(2025, 6, 6, 0, 57), _utc(2025, 6, 6, 21, 10)]) == _utc(2025, 6, 6, 21, 40)

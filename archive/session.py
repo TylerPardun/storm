@@ -47,9 +47,13 @@ class ArchiveSession:
 # time a vehicle was driving or the crew touched a scan sector, annotation,
 # cone or drawing -- plus a margin; that can be well before 00Z on a quiet
 # day. Mesonet racks are sometimes left logging overnight, so a vehicle
-# that is only parked never extends the session.
+# that is only parked never extends the session. Activity before 12Z on the
+# session day is the previous local day's evening (e.g. the drive back to
+# the hotel after 00Z), so it says nothing about when this session ends;
+# with no activity from 12Z on, the session keeps its full UTC day.
 SESSION_CAP_PAST_MIDNIGHT = timedelta(hours=6)
 ACTIVITY_MARGIN = timedelta(minutes=30)
+SESSION_DAY_ACTIVITY_FROM = timedelta(hours=12)
 # Driving: covering more than this distance within a minute.
 _MOVING_KM_PER_MINUTE = 0.12  # 2 m/s
 _MOVING_WINDOW_S = 60
@@ -83,11 +87,13 @@ def activity_end(
     session_time: datetime,
     activity_times: Iterable[Optional[datetime]],
 ) -> Optional[datetime]:
-    """Where the timeline should end, or None when nothing shows activity
-    (then the caller keeps the full UTC day, as before). Never earlier than
-    the time the session was opened at, never past the 06Z cap."""
+    """Where the timeline should end, or None when nothing shows this day's
+    activity (then the caller keeps the full UTC day, as before). Only
+    activity from 12Z on the session day counts. Never earlier than half an
+    hour after the time the session was opened at, never past the 06Z cap."""
     start, cap = session_bounds(session_time)
-    times = [t for t in activity_times if t is not None and start <= t <= cap]
+    times = [t for t in activity_times
+             if t is not None and start + SESSION_DAY_ACTIVITY_FROM <= t <= cap]
     if not times:
         return None
     opened = _utc(session_time)

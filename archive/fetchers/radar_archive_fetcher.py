@@ -474,6 +474,8 @@ class ArchiveRadarFetcher(QObject):
                 resp = requests.get(url, timeout=60, stream=True)
                 if resp.status_code == 200:
                     data = resp.content
+                    from core import provenance
+                    provenance.record("radar", url, data)
                     # S3 doesn't set Content-Encoding for these objects, so
                     # requests won't auto-decompress -- detect gzip by magic
                     # bytes regardless of which suffix matched.

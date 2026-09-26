@@ -845,7 +845,8 @@ class ArchiveVehicleObsFetcher(QObject):
         request = Request(url, headers={"User-Agent": _USER_AGENT})
         try:
             with _urlopen_with_retry(request, timeout=30) as response:
-                text = response.read().decode("utf-8", errors="replace")
+                raw = response.read()
+                text = raw.decode("utf-8", errors="replace")
         except HTTPError as exc:
             if exc.code in (404, 410):
                 return [], None
@@ -856,6 +857,9 @@ class ArchiveVehicleObsFetcher(QObject):
             log.debug("FOFS %s: %s is not in the published format; skipped", vehicle_id, url)
             return [], None
         observations, dating = _parse_vehicle_file(text, vehicle_id, icon_type, file_date)
+        if observations:
+            from core import provenance
+            provenance.record("mesonet", url, raw)
         if not observations and text.strip():
             # A real, non-empty file whose gps_date values fit neither its
             # own name nor any known encoding of it -- e.g. a receiver with

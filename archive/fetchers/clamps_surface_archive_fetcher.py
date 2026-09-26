@@ -248,6 +248,8 @@ def fetch_clamps_surface_observations(archive_date: datetime) -> "list[Observati
             try:
                 with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
                     data = response.read()
+                from core import provenance
+                provenance.record("clamps surface", url, data)
             except Exception as exc:  # noqa: BLE001 - network/SSL errors, try the next file/source
                 log.warning("CLAMPS surface fetch failed for %s (%s): %s", source.platform_id, source.kind, exc)
                 continue

@@ -483,6 +483,12 @@ class NoxpArchive:
         return volume
 
 
+def _record_session(url, provenance):
+    from core import provenance as session
+    session.record("noxp radar" if "/NOXP/" in url else "raw lidar", url,
+                   sha256=provenance.get("sha256"), size=provenance.get("bytes"))
+
+
 def download_asset(url, cache_dir, cancel, filename, max_bytes=512 * 1024 * 1024):
     """Bounded atomic download with a content hash; never cache partial files."""
     import config
@@ -498,6 +504,7 @@ def download_asset(url, cache_dir, cancel, filename, max_bytes=512 * 1024 * 1024
             valid = provenance['sha256'] == hashlib.file_digest(cached, 'sha256').hexdigest()
         if valid:
             _check_cancel(cancel)
+            _record_session(url, provenance)
             return path, provenance
     import tempfile
     temporary = None
@@ -523,6 +530,7 @@ def download_asset(url, cache_dir, cancel, filename, max_bytes=512 * 1024 * 1024
                           fetched_at=datetime.now(timezone.utc).isoformat(), download_seconds=time.monotonic() - started)
         temporary.replace(path)
         record.write_text(json.dumps(provenance, indent=2))
+        _record_session(url, provenance)
         return path, provenance
     finally:
         if temporary is not None:

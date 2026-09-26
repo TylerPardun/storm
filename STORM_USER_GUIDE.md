@@ -1486,6 +1486,8 @@ The reference marker (one at a time, like MESO-VIEW's review marker) is a precis
 
 **Time-to-space.** With a storm track, *Time-to-space* draws every trail observation at its offset from the storm centre at the time it was taken, around the storm's position now, with 5-km range rings. Values and times are unchanged; observations outside the track's time span are hidden in this mode.
 
+**Case packages (CASE button, archive bar).** *Export case package…* writes a ZIP (default `~/STORM/packages/`) with this date's workspace tracks, the case settings (date, session window, clock time, radar station/product/tilt, velocity options), the STORM version/commit, and the provenance of every source file the session loaded — URL and SHA-256 for radar volumes, mesonet files, CLAMPS surface, raw lidar/NOXP and MQTT history. The data itself is not included; it is downloaded again from those sources, and a different hash means the upstream file has changed. *Open case package…* imports the tracks into your workspace and restores the case; a package for another date reopens STORM on that date.
+
 **Velocity processing (archive WSR-88D).** With velocity shown, the radar panel offers **Dealias** (Py-ART region-based, as in MESO-VIEW) and **Storm-relative** (subtracts the track's mean motion along each beam; needs two track points at different times). The status line says `dealiased`, or `not dealiased` when a sweep couldn't be; raw velocity is never labelled as dealiased. Dealiasing takes a few seconds per sweep.
 
 ---

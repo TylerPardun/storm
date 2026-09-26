@@ -207,8 +207,13 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         monitor: bool = False,
         viewer: bool = False,
         archive_time=None,    # datetime | None
+        case_package=None,    # path of a case package to open once started
     ):
         super().__init__()
+        self._case_package_at_start = case_package
+        self.restart_with = None   # (archive_time, package path) for main.py's session loop
+        from core import provenance
+        provenance.reset()          # provenance records this session's loads only
         self._debug = debug
         self._monitor = monitor
         self._viewer = viewer
@@ -410,6 +415,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             "OBS: probing" if runtime_flags.FLAGS.admin_mode else "OBS: MQTT"
         )
         self._archive_controls.change_day_requested.connect(self._on_change_day_requested)
+        self._archive_controls.export_case_requested.connect(self._export_case_package)
+        self._archive_controls.open_case_requested.connect(self._open_case_package)
+        if self._case_package_at_start:
+            self._later(0, lambda: self._load_case_package(Path(self._case_package_at_start), at_start=True))
         self._archive_controls.show()
 
         # mqtt reader — vehicles, annotations, cones, drawings.
@@ -1002,6 +1011,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._apply_radar_station(site)
 
     def _apply_radar_station(self, site: "str | None") -> None:
+        package_site = getattr(self, "_package_radar_station", None)
+        if package_site:                    # an opened case package names its station
+            self._package_radar_station = None
+            site = package_site
         if not site:
             self.status_msg_label.setText(
                 "Could not determine radar station — select one on the map"
@@ -1088,6 +1101,18 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_radar.on_time_changed(self._time_ctrl.current_time)
 
 
+    def _on_archive_radar_scan_package_view(self) -> None:
+        """Apply an opened package's radar product/tilt once products exist."""
+        view = getattr(self, "_package_radar_view", None)
+        if not view:
+            return
+        self._package_radar_view = None
+        if view.get("product"):
+            self.radar_controls.set_current_product(view["product"])
+        tilt = view.get("tilt_index")
+        if tilt is not None and 0 <= tilt < self.radar_controls._tilt_combo.count():
+            self.radar_controls._tilt_combo.setCurrentIndex(tilt)
+
     def _on_archive_radar_scan(self, scan) -> None:
         """Handle a newly decoded Level-2 scan from the archive fetcher.
 
@@ -1096,6 +1121,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         so archive playback doesn't stall the UI on every frame.
         """
         self._current_radar_scan = scan
+        if getattr(self, "_package_radar_view", None):
+            self._later(0, self._on_archive_radar_scan_package_view)
 
         # add tilt/product selectors to archive controls the first time --
         # skipped while NOXP is the displayed radar, or every incoming
@@ -2213,6 +2240,116 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.trail_controls.set_status("No observations within the storm track's time span")
         else:
             self.trail_controls.set_status(f"No {QUANTITIES[quantity].label.lower()} in the last {minutes} min")
+
+    # ---- case packages (core/case_package.py) ----------------------------
+    def _case_settings(self) -> dict:
+        from archive.session import session_bounds
+        start, end = self._time_ctrl.window
+        dealias_on, storm_relative_on = self.radar_controls.velocity_options()
+        iso = lambda t: t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {
+            "session_date": self._track_session_day().isoformat() if hasattr(self, "_track_points")
+                            else session_bounds(self._archive_time)[0].date().isoformat(),
+            "archive_time": iso(self._archive_time),
+            "window_start": iso(start), "window_end": iso(end),
+            "clock_time": iso(self._time_ctrl.current_time),
+            "radar_station": getattr(self._archive_radar, "station", None) if getattr(self, "_archive_radar", None) else None,
+            "radar_product": self.radar_controls.current_product(),
+            "radar_tilt_index": self.radar_controls.current_tilt_index(),
+            "velocity": {"dealias": dealias_on, "storm_relative": storm_relative_on},
+            "track_workspace": self._track_workspace().name if hasattr(self, "_track_points") else None,
+        }
+
+    def _export_case_package(self) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+        from core import case_package, provenance
+        clock = self._time_ctrl.current_time
+        default = Path.home() / "STORM" / "packages" / f"STORM_case_{clock:%Y%m%d_%H%MZ}.zip"
+        default.parent.mkdir(parents=True, exist_ok=True)
+        path, _ = QFileDialog.getSaveFileName(self, "Export Case Package", str(unused_path(default)),
+                                              "STORM case package (*.zip)")
+        if not path:
+            return
+        tracks = []
+        if hasattr(self, "_track_points"):
+            tracks = [t["path"] for t in self._track_workspace().tracks(self._track_session_day())]
+        try:
+            case_package.build(Path(path), case=self._case_settings(), tracks=tracks,
+                               sources=provenance.snapshot())
+        except Exception as exc:  # noqa: BLE001 -- disk full, permissions, ...
+            QMessageBox.warning(self, "Export Case Package", f"Couldn't write {Path(path).name}:\n{exc}")
+            return
+        self.status_msg_label.setText(
+            f"Case package saved: {Path(path).name} ({len(tracks)} track(s), "
+            f"{len(provenance.snapshot())} source files recorded)")
+
+    def _open_case_package(self) -> None:
+        folder = Path.home() / "STORM" / "packages"
+        path, _ = QFileDialog.getOpenFileName(self, "Open Case Package", str(folder if folder.is_dir() else Path.home()),
+                                              "STORM case package (*.zip)")
+        if path:
+            self._load_case_package(Path(path))
+
+    def _load_case_package(self, path: Path, *, at_start: bool = False) -> None:
+        """Import the package's tracks into the active workspace and restore
+        its case. Another date reopens STORM on that date first."""
+        from PyQt6.QtWidgets import QMessageBox
+        from core import case_package
+        try:
+            manifest, tracks = case_package.read(path)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Open Case Package", f"{path.name}: {exc}")
+            return
+        case = manifest["case"]
+        archive_time = datetime.fromisoformat(case["archive_time"].replace("Z", "+00:00"))
+        if not at_start and case["session_date"] != self._case_settings()["session_date"]:
+            reply = QMessageBox.question(
+                self, "Open Case Package",
+                f"{path.name} is for {case['session_date']}. Close this session and open that date?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
+            if reply == QMessageBox.StandardButton.Yes:
+                self.restart_with = (archive_time, str(path))
+                self._change_day_requested = True
+                self.close()
+            return
+
+        imported = []
+        if hasattr(self, "_track_points") and tracks:
+            workspace, day = self._track_workspace(), self._track_session_day()
+            folder = workspace.case_dir(day)
+            folder.mkdir(parents=True, exist_ok=True)
+            for name, data in tracks.items():
+                # reopening the same package reuses the identical copy already here
+                same = next((f for f in folder.glob("*.csv") if f.read_bytes() == data), None)
+                target = same or unused_path(folder / name)
+                if same is None:
+                    target.write_bytes(data)
+                    workspace.record_track(day, target, data.count(b"\n") - 1, origin=f"package {path.name}")
+                imported.append(target)
+            self._refresh_track_workspace_lists()
+            self._open_track(imported[0], confirmed=True)
+
+        station = case.get("radar_station")
+        self._package_radar_view = {"product": case.get("radar_product"),
+                                    "tilt_index": case.get("radar_tilt_index")}
+        velocity = case.get("velocity") or {}
+        self.radar_controls._chk_dealias.setChecked(bool(velocity.get("dealias")))
+        if station and station != NOXP_SITE_ID:
+            if getattr(self, "_archive_radar", None) is None:
+                self._package_radar_station = station          # used when the radar starts
+            elif self._archive_radar.station != station:
+                self._on_radar_station_clicked(station)
+            else:
+                self._later(0, self._on_archive_radar_scan_package_view)
+        if velocity.get("storm_relative") and self.radar_controls._chk_storm_relative.isEnabled():
+            self.radar_controls._chk_storm_relative.setChecked(True)
+        clock = datetime.fromisoformat(case["clock_time"].replace("Z", "+00:00"))
+        self._later(1500 if at_start else 0, lambda: (self._time_ctrl.pause(), self._time_ctrl.set_time(clock)))
+        made = manifest.get("storm", {})
+        self.status_msg_label.setText(
+            f"Opened {path.name}: {len(imported)} track(s) imported into workspace "
+            f"'{self._track_workspace().name if hasattr(self, '_track_points') else '—'}'; "
+            f"made with STORM {made.get('version', '?')}")
 
     def _renudge_archive_clock(self) -> None:
         self._time_ctrl.set_time(self._time_ctrl.current_time)

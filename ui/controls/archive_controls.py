@@ -46,6 +46,8 @@ class ArchiveControls(QWidget):
     tilt_changed         = pyqtSignal(int)
     product_changed      = pyqtSignal(str)
     change_day_requested = pyqtSignal()   # user confirmed exiting this session to pick a new day
+    export_case_requested = pyqtSignal()  # CASE > Export case package…
+    open_case_requested = pyqtSignal()    # CASE > Open case package…
 
     def __init__(self, time_controller: TimeController, parent=None):
         super().__init__(parent)
@@ -183,6 +185,16 @@ class ArchiveControls(QWidget):
         row2.addWidget(jump_btn)
 
         row2.addWidget(self._vdiv())
+
+        from PyQt6.QtWidgets import QMenu
+        case_btn = self._ctrl_btn("CASE", "Export this case's saved work and provenance, or open a case package")
+        case_btn.setFixedWidth(44)
+        case_menu = QMenu(case_btn)
+        case_menu.addAction("Export case package…", self.export_case_requested.emit)
+        case_menu.addAction("Open case package…", self.open_case_requested.emit)
+        case_btn.setMenu(case_menu)
+        case_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        row2.addWidget(case_btn)
 
         change_day_btn = self._ctrl_btn("EXIT", "Exit this session and pick a different day")
         change_day_btn.setFixedWidth(40)

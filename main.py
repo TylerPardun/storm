@@ -414,38 +414,46 @@ def main() -> None:
     # see MainWindow.closeEvent / session_aborted. app.exec() is safe to
     # call repeatedly in sequence; each call blocks until the matching
     # app.quit() (ours, on session_aborted, or the real one on a normal quit).
+    restart_with = None   # (archive_time, case package path) from the last window
     while True:
-        # show the launch dialog for mode selection and password verification
-        dialog = LaunchDialog()
+        if restart_with is None:
+            case_package = None
+            # show the launch dialog for mode selection and password verification
+            dialog = LaunchDialog()
 
-        # if the dialog is not accepted
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            # exit
-            sys.exit(0)
+            # if the dialog is not accepted
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                # exit
+                sys.exit(0)
 
-        # get the vehicle ID
-        config.VEHICLE_ID = _normalize_vehicle_id(dialog.vehicle_id())
+            # get the vehicle ID
+            config.VEHICLE_ID = _normalize_vehicle_id(dialog.vehicle_id())
 
-        # get the vehicle icon type selected by the user
-        config.VEHICLE_ICON = dialog.vehicle_icon()
+            # get the vehicle icon type selected by the user
+            config.VEHICLE_ICON = dialog.vehicle_icon()
 
-        # get the directory for real-time observation files (if any)
-        config.OBS_FILE_DIR      = dialog.data_dir()
-        config.OBS_FILE_GPS_MODE = dialog.gps_file_mode()
+            # get the directory for real-time observation files (if any)
+            config.OBS_FILE_DIR      = dialog.data_dir()
+            config.OBS_FILE_GPS_MODE = dialog.gps_file_mode()
 
-        # get mode from the dialog
-        monitor      = dialog.monitor()
-        viewer       = dialog.viewer()
-        archive_time = dialog.archive_start_time()   # None unless archive mode
-        runtime_flags.FLAGS.admin_mode = dialog.admin_mode()
+            # get mode from the dialog
+            monitor      = dialog.monitor()
+            viewer       = dialog.viewer()
+            archive_time = dialog.archive_start_time()   # None unless archive mode
+            runtime_flags.FLAGS.admin_mode = dialog.admin_mode()
 
-        # apply radar render resolution from the launch dialog
-        _dlg_res = dialog.radar_resolution()
-        if _dlg_res > 0:
-            set_render_grid_size(_dlg_res)
-            set_adaptive_render_grid(False)
+            # apply radar render resolution from the launch dialog
+            _dlg_res = dialog.radar_resolution()
+            if _dlg_res > 0:
+                set_render_grid_size(_dlg_res)
+                set_adaptive_render_grid(False)
 
-        _warn_missing_files()
+            _warn_missing_files()
+        else:
+            # the last window opened a case package for another date:
+            # reopen straight on that date with the same mode and settings
+            archive_time, case_package = restart_with
+            restart_with = None
 
         from ui.dialogs.loading_dialog import LoadingDialog  # noqa: PLC0415
         loading_dialog = LoadingDialog()
@@ -458,6 +466,7 @@ def main() -> None:
             monitor=monitor,
             viewer=viewer,
             archive_time=archive_time,
+            case_package=case_package,
         )
 
         # close loading dialog once main window is ready
@@ -498,6 +507,7 @@ def main() -> None:
         # a real quit (closeEvent's else-branch) or the handler above.
         app.exec()
 
+        restart_with = window.restart_with
         if not session_ending["restart"]:
             # real quit: exit exactly like the pre-session-loop code did,
             # with no explicit window cleanup. QtWebEngine requires its

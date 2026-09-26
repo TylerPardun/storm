@@ -411,9 +411,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_controls.setObjectName("archiveControls")
         self._archive_controls.set_radar_status("Radar: waiting")
         self._archive_controls.set_satellite_status("Sat: waiting")
-        self._archive_controls.set_obs_status(
-            "OBS: probing" if runtime_flags.FLAGS.admin_mode else "OBS: MQTT"
-        )
+        self._archive_controls.set_obs_status("OBS: probing")
         self._archive_controls.change_day_requested.connect(self._on_change_day_requested)
         self._archive_controls.export_case_requested.connect(self._export_case_package)
         self._archive_controls.open_case_requested.connect(self._open_case_package)
@@ -858,10 +856,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         QTimer.singleShot(0, self._layout_overlays)
 
     def _start_archive_vehicle_obs(self) -> None:
-        """Start the optional admin one-second observation source."""
+        """Start the one-second observation source (FOFS mesonet files)."""
         if (
-            not runtime_flags.FLAGS.admin_mode
-            or self._archive_vehicle_obs_started
+            self._archive_vehicle_obs_started
             or not hasattr(self, "_archive_mqtt")
         ):
             return

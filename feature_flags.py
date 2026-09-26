@@ -40,37 +40,37 @@ FEATURES = {
         key="noxp_radar",
         label="NOXP mobile radar (archive)",
         default_enabled=True,
-        admin_only=True,
+        admin_only=False,
     ),
     "raw_lidar_quicklook": Feature(
         key="raw_lidar_quicklook",
         label="CLAMPS raw lidar quicklook (archive)",
         default_enabled=True,
-        admin_only=True,
+        admin_only=False,
     ),
     "archive_asos": Feature(
         key="archive_asos",
         label="ASOS (archive)",
         default_enabled=True,
-        admin_only=True,
+        admin_only=False,
     ),
     "damage_paths": Feature(
         key="damage_paths",
         label="Damage paths (archive)",
         default_enabled=True,
-        admin_only=True,
+        admin_only=False,
     ),
     "storm_track": Feature(
         key="storm_track",
         label="Storm track (archive)",
         default_enabled=True,
-        admin_only=True,
+        admin_only=False,
     ),
     "obs_trails": Feature(
         key="obs_trails",
         label="Observation trails and time-to-space (archive)",
         default_enabled=True,
-        admin_only=True,
+        admin_only=False,
     ),
 }
 

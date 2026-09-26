@@ -6,6 +6,7 @@ import uuid
 import socket
 import config
 import logging
+import net_compat
 import argparse
 import faulthandler
 import runtime_flags
@@ -330,6 +331,9 @@ def main() -> None:
     except Exception:
         # do nothing
         pass
+
+    # stop every fetch waiting on unreachable IPv6 addresses (see net_compat)
+    net_compat.prefer_ipv4()
 
     # build the argument parser
     parser = _build_parser()

@@ -461,25 +461,21 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_sounding = ArchiveSoundingFetcher(parent=self)
         self._archive_sounding.sounding_ready.connect(self._on_sounding_ready)
         self._archive_sounding.coptersondes_ready.connect(self._on_archive_coptersondes_ready)
-        self._archive_sounding.fetch_error.connect(
-            lambda msg: self.status_msg_label.setText(f"Sounding: {msg}")
-        )
+        self._watch_worker_errors(self._archive_sounding, self._archive_sounding.fetch_error, "Sounding")
         # also initialise the sounding-station layer so the map shows clickable sites.
         self._sounding_stations_geojson = build_stations_geojson()
 
         from archive.fetchers.clamps_surface_playback import ClampsSurfacePlayback
         self._archive_clamps_surface = ClampsSurfacePlayback(self)
         self._archive_clamps_surface.loaded.connect(self._on_clamps_surface_loaded)
-        self._archive_clamps_surface.error.connect(lambda msg: self.status_msg_label.setText(f"CLAMPS surface: {msg}"))
+        self._watch_worker_errors(self._archive_clamps_surface, self._archive_clamps_surface.error, "CLAMPS surface")
         self._time_ctrl.time_changed.connect(self._update_clamps_surface)
         self._archive_clamps_surface.load(self._archive_time)
 
         # CLAMPS wind profiles (VAD dialog reuse; on-demand, like soundings).
         self._archive_clamps_wind = ArchiveClampsWindFetcher(parent=self)
         self._archive_clamps_wind.sets_ready.connect(self._on_archive_clamps_wind_ready)
-        self._archive_clamps_wind.error.connect(
-            lambda msg: self.status_msg_label.setText(f"CLAMPS wind: {msg}")
-        )
+        self._watch_worker_errors(self._archive_clamps_wind, self._archive_clamps_wind.error, "CLAMPS wind")
 
         # NOXP mobile radar (auto-discovered at startup, selected the same
         # way as any NEXRAD site -- click its marker/"Stations" entry).
@@ -548,9 +544,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._archive_raw_lidar = ArchiveRawLidarQuicklookFetcher(parent=self)
             self._archive_raw_lidar.assets_ready.connect(self._on_archive_raw_lidar_assets_ready)
             self._archive_raw_lidar.rays_ready.connect(self._on_archive_raw_lidar_rays_ready)
-            self._archive_raw_lidar.error.connect(
-                lambda msg: self.status_msg_label.setText(f"Raw lidar: {msg}")
-            )
+            self._watch_worker_errors(self._archive_raw_lidar, self._archive_raw_lidar.error, "Raw lidar")
             self._archive_raw_lidar.fetch(self._archive_time)
             self._time_ctrl.time_changed.connect(self._on_time_changed_update_lidar_overlay)
             # The quicklook dialog is a Qt.WindowType.Window parented to
@@ -580,9 +574,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._archive_asos.stations_updated.connect(self._on_archive_asos_station_updated)
             self._archive_asos.stations_cleared.connect(self._on_archive_asos_stations_cleared)
             self._archive_asos.load_finished.connect(self._on_archive_asos_load_finished)
-            self._archive_asos.error.connect(
-                lambda msg: self.status_msg_label.setText(f"ASOS: {msg}")
-            )
+            self._watch_worker_errors(self._archive_asos, self._archive_asos.error, "ASOS")
             self._time_ctrl.time_changed.connect(self._archive_asos.on_time_changed)
             self.map_widget.asos_bbox_selected.connect(self._on_archive_asos_bbox_selected)
 
@@ -599,9 +591,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._archive_damage_paths = ArchiveDamagePathsFetcher(self._archive_time, parent=self)
             self._archive_damage_paths_showing = False
             self._archive_damage_paths.paths_ready.connect(self._on_archive_damage_paths_ready)
-            self._archive_damage_paths.error.connect(
-                lambda msg: self.status_msg_label.setText(f"Damage paths: {msg}")
-            )
+            self._watch_worker_errors(self._archive_damage_paths, self._archive_damage_paths.error, "Damage paths")
             self.map_widget.asos_bbox_selected.connect(self._on_archive_damage_paths_bbox_selected)
 
         # radar overlay (reuses existing renderer).
@@ -685,18 +675,15 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 self._try_auto_select_radar_station()
                 self._update_archive_session_end()
             else:
-                QTimer.singleShot(500, _check_mqtt_loaded)
+                self._later(500, _check_mqtt_loaded)
 
         def _check_hazard_loaded():
             if self._archive_hazard._watches_loaded:
                 self._archive_loading.set_task_done("SPC & NWS")
             else:
-                QTimer.singleShot(500, _check_hazard_loaded)
+                self._later(500, _check_hazard_loaded)
 
-        self._archive_satellite.error.connect(
-            lambda _: self._archive_loading.set_task_error("Satellite")
-            if self._archive_loading.isVisible() else None
-        )
+        self._archive_satellite.error.connect(self._on_archive_satellite_loading_error)
         self._archive_satellite.error.connect(self._on_archive_satellite_error)
 
         def _check_satellite_indexed():
@@ -705,12 +692,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             if "conus" in self._archive_satellite._indexed_modes:
                 self._archive_loading.set_task_done("Satellite")
             else:
-                QTimer.singleShot(1000, _check_satellite_indexed)
+                self._later(1000, _check_satellite_indexed)
 
-        QTimer.singleShot(500, _check_satellite_indexed)
+        self._later(500, _check_satellite_indexed)
 
-        QTimer.singleShot(400, _check_mqtt_loaded)
-        QTimer.singleShot(400, _check_hazard_loaded)
+        self._later(400, _check_mqtt_loaded)
+        self._later(400, _check_hazard_loaded)
 
         # Mobile Radar (NOXP): find this case's own campaign by year and
         # search it for this specific day automatically -- no manual
@@ -769,13 +756,13 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                     if self._archive_noxp is None or self._archive_noxp.closed:
                         return
                     if not self._archive_noxp.try_background_index(_root, budget=_NOXP_BACKGROUND_INDEX_BUDGET):
-                        QTimer.singleShot(3000, _tick_noxp_background_index)  # worker busy -- retry later
+                        self._later(3000, _tick_noxp_background_index)  # worker busy -- retry later
 
                 def _on_noxp_root_indexed(catalog_root, fully_indexed, _root=_noxp_catalog_root):
                     if catalog_root != _root or self._archive_noxp is None or self._archive_noxp.closed:
                         return
                     if not fully_indexed:
-                        QTimer.singleShot(2000, _tick_noxp_background_index)
+                        self._later(2000, _tick_noxp_background_index)
 
                 self._archive_noxp.root_index_progress.connect(_on_noxp_root_indexed)
 
@@ -795,7 +782,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                         pass
                     nearest = min(matching, key=lambda a: abs((a.nominal_time - self._archive_time).total_seconds()))
                     self._on_noxp_asset_selected(nearest)
-                    QTimer.singleShot(2000, _tick_noxp_background_index)
+                    self._later(2000, _tick_noxp_background_index)
 
                 self._archive_noxp.assets_ready.connect(_on_noxp_startup_assets)
 
@@ -805,10 +792,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                     _noxp_retries["n"] += 1
                     if _noxp_retries["n"] > 15:   # ~45s of retries at 3s apart
                         self._archive_loading.set_task_done("Mobile Radar")
-                        QTimer.singleShot(2000, _tick_noxp_background_index)
+                        self._later(2000, _tick_noxp_background_index)
                         return
                     self._archive_noxp.discover(_platform.platform_id, _root, self._archive_time)
-                    QTimer.singleShot(3000, _retry_noxp_discovery)
+                    self._later(3000, _retry_noxp_discovery)
 
                 _retry_noxp_discovery()
 
@@ -816,9 +803,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         # once every background task finishes, re-nudge every fetcher with a
         # fresh time-changed signal -- catches any that only just finished
         # wiring up mid-startup and missed the very first one.
-        self._archive_loading.all_done.connect(
-            lambda: self._time_ctrl.set_time(self._time_ctrl.current_time)
-        )
+        self._archive_loading.all_done.connect(self._renudge_archive_clock)
 
         self.hazard_controls.spc_day_changed.connect(self._on_archive_spc_day_changed)
         self.hazard_controls.spc_mode_changed.connect(self._on_archive_spc_mode_changed)
@@ -855,7 +840,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.map_widget.radar_station_clicked.connect(self._on_radar_station_clicked)
         self.radar_controls.stations_requested.connect(self._toggle_radar_station_picker)
 
-        QTimer.singleShot(200, lambda: self._time_ctrl.set_time(self._archive_time))
+        self._later(200, lambda: self._time_ctrl.set_time(self._archive_time))
 
         # lay out the archive controls bar at the bottom of the screen.
         QTimer.singleShot(0, self._layout_overlays)
@@ -1081,35 +1066,16 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._apply_velocity_options()
         if hasattr(self, "_archive_controls"):
             self._archive_radar.index_loaded.connect(self._on_archive_radar_index_loaded)
-        self._archive_radar.loading_changed.connect(
-            lambda loading: (
-                self.status_msg_label.setText(f"Radar: loading {station}…" if loading else ""),
-                self._archive_controls.set_radar_status(f"Radar: loading {station}…")
-                if loading and hasattr(self, "_archive_controls") else None
-            )
-        )
+        self._archive_radar.loading_changed.connect(self._on_archive_radar_loading_changed)
         self._archive_radar.error.connect(self._on_archive_radar_error)
         self._time_ctrl.time_changed.connect(self._archive_radar.on_time_changed)
 
         loading = getattr(self, "_archive_loading", None)
         if loading is not None and loading.isVisible():
-            self._archive_radar.index_loaded.connect(
-                lambda _: loading.set_status("Fetching first radar scan…")
-            )
-            self._archive_radar.scan_ready.connect(
-                lambda _: loading.set_task_done("Radar")
-            )
-            self._archive_radar.error.connect(
-                lambda _: loading.set_task_error("Radar")
-            )
-            _radar_timeout = QTimer(self)
-            _radar_timeout.setSingleShot(True)
-            _radar_timeout.setInterval(45_000)
-            _radar_timeout.timeout.connect(
-                lambda: loading.set_task_done("Radar")
-                if loading.isVisible() else None
-            )
-            _radar_timeout.start()
+            self._archive_radar.index_loaded.connect(self._on_archive_radar_index_loading_status)
+            self._archive_radar.scan_ready.connect(self._on_archive_radar_loading_done)
+            self._archive_radar.error.connect(self._on_archive_radar_loading_error)
+            self._later(45_000, self._on_archive_radar_loading_done)
 
         if hasattr(self, "radar_controls"):
             self.radar_controls.set_selected_site(station, emit=False)
@@ -2147,7 +2113,76 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         div.setStyleSheet("color: #394056; margin: 4px 0;")
         return div
 
+    # Background workers signal from their own threads. Their slots are bound
+    # methods of this window (never lambdas capturing it), so Qt knows the
+    # window is the receiver and drops pending deliveries once it's gone --
+    # a lambda would still run against a deleted window (native crash seen
+    # in rapid open/close stress runs). closeEvent also silences them.
+    def _watch_worker_errors(self, worker, signal, label: str) -> None:
+        if not hasattr(self, "_worker_labels"):
+            self._worker_labels = {}
+        self._worker_labels[id(worker)] = label
+        signal.connect(self._on_worker_error)
+
+    def _on_worker_error(self, msg: str) -> None:
+        label = getattr(self, "_worker_labels", {}).get(id(self.sender()), "Archive")
+        self.status_msg_label.setText(f"{label}: {msg}")
+
+    def _on_archive_satellite_loading_error(self, _msg=None) -> None:
+        if self._archive_loading.isVisible():
+            self._archive_loading.set_task_error("Satellite")
+
+    def _on_archive_radar_loading_changed(self, loading: bool) -> None:
+        station = self._archive_radar.station if self._archive_radar else ""
+        self.status_msg_label.setText(f"Radar: loading {station}…" if loading else "")
+        if loading and hasattr(self, "_archive_controls"):
+            self._archive_controls.set_radar_status(f"Radar: loading {station}…")
+
+    def _renudge_archive_clock(self) -> None:
+        self._time_ctrl.set_time(self._time_ctrl.current_time)
+
+    def _on_archive_radar_index_loading_status(self, _index=None) -> None:
+        if hasattr(self, "_archive_loading"):
+            self._archive_loading.set_status("Fetching first radar scan…")
+
+    def _on_archive_radar_loading_done(self, _scan=None) -> None:
+        if hasattr(self, "_archive_loading") and self._archive_loading.isVisible():
+            self._archive_loading.set_task_done("Radar")
+
+    def _on_archive_radar_loading_error(self, _msg=None) -> None:
+        if hasattr(self, "_archive_loading"):
+            self._archive_loading.set_task_error("Radar")
+
+    def _later(self, msec: int, callback) -> None:
+        """QTimer.singleShot tied to this window: the timer is a child, so it
+        dies with the window, and callbacks are skipped once closing has
+        begun. A bare singleShot lambda outlives the window and ran against
+        deleted widgets (native crash in rapid open/close stress runs)."""
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+
+        def fire():
+            timer.deleteLater()
+            if not getattr(self, "_closing", False):
+                callback()
+        timer.timeout.connect(fire)
+        timer.start(msec)
+
+    def _silence_archive_workers(self) -> None:
+        """No more signals from any archive worker once the window closes;
+        their threads may still be finishing downloads."""
+        from PyQt6.QtCore import QObject
+        from PyQt6.QtWidgets import QWidget
+        for name, value in list(vars(self).items()):
+            if name.startswith("_archive_") and isinstance(value, QObject) and not isinstance(value, QWidget):
+                try:
+                    value.blockSignals(True)
+                except RuntimeError:
+                    pass   # already deleted
+
     def closeEvent(self, event):
+        self._closing = True
+        self._silence_archive_workers()
         self._lidar_overlay_generation = getattr(self, "_lidar_overlay_generation", 0) + 1
         self._lidar_overlay_platform_id = None
         self._lidar_overlay_rays = None
@@ -3042,7 +3077,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._surface_fetcher.error.connect(self._on_surface_error)
 
         self._surface_fetcher.start()
-        QTimer.singleShot(1200, lambda: self._surface_layer.set_visible(
+        self._later(1200, lambda: self._surface_layer.set_visible(
             self.surface_controls.plots_visible()
         ))
 
@@ -3733,7 +3768,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._layout_overlays()
             # defer the actual removeLayer + removeSource until the renderer has
             _guard_gen = self._render_generation
-            QTimer.singleShot(400, lambda: self._deferred_radar_clear(_guard_gen))
+            self._later(400, lambda: self._deferred_radar_clear(_guard_gen))
 
     def _deferred_radar_clear(self, guard_gen: int):
         """Remove the MapLibre radar source/layer after the deferred delay.
@@ -4354,7 +4389,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 log.error("ASOS fetch failed to start: %s", exc, exc_info=True)
                 self.status_msg_label.setText(f"ASOS fetch error: {exc}")
 
-        QTimer.singleShot(50, _start_asos_fetch)
+        self._later(50, _start_asos_fetch)
 
     def _on_obs_station_click(self, station_id: str, name: str, lat: float, lon: float, elev: float):
         self.status_msg_label.setText(f"Fetching OBS sounding {station_id}…")
@@ -6618,7 +6653,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._chk_station_plots.toggled.connect(self._station_layer.set_visible)
         self.map_widget.user_dragged.connect(self._on_user_dragged)
         # station plots on by default — delayed until map is ready
-        QTimer.singleShot(1200, lambda: self._station_layer.set_visible(
+        self._later(1200, lambda: self._station_layer.set_visible(
             self._chk_station_plots.isChecked()
         ))
 

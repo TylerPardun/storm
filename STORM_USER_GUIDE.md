@@ -1482,6 +1482,10 @@ The reference marker (one at a time, like MESO-VIEW's review marker) is a precis
 
 **Track table.** **Table…** lists every point for exact editing. Edits apply as one undoable step when you click **Apply**; invalid cells, or two points at the same second, are highlighted and nothing is applied. Selecting a row selects the point on the map; double-clicking goes to its time.
 
+**Observation trails (TRAILS).** Vehicle markers and station plots stay as they are; TRAILS adds each platform's recent path, coloured by one quantity: measured (temperature, dewpoint, RH, pressure, wind speed), thermodynamic (θ, θv, θe, θw, mixing ratio, from each observation's own pressure — left blank if pressure wasn't measured), or kinematic (u, v, and with a storm track: storm-relative wind, radial wind + outward and tangential wind + cyclonic about the storm centre). Choose how far back (5–60 min); the colour bar shows the range on screen (symmetric about zero for signed winds). Hover a trail for its value, time and platform. Gaps in the data break the line rather than bridging it.
+
+**Time-to-space.** With a storm track, *Time-to-space* draws every trail observation at its offset from the storm centre at the time it was taken, around the storm's position now, with 5-km range rings. Values and times are unchanged; observations outside the track's time span are hidden in this mode.
+
 **Velocity processing (archive WSR-88D).** With velocity shown, the radar panel offers **Dealias** (Py-ART region-based, as in MESO-VIEW) and **Storm-relative** (subtracts the track's mean motion along each beam; needs two track points at different times). The status line says `dealiased`, or `not dealiased` when a sweep couldn't be; raw velocity is never labelled as dealiased. Dealiasing takes a few seconds per sweep.
 
 ---

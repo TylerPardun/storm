@@ -36,6 +36,7 @@ from ui.controls.sfcoa_controls import SfcoaControls
 from ui.controls.surface_controls import SurfaceControls
 from ui.controls.raw_lidar_controls import RawLidarControls
 from ui.controls.track_controls import TrackControls
+from ui.controls.trail_controls import TrailControls
 from ui.widgets.outlook_panel import OutlookPanel
 from ui.map.radar_overlay import RadarOverlay, render_scan_to_png as _render_scan_to_png
 from ui.sounding.dialog import SoundingDialog
@@ -642,6 +643,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # already built the TRACK tab -- the time_changed connection has
             # to wait until here, once _time_ctrl is actually constructed.
             self._time_ctrl.time_changed.connect(self._on_time_changed_update_track_highlight)
+        if hasattr(self, "btn_trails"):
+            self._time_ctrl.time_changed.connect(self._schedule_trails)
 
         # Small top-left status text while initial data fetches run, in
         # place of a blocking modal -- the session is interactive
@@ -908,6 +911,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _on_archive_vehicle_obs_loaded(self, vehicle_ids: set[str]) -> None:
         self._archive_vehicle_obs_loaded = True
+        self._schedule_trails()
         self._update_archive_session_end()
         if self._radar_station_awaiting_dense_obs:
             self._radar_station_awaiting_dense_obs = False
@@ -1724,6 +1728,23 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 shortcut.activated.connect(self._toggle_radar_product_shortcut)
                 self._radar_product_shortcuts.append(shortcut)
 
+        if self._archive and feature_flags.is_enabled("obs_trails"):
+            self.btn_trails = self._toolbar_toggle(
+                "TRAILS", "Observation trails coloured by measured and derived quantities", tb
+            )
+            self.trail_controls = TrailControls(self._map_container)
+            self.trail_controls.setObjectName("floatingToolbar")
+            self.btn_trails.toggled.connect(self.trail_controls.toggle_drawer)
+            self.btn_trails.toggled.connect(self._start_layout_pulse)
+            self.btn_trails.toggled.connect(self._schedule_trails)
+            self.trail_controls.settings_changed.connect(self._schedule_trails)
+            from core.trails import TrailBuilder
+            self._trail_builder = TrailBuilder()
+            self._trails_timer = QTimer(self)
+            self._trails_timer.setSingleShot(True)
+            self._trails_timer.setInterval(250)     # coalesce clock ticks while playing
+            self._trails_timer.timeout.connect(self._refresh_trails)
+
         if self._archive and feature_flags.is_enabled("storm_track"):
             self.btn_track = self._toolbar_toggle(
                 "TRACK", "Subjectively track the mesocyclone", tb
@@ -2138,6 +2159,61 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if loading and hasattr(self, "_archive_controls"):
             self._archive_controls.set_radar_status(f"Radar: loading {station}…")
 
+    # ---- observation trails (core/trails.py) ------------------------------
+    def _schedule_trails(self, *_args) -> None:
+        """Throttled: at most one trail rebuild per 250 ms while the clock runs."""
+        timer = getattr(self, "_trails_timer", None)
+        if timer is not None and not timer.isActive():
+            timer.start()
+
+    def _trail_observations(self) -> dict:
+        """Each platform's full observation list (time-ordered), preferring
+        the densest source: one-second FOFS, then CLAMPS surface, then the
+        recorded MQTT history for anything else on the map."""
+        found = {}
+        dense = getattr(self, "_archive_vehicle_obs", None)
+        if dense is not None:
+            for vid in dense.available_vehicle_ids:
+                found[vid] = dense._observations[vid]
+        surface = getattr(self, "_archive_clamps_surface", None)
+        if surface is not None:
+            for key, rows in surface.rows.items():
+                found.setdefault(key, rows)
+        for vid in list(getattr(self, "_vehicles", {})):
+            if vid not in found:
+                history = self._get_archive_vehicle_history(vid)
+                if history:
+                    found[vid] = history
+        return found
+
+    def _refresh_trails(self) -> None:
+        from core.derived import QUANTITIES
+        from core.trails import color_stops
+        if not hasattr(self, "btn_trails"):
+            return
+        if not self.btn_trails.isChecked():
+            self.map_widget.set_trails(None)
+            return
+        quantity, minutes, time_to_space = self.trail_controls.settings()
+        end = self._time_ctrl.current_time
+        motion = self.track_storm_motion() if hasattr(self, "_track_points") else None
+        track = list(getattr(self, "_track_points", []))
+        fc, (vmin, vmax), n = self._trail_builder.build(
+            self._trail_observations(), quantity, end - timedelta(minutes=minutes), end,
+            track_points=track, motion=motion, time_to_space=time_to_space and motion is not None,
+        )
+        units = QUANTITIES[quantity].units
+        stops = color_stops(quantity, vmin, vmax) if n else []
+        self.map_widget.set_trails(fc, stops, units)
+        self.trail_controls.set_scale(stops, vmin, vmax, units)
+        if n:
+            mode = " · time-to-space" if time_to_space and motion is not None else ""
+            self.trail_controls.set_status(f"{n} segments over the last {minutes} min{mode}")
+        elif time_to_space and motion is not None:
+            self.trail_controls.set_status("No observations within the storm track's time span")
+        else:
+            self.trail_controls.set_status(f"No {QUANTITIES[quantity].label.lower()} in the last {minutes} min")
+
     def _renudge_archive_clock(self) -> None:
         self._time_ctrl.set_time(self._time_ctrl.current_time)
 
@@ -2342,6 +2418,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 _stack(self.sfcoa_controls)
             if hasattr(self, "raw_lidar_controls") and self.btn_raw_lidar.isChecked():
                 _stack(self.raw_lidar_controls)
+            if hasattr(self, "trail_controls") and self.btn_trails.isChecked():
+                _stack(self.trail_controls)
+            if hasattr(self, "track_controls") and self.btn_track.isChecked():
+                _stack(self.track_controls)
             if hasattr(self, "surface_controls") and self.btn_surface.isChecked():
                 _stack(self.surface_controls)
             if hasattr(self, "sounding_controls") and self.btn_sounding.isChecked():
@@ -5250,6 +5330,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.radar_controls.set_storm_relative_available(mean is not None,
                                                              mean.describe() if mean else "")
             self._apply_velocity_options()
+        if hasattr(self, "trail_controls"):
+            self.trail_controls.set_track_available(mean is not None)
+            self._schedule_trails()
 
     def _set_track_points(self, points: list[TrackPoint], *, record_undo: bool = True) -> None:
         """Replace the track with `points` as one undoable edit, then redraw,

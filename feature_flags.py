@@ -66,6 +66,12 @@ FEATURES = {
         default_enabled=True,
         admin_only=True,
     ),
+    "obs_trails": Feature(
+        key="obs_trails",
+        label="Observation trails and time-to-space (archive)",
+        default_enabled=True,
+        admin_only=True,
+    ),
 }
 
 

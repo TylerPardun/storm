@@ -1266,6 +1266,37 @@
       // Drawn on top of everything else (no beforeId) since it's an actively
       // edited overlay. 'state' on each point feature is 'normal' / 'selected'
       // / 'current' (nearest the timeline's current time) and drives color.
+      // Observation trails (core/trails.py): recent path segments coloured by
+      // one measured/derived quantity; in time-to-space mode also storm-centred
+      // range rings. Added before the storm track so the track draws on top.
+      map.addSource('obs-trails', {type:'geojson', data:{type:'FeatureCollection', features:[]}});
+      map.addLayer({
+        id: 'obs-trails-rings', type: 'line', source: 'obs-trails',
+        filter: ['==', ['get', 'kind'], 'ring'],
+        paint: {'line-color': '#E3E8F2', 'line-width': 1, 'line-opacity': 0.45, 'line-dasharray': [3, 3]}
+      });
+      map.addLayer({
+        id: 'obs-trails-line', type: 'line', source: 'obs-trails',
+        filter: ['==', ['get', 'kind'], 'trail'],
+        layout: {'line-cap': 'round', 'line-join': 'round'},
+        paint: {'line-color': '#FFFFFF', 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 2.5, 12, 5]}
+      });
+      map.addLayer({
+        id: 'obs-trails-centre', type: 'circle', source: 'obs-trails',
+        filter: ['==', ['get', 'kind'], 'centre'],
+        paint: {'circle-radius': 4, 'circle-color': '#FFD400', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#0A0A0F'}
+      });
+      window._trailUnits = '';
+      var _trailPopup = new maplibregl.Popup({closeButton: false, closeOnClick: false, offset: 8});
+      map.on('mousemove', 'obs-trails-line', function(e) {
+        if (!e.features || !e.features.length) return;
+        var p = e.features[0].properties;
+        _trailPopup.setLngLat(e.lngLat)
+          .setHTML('<b>' + p.vehicle + '</b> ' + p.t + '<br>' + Number(p.v).toFixed(1) + ' ' + window._trailUnits)
+          .addTo(map);
+      });
+      map.on('mouseleave', 'obs-trails-line', function() { _trailPopup.remove(); });
+
       map.addSource('storm-track', {type:'geojson', data:{type:'FeatureCollection', features:[]}});
       map.addLayer({
         id: 'storm-track-line', type: 'line', source: 'storm-track',
@@ -4034,6 +4065,17 @@
         map.setLayoutProperty('storm-track-line', 'visibility', lineVisible ? 'visible' : 'none');
       if (map.getLayer('storm-track-points'))
         map.setLayoutProperty('storm-track-points', 'visibility', pointsVisible ? 'visible' : 'none');
+    };
+
+    window.stormSetTrails = function(geojsonStr, stops, units) {
+      var src = map.getSource('obs-trails');
+      if (!src) return;
+      window._trailUnits = units || '';
+      if (stops && stops.length >= 4 && map.getLayer('obs-trails-line')) {
+        map.setPaintProperty('obs-trails-line', 'line-color',
+          ['interpolate', ['linear'], ['get', 'v']].concat(stops));
+      }
+      try { src.setData(JSON.parse(geojsonStr)); } catch(e) { console.warn('stormSetTrails:', e); }
     };
 
     window.stormSetTrackMarker = function(markerStr) {

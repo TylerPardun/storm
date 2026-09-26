@@ -730,6 +730,13 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         import json
         self.run_js(f"if(window.stormSetTrackGeoJSON) stormSetTrackGeoJSON({json.dumps(geojson_str)});")
 
+    def set_trails(self, geojson: dict | None, stops: list | None = None, units: str = "") -> None:
+        """Observation trails (core/trails.py); None clears them."""
+        import json
+        data = json.dumps(geojson or {"type": "FeatureCollection", "features": []})
+        self.run_js(f"if(window.stormSetTrails) stormSetTrails({json.dumps(data)}, "
+                    f"{json.dumps(stops or [])}, {json.dumps(units)});")
+
     def set_track_marker(self, marker: dict | None) -> None:
         """Show the track's reference marker ({lat, lon, label}), or none."""
         import json

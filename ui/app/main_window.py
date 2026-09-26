@@ -4683,9 +4683,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _on_raw_lidar_quicklook_requested(self, platform_id: str, asset) -> None:
         self._raw_lidar_quicklook_requested_platform_id = platform_id
+        self._raw_lidar_quicklook_requested_url = asset.url
         self.status_msg_label.setText(f"Raw lidar: loading {asset.source.product.upper()}…")
-        if not self._archive_raw_lidar.load(platform_id, asset):
-            self.status_msg_label.setText("Raw lidar: load already in progress")
+        self._archive_raw_lidar.load(platform_id, asset)   # the latest request wins
 
     def _on_archive_raw_lidar_rays_ready(self, platform_id: str, rays) -> None:
         self.status_msg_label.setText(f"Raw lidar: {platform_id} loaded")
@@ -4702,7 +4702,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._raw_lidar_dialog.set_rays(rays)
             self._raw_lidar_dialog.raise_()
             self._raw_lidar_dialog.activateWindow()
-        elif self._raw_lidar_quicklook_requested_platform_id == platform_id:
+        elif (self._raw_lidar_quicklook_requested_platform_id == platform_id
+              and getattr(self, "_raw_lidar_quicklook_requested_url", None) == rays.provenance.get("url")):
             self._raw_lidar_dialog = RawLidarQuicklookDialog(platform_id, parent=self, preloaded_rays=rays)
             self._raw_lidar_dialog.show()
 
@@ -4754,9 +4755,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._render_lidar_overlay()
             return
         self.status_msg_label.setText(f"Raw lidar: loading {asset.source.product.upper()} for map overlay…")
-        if not self._archive_raw_lidar.load(platform_id, asset):
-            self.status_msg_label.setText("Raw lidar: load already in progress")
-            self.raw_lidar_controls._btn_map.setChecked(False)
+        self._archive_raw_lidar.load(platform_id, asset)   # the latest request wins
 
     def _on_time_changed_update_lidar_overlay(self, _t) -> None:
         self._update_raw_lidar_site()

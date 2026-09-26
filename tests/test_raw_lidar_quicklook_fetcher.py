@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from datetime import date, datetime, timezone
 
 from archive.fetchers import raw_lidar_quicklook_fetcher as rlq
@@ -73,7 +74,7 @@ def test_do_load_emits_error_on_failure(monkeypatch):
     assert 'bad file' in errors[0]
 
 
-def test_fetch_re_entrancy_guard_blocks_a_second_call_while_busy():
+def test_discovery_guard_blocks_a_second_discovery_while_busy():
     fetcher = rlq.ArchiveRawLidarQuicklookFetcher()
     fetcher._busy = True
     assert fetcher.fetch(datetime(2026, 5, 17, tzinfo=timezone.utc)) is False
@@ -95,3 +96,35 @@ def test_partial_success_does_not_hide_discovery_errors(monkeypatch):
     assert errors
     assert results[0][source.platform_id] == [asset]
     assert results[0][KNOWN_RAW_LIDAR_SOURCES[1].platform_id] is None
+
+
+def test_loads_keep_only_the_latest_request_and_drop_superseded_results(monkeypatch):
+    import threading, time
+    gate = threading.Event()
+    calls = []
+
+    def slow_load(asset, cache_dir):
+        calls.append(asset.filename)
+        if asset.filename == 'first.cdf':
+            gate.wait(5)
+        return SimpleNamespace(provenance={'url': asset.url})
+    monkeypatch.setattr(rlq, 'load_raw_lidar', slow_load)
+    fetcher = rlq.ArchiveRawLidarQuicklookFetcher()
+    shown = []
+    fetcher.rays_ready.connect(lambda pid, rays: shown.append(rays.provenance['url']))
+    source = KNOWN_RAW_LIDAR_SOURCES[0]
+    first, second, third = (LidarAsset(source, f'{n}.cdf', 'catalog') for n in ('first', 'second', 'third'))
+
+    assert fetcher.load(source.platform_id, first) is True
+    time.sleep(0.05)
+    assert fetcher.load(source.platform_id, second) is True     # waits, then replaced
+    assert fetcher.load(source.platform_id, third) is True
+    from PyQt6.QtCore import QCoreApplication
+    app = QCoreApplication.instance() or QCoreApplication([])
+    gate.set()
+    deadline = time.time() + 5
+    while (fetcher._load_running or not shown) and time.time() < deadline:
+        app.processEvents()                                    # results arrive via the event loop
+        time.sleep(0.01)
+    assert calls == ['first.cdf', 'third.cdf']                 # 'second' never loaded
+    assert shown == [third.url]                                # 'first' finished but was superseded

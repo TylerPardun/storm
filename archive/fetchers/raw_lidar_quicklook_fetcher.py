@@ -33,26 +33,29 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._busy = False
         self._lock = threading.Lock()
+        self._busy = False             # discovery running
+        # loads: one runs, the latest request waits; older requests are
+        # replaced, and a superseded load's result is dropped, not shown
+        self._load_running = False
+        self._load_pending = None
+        self._load_seq = 0
+        self._latest_load = 0
 
-    def _start(self, target) -> bool:
+    def fetch(self, archive_date: datetime) -> bool:
         with self._lock:
             if self._busy:
                 return False
             self._busy = True
-        threading.Thread(target=self._run, args=(target,), daemon=True).start()
+
+        def run():
+            try:
+                self._do_fetch(archive_date)
+            finally:
+                with self._lock:
+                    self._busy = False
+        threading.Thread(target=run, daemon=True).start()
         return True
-
-    def _run(self, target) -> None:
-        try:
-            target()
-        finally:
-            with self._lock:
-                self._busy = False
-
-    def fetch(self, archive_date: datetime) -> bool:
-        return self._start(lambda: self._do_fetch(archive_date))
 
     def _do_fetch(self, archive_date: datetime) -> None:
         """The real discovery logic, directly callable (no thread) for tests."""
@@ -83,13 +86,43 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
         self.assets_ready.emit(results)
 
     def load(self, platform_id: str, asset) -> bool:
-        return self._start(lambda: self._do_load(platform_id, asset))
+        """Load an asset's rays. While another load runs, this becomes the
+        next one (replacing any request still waiting). Always accepted."""
+        with self._lock:
+            self._load_seq += 1
+            self._latest_load = self._load_seq
+            request = (self._load_seq, platform_id, asset)
+            if self._load_running:
+                self._load_pending = request
+                return True
+            self._load_running = True
+        threading.Thread(target=self._load_loop, args=(request,), daemon=True).start()
+        return True
 
-    def _do_load(self, platform_id: str, asset) -> None:
+    def _load_loop(self, request) -> None:
+        while request is not None:
+            seq, platform_id, asset = request
+            try:
+                self._do_load(platform_id, asset, seq)
+            finally:
+                with self._lock:
+                    request, self._load_pending = self._load_pending, None
+                    if request is None:
+                        self._load_running = False
+
+    def _is_superseded(self, seq) -> bool:
+        with self._lock:
+            return seq is not None and seq != self._latest_load
+
+    def _do_load(self, platform_id: str, asset, seq=None) -> None:
         try:
             rays = load_raw_lidar(asset, _RAW_LIDAR_CACHE_DIR)
         except Exception as exc:  # noqa: BLE001
             log.warning("ArchiveRawLidarQuicklookFetcher: load failed for %s: %s", asset.filename, exc)
-            self.error.emit(f"Raw lidar load failed: {exc}")
+            if not self._is_superseded(seq):
+                self.error.emit(f"Raw lidar load failed: {exc}")
+            return
+        if self._is_superseded(seq):
+            log.debug("ArchiveRawLidarQuicklookFetcher: dropping superseded load of %s", asset.filename)
             return
         self.rays_ready.emit(platform_id, rays)

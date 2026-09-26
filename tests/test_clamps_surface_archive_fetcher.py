@@ -261,3 +261,20 @@ def test_overlapping_restart_files_are_merged_without_duplicates(monkeypatch):
                         lambda data, key, trusted: [Observation(key, 35, -97, ts) for ts in rows[data]])
     obs = module.fetch_clamps_surface_observations(t)
     assert [o.timestamp for o in obs] == [t, t + timedelta(minutes=1), t + timedelta(minutes=2)]
+
+
+def test_kelvin_temperatures_labelled_celsius_are_converted(tmp_path):
+    """CLAMPS1 MWR files in 2023 store sfc_temp in kelvin under a degC label
+    (e.g. 2023-06-09: median 305.3); STORM showed ~300 degC surface temps."""
+    path = tmp_path / "mwr_kelvin.cdf"
+    _write_clamps_mwr_netcdf(path, 1686268800, [0, 60, 120], [303.15, 304.15, -9999.0],
+                             [50, 50, 50], [970, 970, 970], [3, 3, 3], [180, 180, 180])
+    obs = parse_clamps_surface_netcdf(path.read_bytes(), "CLAMPS1")
+    assert [round(o.temperature_c, 2) for o in obs] == [30.0, 31.0]      # fill value still dropped
+    assert obs[0].dewpoint_c == pytest.approx(_dewpoint_c_from_rh(30.0, 50.0))
+
+
+def test_celsius_files_are_left_alone(tmp_path):
+    path = tmp_path / "mwr_c.cdf"
+    _write_clamps_mwr_netcdf(path, 1686268800, [0, 60], [28.0, 29.0], [50, 50], [970, 970], [3, 3], [180, 180])
+    assert [o.temperature_c for o in parse_clamps_surface_netcdf(path.read_bytes(), "CLAMPS1")] == [28.0, 29.0]

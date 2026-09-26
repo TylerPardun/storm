@@ -452,7 +452,7 @@
   <div id="damage-path-tooltip"></div>
 
   <!-- ── Storm-Track Edit-Mode Banner ── -->
-  <div id="track-edit-banner">TRACK EDIT — click to add · drag a point to move (Alt keeps its time) · D deletes · Ctrl+Z undoes</div>
+  <div id="track-edit-banner">TRACK EDIT — click to add (a point already at this frame moves) · drag to move (Alt keeps time) · right-click for marker · A adds at marker · D deletes · Shift skips snapping · Ctrl+Z undoes</div>
 
   <script>
     window.onerror = function(msg, src, line) {
@@ -1295,10 +1295,76 @@
         if (window._trackEditActive && !window._trackDrag) map.getCanvas().style.cursor = 'crosshair';
       });
 
+      // The track's reference marker (MESO-VIEW's review marker): one per
+      // session, placed from the right-click menu in track mode. New and
+      // dragged track points snap onto it when released within a few pixels,
+      // unless Shift is held.
+      window._trackMarker = null;  // {lat, lon, label}
+      map.addSource('storm-track-marker', {type:'geojson', data:{type:'FeatureCollection', features:[]}});
+      map.addLayer({
+        id: 'storm-track-marker-halo', type: 'circle', source: 'storm-track-marker',
+        paint: {
+          'circle-color': 'rgba(0,229,255,0.20)',
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 6, 9, 8, 13, 10],
+          'circle-opacity': 0.55
+        }
+      });
+      map.addLayer({
+        id: 'storm-track-marker-point', type: 'circle', source: 'storm-track-marker',
+        paint: {
+          'circle-color': '#00e5ff',
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 4, 9, 5, 13, 6],
+          'circle-stroke-width': 1.75,
+          'circle-stroke-color': '#061018'
+        }
+      });
+      map.addLayer({
+        id: 'storm-track-marker-label', type: 'symbol', source: 'storm-track-marker',
+        layout: {
+          'text-field': ['get', 'label'],
+          'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 5, 10, 9, 12, 13, 14],
+          'text-anchor': 'top',
+          'text-offset': [0, 0.9],
+          'text-allow-overlap': true,
+          'text-ignore-placement': true
+        },
+        paint: {
+          'text-color': '#ffe28a',
+          'text-halo-color': 'rgba(0,0,0,0.85)',
+          'text-halo-width': 1.6
+        }
+      });
+
       // Drag a track point to move it (as in MESO-VIEW): the point and line
       // follow the cursor locally; on release Python gets the new position,
       // plus whether Alt/Option was held (keep the point's time rather than
       // retiming it to the current archive time).
+      // Snap a position onto the reference marker when it lands within
+      // `px` screen pixels of it (MESO-VIEW: 20 px for a click, 18 for a drag).
+      window._snapToTrackMarker = function(lngLat, px, bypass) {
+        var m = window._trackMarker;
+        if (bypass || !m) return {lat: lngLat.lat, lon: lngLat.lng};
+        var a = map.project([lngLat.lng, lngLat.lat]);
+        var b = map.project([m.lon, m.lat]);
+        if (Math.hypot(a.x - b.x, a.y - b.y) <= px) return {lat: m.lat, lon: m.lon};
+        return {lat: lngLat.lat, lon: lngLat.lng};
+      };
+      // Track point under (or within a few pixels of) a screen point, so a
+      // near-miss on a point selects it rather than adding a new one.
+      window._trackPointHit = function(point) {
+        if (!map.getLayer('storm-track-points')) return null;
+        var r = 5;
+        var hits = map.queryRenderedFeatures(
+          [[point.x - r, point.y - r], [point.x + r, point.y + r]], {layers: ['storm-track-points']});
+        if (!hits.length) return null;
+        hits.sort(function(f, g) {
+          var pf = map.project(f.geometry.coordinates), pg = map.project(g.geometry.coordinates);
+          return Math.hypot(pf.x - point.x, pf.y - point.y) - Math.hypot(pg.x - point.x, pg.y - point.y);
+        });
+        return hits[0].properties.point_id;
+      };
+
       window._trackDrag = null;
       window._trackDragEnd = null;  // {x, y, t} where the last drag was released
       map.on('mousedown', 'storm-track-points', function(e) {
@@ -1314,10 +1380,11 @@
         map.getCanvas().style.cursor = 'grabbing';
         var data = window._trackGeoJSON;
         if (!data) return;
+        var at = window._snapToTrackMarker(e.lngLat, 18, e.originalEvent && e.originalEvent.shiftKey);
         var coords = [];
         data.features.forEach(function(f) {
           if (f.geometry.type !== 'Point') return;
-          if (f.properties.point_id === drag.id) f.geometry.coordinates = [e.lngLat.lng, e.lngLat.lat];
+          if (f.properties.point_id === drag.id) f.geometry.coordinates = [at.lon, at.lat];
           coords.push(f.geometry.coordinates);
         });
         data.features.forEach(function(f) {
@@ -1337,7 +1404,8 @@
         // and time rather than a flag, since often no such click comes.
         window._trackDragEnd = {x: e.point.x, y: e.point.y, t: Date.now()};
         var keepTime = !!(e.originalEvent && e.originalEvent.altKey);
-        if (bridge) bridge.on_track_point_move(drag.id, e.lngLat.lat, e.lngLat.lng, keepTime);
+        var at = window._snapToTrackMarker(e.lngLat, 18, e.originalEvent && e.originalEvent.shiftKey);
+        if (bridge) bridge.on_track_point_move(drag.id, at.lat, at.lon, keepTime);
       });
 
       map.addSource('scan-sectors', {type:'geojson', data:{type:'FeatureCollection',features:[]}});
@@ -2190,14 +2258,13 @@
         window._trackDragEnd = null;
         if (_dragEnd && Date.now() - _dragEnd.t < 400 &&
             Math.abs(e.point.x - _dragEnd.x) < 4 && Math.abs(e.point.y - _dragEnd.y) < 4) return;
-        if (map.getLayer('storm-track-points')) {
-          const trackHits = map.queryRenderedFeatures(e.point, {layers: ['storm-track-points']});
-          if (trackHits.length > 0) {
-            if (bridge) bridge.on_track_point_select(trackHits[0].properties.point_id);
-            return;
-          }
+        var hitId = window._trackPointHit(e.point);
+        if (hitId !== null) {
+          if (bridge) bridge.on_track_point_select(hitId);
+          return;
         }
-        if (bridge) bridge.on_track_point_add(e.lngLat.lat, e.lngLat.lng);
+        var at = window._snapToTrackMarker(e.lngLat, 20, e.originalEvent && e.originalEvent.shiftKey);
+        if (bridge) bridge.on_track_point_add(at.lat, at.lon);
         return;
       }
       // in annotation placement mode: always place, do not open existing features.
@@ -3055,7 +3122,62 @@
       });
     }
 
+    // Track mode's right-click menu, as in MESO-VIEW: place (or move) the
+    // single reference marker, rename/remove it, or select/delete the track
+    // point under the cursor. Reuses the private-pin menu's look.
+    function _showTrackContextMenu(e) {
+      var menu = _privatePinMenu();
+      var markerHit = map.getLayer('storm-track-marker-point') &&
+        map.queryRenderedFeatures(
+          [[e.point.x - 5, e.point.y - 5], [e.point.x + 5, e.point.y + 5]],
+          {layers: ['storm-track-marker-point']}).length > 0;
+      var pointId = window._trackPointHit(e.point);
+      var title = document.createElement('div');
+      title.className = 'private-pin-menu-title';
+      title.textContent = pointId !== null ? 'Track point ' + pointId
+        : (markerHit ? 'Marker ' + window._trackMarker.label : 'Storm track');
+      var actions = document.createElement('div');
+      actions.className = 'private-pin-menu-actions';
+      var lat = e.lngLat.lat, lon = e.lngLat.lng;
+      actions.appendChild(_makePrivatePinButton(window._trackMarker ? 'Move marker here' : 'Add marker', function() {
+        if (bridge) bridge.on_track_marker_add(lat, lon);
+        _hidePrivatePinMenu();
+      }));
+      if (markerHit) {
+        actions.appendChild(_makePrivatePinButton('Rename marker', function() {
+          if (bridge) bridge.on_track_marker_rename();
+          _hidePrivatePinMenu();
+        }));
+        actions.appendChild(_makePrivatePinButton('Remove marker', function() {
+          if (bridge) bridge.on_track_marker_remove();
+          _hidePrivatePinMenu();
+        }));
+      }
+      if (pointId !== null) {
+        actions.appendChild(_makePrivatePinButton('Select track point', function() {
+          if (bridge) bridge.on_track_point_select(pointId);
+          _hidePrivatePinMenu();
+        }));
+        actions.appendChild(_makePrivatePinButton('Delete track point', function() {
+          if (bridge) bridge.on_track_point_delete(pointId);
+          _hidePrivatePinMenu();
+        }));
+      }
+      menu.innerHTML = '';
+      menu.appendChild(title);
+      menu.appendChild(actions);
+      _positionPrivatePinMenu(menu, e.point);
+    }
+
     map.on('contextmenu', function(e) {
+      if (window._trackEditActive) {
+        if (e.originalEvent) {
+          e.originalEvent.preventDefault();
+          e.originalEvent.stopPropagation();
+        }
+        _showTrackContextMenu(e);
+        return;
+      }
       if (_privatePinsActiveTool()) {
         _hidePrivatePinMenu();
         return;
@@ -3914,7 +4036,20 @@
         map.setLayoutProperty('storm-track-points', 'visibility', pointsVisible ? 'visible' : 'none');
     };
 
+    window.stormSetTrackMarker = function(markerStr) {
+      var m = markerStr ? JSON.parse(markerStr) : null;
+      window._trackMarker = m;
+      var src = map.getSource('storm-track-marker');
+      if (!src) return;
+      src.setData({type: 'FeatureCollection', features: m ? [{
+        type: 'Feature',
+        geometry: {type: 'Point', coordinates: [m.lon, m.lat]},
+        properties: {label: m.label}
+      }] : []});
+    };
+
     window.stormSetTrackEditMode = function(active) {
+      if (!active) _hidePrivatePinMenu();
       window._trackEditActive = !!active;
       map.getCanvas().style.cursor = window._trackEditActive ? 'crosshair' : '';
       var banner = document.getElementById('track-edit-banner');

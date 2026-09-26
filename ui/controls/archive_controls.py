@@ -281,6 +281,7 @@ class ArchiveControls(QWidget):
 
         # keyboard shortcuts — these require a parent window to be set.
         self._shortcuts_installed = False
+        self._letter_step_keys_enabled = True
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -295,8 +296,19 @@ class ArchiveControls(QWidget):
         QShortcut(QKeySequence(Qt.Key.Key_Space),  win).activated.connect(self._tc.toggle_play)
         QShortcut(QKeySequence(Qt.Key.Key_Left),   win).activated.connect(self._on_step_back)
         QShortcut(QKeySequence(Qt.Key.Key_Right),  win).activated.connect(self._on_step_forward)
-        QShortcut(QKeySequence(Qt.Key.Key_A),      win).activated.connect(self._on_step_back)
-        QShortcut(QKeySequence(Qt.Key.Key_D),      win).activated.connect(self._on_step_forward)
+        self._letter_step_shortcuts = [
+            QShortcut(QKeySequence(Qt.Key.Key_A), win),
+            QShortcut(QKeySequence(Qt.Key.Key_D), win),
+        ]
+        self._letter_step_shortcuts[0].activated.connect(self._on_step_back)
+        self._letter_step_shortcuts[1].activated.connect(self._on_step_forward)
+        self.set_letter_step_keys_enabled(self._letter_step_keys_enabled)
+        # , and < step back a radar frame, . and > forward (as in MESO-VIEW).
+        # "<" arrives as "<" on some keyboards and Shift+"," on others.
+        for seq in (",", "<", "Shift+<", "Shift+,"):
+            QShortcut(QKeySequence(seq), win).activated.connect(self._on_step_back)
+        for seq in (".", ">", "Shift+>", "Shift+."):
+            QShortcut(QKeySequence(seq), win).activated.connect(self._on_step_forward)
         QShortcut(QKeySequence(Qt.Key.Key_Home),   win).activated.connect(self._on_skip_start)
         QShortcut(QKeySequence(Qt.Key.Key_End),    win).activated.connect(self._on_skip_end)
 
@@ -344,6 +356,13 @@ class ArchiveControls(QWidget):
 
     def _on_speed_changed(self, idx: int) -> None:
         self._tc.set_speed_by_index(idx)
+
+    def set_letter_step_keys_enabled(self, enabled: bool) -> None:
+        """A/D step frames unless another tool (the TRACK editor) has taken
+        them over; the arrows and , . < > always step."""
+        self._letter_step_keys_enabled = enabled
+        for shortcut in getattr(self, "_letter_step_shortcuts", ()):
+            shortcut.setEnabled(enabled)
 
     def _on_step_back(self) -> None:
         self._jump_to_scan(-1)

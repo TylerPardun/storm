@@ -1716,6 +1716,14 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             )
             self.btn_damage_paths.toggled.connect(self._on_damage_paths_toggled)
 
+        if self._archive:
+            # R and V flip reflectivity/velocity whether or not TRACK is open
+            self._radar_product_shortcuts = []
+            for key in ("R", "V"):
+                shortcut = QShortcut(QKeySequence(key), self)
+                shortcut.activated.connect(self._toggle_radar_product_shortcut)
+                self._radar_product_shortcuts.append(shortcut)
+
         if self._archive and feature_flags.is_enabled("storm_track"):
             self.btn_track = self._toolbar_toggle(
                 "TRACK", "Subjectively track the mesocyclone", tb
@@ -1735,20 +1743,26 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.map_widget.track_point_add_requested.connect(self._on_track_point_add)
             self.map_widget.track_point_selected.connect(self._on_track_point_select)
             self.map_widget.track_point_moved.connect(self._on_track_point_moved)
-            # D, Delete and Backspace all delete the selected point, as in MESO-VIEW
+            self.map_widget.track_point_delete_requested.connect(self._delete_track_point)
+            self.map_widget.track_marker_add_requested.connect(self._on_track_marker_add)
+            self.map_widget.track_marker_rename_requested.connect(self._on_track_marker_rename)
+            self.map_widget.track_marker_remove_requested.connect(self._on_track_marker_remove)
+            self._track_marker = None   # {lat, lon, label}; one per session, never saved
+            # D, Delete and Backspace all delete the selected point, and A adds
+            # one at the marker, as in MESO-VIEW. D and A only while TRACK is
+            # on -- otherwise they step radar frames (ArchiveControls).
             self._track_delete_shortcuts = []
             for key in ("D", "Delete", "Backspace"):
                 shortcut = QShortcut(QKeySequence(key), self)
                 shortcut.activated.connect(self._delete_selected_track_point)
                 self._track_delete_shortcuts.append(shortcut)
+            self._track_marker_point_shortcut = QShortcut(QKeySequence("A"), self)
+            self._track_marker_point_shortcut.activated.connect(self._add_track_point_at_marker)
+            self._set_track_letter_keys(False)
             self._track_undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
             self._track_undo_shortcut.activated.connect(self._undo_track_edit)
             self._track_redo_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
             self._track_redo_shortcut.activated.connect(self._redo_track_edit)
-            self._track_toggle_shortcut_r = QShortcut(QKeySequence("R"), self)
-            self._track_toggle_shortcut_r.activated.connect(self._toggle_radar_product_shortcut)
-            self._track_toggle_shortcut_v = QShortcut(QKeySequence("V"), self)
-            self._track_toggle_shortcut_v.activated.connect(self._toggle_radar_product_shortcut)
             # self._time_ctrl doesn't exist yet here (_init_toolbar runs from
             # __init__, before _begin_archive_startup creates it) -- that
             # connection is made there instead, guarded by hasattr(self, "btn_track").
@@ -4960,6 +4974,16 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _on_track_edit_toggled(self, checked: bool) -> None:
         self._track_edit_active = checked
         self.map_widget.set_track_edit_mode(checked)
+        self._set_track_letter_keys(checked)
+
+    def _set_track_letter_keys(self, editing: bool) -> None:
+        """Hand D and A to the track editor while TRACK is on and back to
+        frame stepping otherwise. Qt fires neither of two shortcuts that
+        share a key, so only one owner may be enabled at a time."""
+        self._track_delete_shortcuts[0].setEnabled(editing)   # D
+        self._track_marker_point_shortcut.setEnabled(editing)  # A
+        if hasattr(self, "_archive_controls"):
+            self._archive_controls.set_letter_step_keys_enabled(not editing)
 
     def _current_track_radar_context(self) -> tuple[str, str, str, float | None]:
         """(radar_site, product, product_label, tilt_deg) for whichever radar
@@ -5058,6 +5082,22 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._refresh_track_controls()
 
     def _on_track_point_add(self, lat: float, lon: float) -> None:
+        """Place the storm centre at the current time. If a point already
+        sits at this time (to the second -- stepping frames lands exactly on
+        scan times), that point moves here instead, as in MESO-VIEW: step
+        back to a point's frame and click to refine it."""
+        now = self._time_ctrl.current_time.replace(microsecond=0)
+        existing = [p for p in self._track_points if p.time.replace(microsecond=0) == now]
+        if existing:
+            from dataclasses import replace
+            target = existing[-1].point_id
+            self._track_selected_id = target
+            self._set_track_points([
+                replace(p, lat=lat, lon=lon, source="manual") if p.point_id == target else p
+                for p in self._track_points
+            ])
+            self.status_msg_label.setText(f"Track: moved point {target} at {now:%H:%M:%S} UTC")
+            return
         radar_site, product, product_label, tilt_deg = self._current_track_radar_context()
         point = TrackPoint(
             point_id=self._track_next_id,
@@ -5097,6 +5137,43 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if not self._track_edit_active or self._track_selected_id is None:
             return
         self._set_track_points([p for p in self._track_points if p.point_id != self._track_selected_id])
+
+    def _delete_track_point(self, point_id: int) -> None:
+        """Right-click "Delete track point"."""
+        if not self._track_edit_active:
+            return
+        self._set_track_points([p for p in self._track_points if p.point_id != point_id])
+
+    def _on_track_marker_add(self, lat: float, lon: float) -> None:
+        """Place the reference marker, replacing any existing one -- there
+        is only ever one, as in MESO-VIEW. It lasts for this session only."""
+        label = self._track_marker["label"] if self._track_marker else "M1"
+        self._track_marker = {"lat": lat, "lon": lon, "label": label}
+        self.map_widget.set_track_marker(self._track_marker)
+
+    def _on_track_marker_rename(self) -> None:
+        if not self._track_marker:
+            return
+        from PyQt6.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(
+            self, "Rename Marker", "New label for the marker:", text=self._track_marker["label"]
+        )
+        if ok:
+            self._track_marker["label"] = text.strip() or "M1"
+            self.map_widget.set_track_marker(self._track_marker)
+
+    def _on_track_marker_remove(self) -> None:
+        self._track_marker = None
+        self.map_widget.set_track_marker(None)
+
+    def _add_track_point_at_marker(self) -> None:
+        """A: put the storm centre on the marker at the current time."""
+        if self._shortcut_focus_is_text_entry() or not self._track_edit_active:
+            return
+        if not self._track_marker:
+            self.status_msg_label.setText("Track: no marker -- right-click the map to add one")
+            return
+        self._on_track_point_add(self._track_marker["lat"], self._track_marker["lon"])
 
     def _undo_track_edit(self) -> None:
         if self._shortcut_focus_is_text_entry() or not self._track_undo:
@@ -5190,12 +5267,17 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             return
         if not hasattr(self, "radar_controls"):
             return
+        # archive WSR-88D uses field names, NOXP its native fields, live the NWS codes
+        pairs = {"reflectivity": "velocity", "DBZ": "VEL", "N0B": "N0U"}
+        pairs.update({vel: ref for ref, vel in list(pairs.items())})
         current = self.radar_controls.current_product()
-        if self._noxp_active:
-            other = "DBZ" if current == "VEL" else "VEL"
-        else:
-            other = "N0B" if current == "N0U" else "N0U"
-        self.radar_controls.set_current_product(other)
+        if current in pairs:
+            self.radar_controls.set_current_product(pairs[current])
+        else:  # another product (e.g. ZDR) is up: go to reflectivity
+            for code in ("reflectivity", "DBZ", "N0B"):
+                self.radar_controls.set_current_product(code)
+                if self.radar_controls.current_product() == code:
+                    break
 
     def _on_time_changed_update_track_highlight(self, when: datetime) -> None:
         if self._track_points:

@@ -51,6 +51,10 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
     track_point_add_requested = pyqtSignal(float, float)  # lat, lon
     track_point_selected      = pyqtSignal(int)           # point_id
     track_point_moved         = pyqtSignal(int, float, float, bool)  # point_id, lat, lon, keep_time
+    track_point_delete_requested = pyqtSignal(int)        # point_id
+    track_marker_add_requested   = pyqtSignal(float, float)  # lat, lon
+    track_marker_rename_requested = pyqtSignal()
+    track_marker_remove_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -124,6 +128,10 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         self.bridge.track_point_add_requested.connect(self.track_point_add_requested)
         self.bridge.track_point_selected.connect(self.track_point_selected)
         self.bridge.track_point_moved.connect(self.track_point_moved)
+        self.bridge.track_point_delete_requested.connect(self.track_point_delete_requested)
+        self.bridge.track_marker_add_requested.connect(self.track_marker_add_requested)
+        self.bridge.track_marker_rename_requested.connect(self.track_marker_rename_requested)
+        self.bridge.track_marker_remove_requested.connect(self.track_marker_remove_requested)
 
         # queue for JS calls that arrive before MapLibre has fully loaded.
         self._map_ready = False
@@ -721,6 +729,12 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
     def set_track_geojson(self, geojson_str: str) -> None:
         import json
         self.run_js(f"if(window.stormSetTrackGeoJSON) stormSetTrackGeoJSON({json.dumps(geojson_str)});")
+
+    def set_track_marker(self, marker: dict | None) -> None:
+        """Show the track's reference marker ({lat, lon, label}), or none."""
+        import json
+        arg = json.dumps(json.dumps(marker)) if marker else "null"
+        self.run_js(f"if(window.stormSetTrackMarker) stormSetTrackMarker({arg});")
 
     def set_track_edit_mode(self, active: bool) -> None:
         self.run_js(f"if(window.stormSetTrackEditMode) stormSetTrackEditMode({'true' if active else 'false'});")

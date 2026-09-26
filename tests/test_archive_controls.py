@@ -107,3 +107,65 @@ def test_rendered_radar_time_survives_loading_and_clock_changes():
     assert controls._radar_time_label.text() == original
     controls.set_rendered_radar(None)
     assert 'KTWX' not in controls._radar_time_label.text()
+
+
+def _shown_in_window():
+    from PyQt6.QtWidgets import QMainWindow
+    app, controller, controls = _controls()
+    win = QMainWindow()
+    win.setCentralWidget(controls)
+    win.show()
+    app.processEvents()
+    controls.set_available_scan_times([
+        "2026-04-16T11:45:00Z", "2026-04-16T11:52:00Z", "2026-04-16T12:03:00Z",
+    ])
+    return app, controller, controls, win
+
+
+def _press(app, win, key, modifier=None):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    QTest.keyClick(win, key, modifier or Qt.KeyboardModifier.NoModifier)
+    app.processEvents()
+
+
+def test_comma_period_and_angle_brackets_step_radar_frames():
+    from PyQt6.QtCore import Qt
+    app, controller, _, win = _shown_in_window()
+    at = lambda h, m: datetime(2026, 4, 16, h, m, tzinfo=timezone.utc)
+
+    _press(app, win, Qt.Key.Key_Comma)
+    assert controller.current_time == at(11, 52)
+    _press(app, win, Qt.Key.Key_Less, Qt.KeyboardModifier.ShiftModifier)
+    assert controller.current_time == at(11, 45)
+    _press(app, win, Qt.Key.Key_Period)
+    assert controller.current_time == at(11, 52)
+    _press(app, win, Qt.Key.Key_Greater, Qt.KeyboardModifier.ShiftModifier)
+    assert controller.current_time == at(12, 3)
+    _press(app, win, Qt.Key.Key_Less)       # "<" without Shift (other layouts)
+    assert controller.current_time == at(11, 52)
+    win.close()
+
+
+def test_letter_step_keys_can_be_handed_to_another_tool():
+    """Two shortcuts on one key fire neither, so while the TRACK editor
+    owns D the step shortcut must be off, and D reaches the editor."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QKeySequence, QShortcut
+    app, controller, controls, win = _shown_in_window()
+    deleted = []
+    track_d = QShortcut(QKeySequence("D"), win)
+    track_d.activated.connect(lambda: deleted.append(True))
+
+    track_d.setEnabled(True)
+    controls.set_letter_step_keys_enabled(False)
+    _press(app, win, Qt.Key.Key_D)
+    assert deleted == [True]
+    assert controller.current_time == datetime(2026, 4, 16, 12, 0, tzinfo=timezone.utc)
+
+    track_d.setEnabled(False)
+    controls.set_letter_step_keys_enabled(True)
+    _press(app, win, Qt.Key.Key_D)
+    assert deleted == [True]
+    assert controller.current_time == datetime(2026, 4, 16, 12, 3, tzinfo=timezone.utc)
+    win.close()

@@ -17,7 +17,8 @@ _METHODS = [
     "_refresh_track_controls", "_set_track_points", "_on_track_point_add", "_on_track_point_moved",
     "_on_track_point_select", "_delete_selected_track_point", "_undo_track_edit", "_redo_track_edit",
     "_load_track_file", "_reset_track_to_original", "_on_clear_track_requested",
-    "_shortcut_focus_is_text_entry",
+    "_shortcut_focus_is_text_entry", "_delete_track_point", "_on_track_marker_add",
+    "_on_track_marker_rename", "_on_track_marker_remove", "_add_track_point_at_marker",
 ]
 
 _MESO_VIEW_CSV = """point_id,time,lat,lon,source,case_id,track_file_kind,edited_at
@@ -42,6 +43,15 @@ class _Map:
         self.geojson = json.loads(text)
 
 
+class _MarkerMap(_Map):
+    def __init__(self):
+        super().__init__()
+        self.marker = "unset"
+
+    def set_track_marker(self, marker):
+        self.marker = None if marker is None else dict(marker)
+
+
 class _Clock:
     def __init__(self, now):
         self.current_time = now
@@ -56,7 +66,8 @@ class _Button:
 def _window(tmp_path, monkeypatch, now=datetime(2024, 4, 27, 20, 0, tzinfo=timezone.utc)):
     stub_cls = type("TrackWindow", (), {name: MainWindow.__dict__[name] for name in _METHODS})
     w = stub_cls()
-    w.map_widget = _Map()
+    w.map_widget = _MarkerMap()
+    w._track_marker = None
     w._time_ctrl = _Clock(now)
     w.status_msg_label = _Label()
     w.track_controls = TrackControls()
@@ -114,6 +125,7 @@ def test_dragging_a_point_retimes_it_unless_alt_is_held(tmp_path, monkeypatch):
 def test_delete_undo_and_redo(tmp_path, monkeypatch):
     w = _window(tmp_path, monkeypatch)
     w._on_track_point_add(35.0, -97.0)
+    w._time_ctrl.current_time += timedelta(minutes=2)
     w._on_track_point_add(35.1, -97.1)
     w._on_track_point_select(1)
     w._delete_selected_track_point()
@@ -186,3 +198,82 @@ def test_clear_starts_a_new_file_and_keeps_the_old_one(tmp_path, monkeypatch):
     assert w._track_points == [] and w._track_saved_path is None and first.exists()
     w._on_track_point_add(35.2, -97.2)
     assert w._track_saved_path != first                   # same minute, new file
+
+
+def test_clicking_at_a_frame_that_has_a_point_moves_that_point(tmp_path, monkeypatch):
+    """MESO-VIEW's way to refine an earlier point: step back to its frame
+    and click -- one point per frame, never a stacked duplicate."""
+    w = _window(tmp_path, monkeypatch)
+    w._on_track_point_add(35.0, -97.0)                 # 20:00
+    w._time_ctrl.current_time += timedelta(minutes=4)
+    w._on_track_point_add(35.1, -97.1)                 # 20:04
+    w._time_ctrl.current_time -= timedelta(minutes=4)  # step back to 20:00
+
+    w._on_track_point_add(35.02, -97.03)
+    assert [(p.point_id, p.lat) for p in w._track_points] == [(1, 35.02), (2, 35.1)]
+    assert w._track_selected_id == 1 and "moved point 1" in w.status_msg_label.text
+    w._undo_track_edit()
+    assert w._track_points[0].lat == 35.0
+
+
+def test_a_single_session_marker_and_adding_a_point_at_it(tmp_path, monkeypatch):
+    w = _window(tmp_path, monkeypatch)
+    w._add_track_point_at_marker()
+    assert w._track_points == [] and "no marker" in w.status_msg_label.text
+
+    w._on_track_marker_add(35.3, -97.3)
+    w._on_track_marker_add(35.4, -97.4)                # replaces: only ever one
+    assert w.map_widget.marker == {"lat": 35.4, "lon": -97.4, "label": "M1"}
+
+    w._add_track_point_at_marker()
+    assert (w._track_points[0].lat, w._track_points[0].lon) == (35.4, -97.4)
+    assert list(tmp_path.glob("*marker*")) == []       # the marker is never saved
+
+    w._on_track_marker_remove()
+    assert w._track_marker is None and w.map_widget.marker is None
+
+
+def test_renaming_the_marker_keeps_its_label_when_moved(tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QInputDialog
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("meso A", True))
+    w = _window(tmp_path, monkeypatch)
+    w._on_track_marker_add(35.3, -97.3)
+    w._on_track_marker_rename()
+    w._on_track_marker_add(35.5, -97.5)
+    assert w.map_widget.marker["label"] == "meso A"
+
+
+def test_right_click_delete_removes_that_point(tmp_path, monkeypatch):
+    w = _window(tmp_path, monkeypatch)
+    w._on_track_point_add(35.0, -97.0)
+    w._time_ctrl.current_time += timedelta(minutes=2)
+    w._on_track_point_add(35.1, -97.1)
+    w._delete_track_point(1)
+    assert [p.point_id for p in w._track_points] == [2]
+
+
+class _Radar:
+    def __init__(self, codes, current):
+        self.codes, self.product = codes, current
+
+    def current_product(self):
+        return self.product
+
+    def set_current_product(self, code):
+        if code in self.codes:
+            self.product = code
+
+
+@pytest.mark.parametrize("codes, start, flipped", [
+    (["reflectivity", "velocity", "differential_reflectivity"], "reflectivity", "velocity"),  # archive WSR-88D
+    (["reflectivity", "velocity", "differential_reflectivity"], "velocity", "reflectivity"),
+    (["reflectivity", "velocity", "differential_reflectivity"], "differential_reflectivity", "reflectivity"),
+    (["DBZ", "VEL", "ZDR"], "DBZ", "VEL"),                                                     # NOXP
+    (["N0B", "N0U"], "N0U", "N0B"),                                                            # live
+])
+def test_r_flips_reflectivity_and_velocity_for_every_radar_source(codes, start, flipped):
+    w = type("W", (), {"_toggle_radar_product_shortcut": MainWindow.__dict__["_toggle_radar_product_shortcut"],
+                       "_shortcut_focus_is_text_entry": lambda self: False})()
+    w.radar_controls = _Radar(codes, start)
+    w._toggle_radar_product_shortcut()
+    assert w.radar_controls.product == flipped

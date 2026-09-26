@@ -1452,6 +1452,30 @@ Missing certificates cause MQTT to fail silently — all other features remain o
 | **Ctrl+E** | Toggle error log panel |
 | **Right-click** | Finish drawing or measurement in progress |
 
+**Archive playback**
+
+| Key | Action |
+|-----|--------|
+| **Space** | Play / pause |
+| **← / →**, **, / .**, **< / >** | Previous / next radar frame |
+| **A / D** | Previous / next radar frame (except while TRACK is on; see below) |
+| **Home / End** | Step back / forward one minute (10 s in precision mode) |
+| **R** or **V** | Switch between reflectivity and velocity |
+
+**Storm tracking (TRACK on)**
+
+| Key / action | Action |
+|-----|--------|
+| **Click** | Place the storm centre at the current time; if a point already exists at this frame, it moves there instead (step back with **,** to refine an earlier point) |
+| **Drag a point** | Move it and give it the current time; hold **Alt/Option** to keep its time |
+| **Right-click** | Add or move the reference marker; on the marker, rename or remove it; on a point, select or delete it |
+| **Shift** + click/drag | Don't snap onto the reference marker |
+| **A** | Add a point at the reference marker |
+| **D**, **Delete**, **Backspace** | Delete the selected point |
+| **Ctrl+Z / Ctrl+Shift+Z** | Undo / redo |
+
+The reference marker (one at a time, like MESO-VIEW's review marker) is a precision aid: points clicked or dragged within about 20 px of it snap exactly onto it. It is not saved with the track.
+
 ---
 
 ## 17. Performance Tuning

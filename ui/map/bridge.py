@@ -30,6 +30,10 @@ class MapBridge(QObject):
     track_point_add_requested    = pyqtSignal(float, float)  # lat, lon
     track_point_selected         = pyqtSignal(int)           # point_id
     track_point_moved            = pyqtSignal(int, float, float, bool)  # point_id, lat, lon, keep_time
+    track_point_delete_requested = pyqtSignal(int)           # point_id
+    track_marker_add_requested   = pyqtSignal(float, float)  # lat, lon
+    track_marker_rename_requested = pyqtSignal()
+    track_marker_remove_requested = pyqtSignal()
 
     @pyqtSlot(float, float)
     def on_map_click(self, lat: float, lon: float):
@@ -89,6 +93,22 @@ class MapBridge(QObject):
     @pyqtSlot(int, float, float, bool)
     def on_track_point_move(self, point_id: int, lat: float, lon: float, keep_time: bool):
         self.track_point_moved.emit(point_id, lat, lon, keep_time)
+
+    @pyqtSlot(int)
+    def on_track_point_delete(self, point_id: int):
+        self.track_point_delete_requested.emit(point_id)
+
+    @pyqtSlot(float, float)
+    def on_track_marker_add(self, lat: float, lon: float):
+        self.track_marker_add_requested.emit(lat, lon)
+
+    @pyqtSlot()
+    def on_track_marker_rename(self):
+        self.track_marker_rename_requested.emit()
+
+    @pyqtSlot()
+    def on_track_marker_remove(self):
+        self.track_marker_remove_requested.emit()
 
     @pyqtSlot(float, float)
     def on_map_dblclick(self, lat: float, lon: float):

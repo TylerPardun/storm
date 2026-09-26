@@ -127,9 +127,15 @@ class ArchiveRadarFetcher(QObject):
 
         self._current_archive_time: Optional[datetime] = None
         self._last_emitted_key: Optional[tuple] = None  # suppress re-render of same scan
-        self._fetch_lock = threading.Lock()
+        # re-entrant: cancelling a queued Future runs its done-callback
+        # (_forget_work, which takes this lock) in the cancelling thread
+        self._fetch_lock = threading.RLock()
         self._pending_fetches: set[datetime] = set()
         self._pending_decodes: set[tuple] = set()
+        # queued-but-maybe-not-started work, so a seek can drop what's stale:
+        # ("fetch", scan_time) or ("decode", cache_key) -> Future
+        self._queued: dict[tuple, object] = {}
+        self._target_scan: Optional[datetime] = None
 
 
     @property
@@ -142,12 +148,41 @@ class ArchiveRadarFetcher(QObject):
             if not self._closed.is_set():
                 signal.emit(*args)
 
-    def _submit(self, task, *args):
+    def _submit(self, work_key, task, *args):
         try:
-            self._fetch_executor.submit(task, *args)
+            future = self._fetch_executor.submit(task, *args)
         except RuntimeError:
             if not self._closed.is_set():
                 raise
+            return
+        with self._fetch_lock:
+            if not future.done():
+                self._queued[work_key] = future
+        future.add_done_callback(lambda f, k=work_key: self._forget_work(k, f))
+
+    def _forget_work(self, work_key, future) -> None:
+        with self._fetch_lock:
+            if self._queued.get(work_key) is future:
+                del self._queued[work_key]
+
+    def _drop_stale_work(self, scan_time: datetime) -> None:
+        """After a seek, cancel queued work that hasn't started for any scan
+        but the one now wanted, so it isn't stuck behind the old position's
+        downloads. Running work finishes. The buffer is then re-queued
+        around the new position, nearest first."""
+        with self._fetch_lock:
+            for work_key, future in list(self._queued.items()):
+                target = work_key[1] if work_key[0] == "fetch" else work_key[1][0]
+                if target == scan_time or not future.cancel():
+                    continue
+                self._queued.pop(work_key, None)   # the cancel callback may have removed it
+                if work_key[0] == "fetch":
+                    self._pending_fetches.discard(target)
+                    if self._raw_cache.get(target, 0) is None:   # never fetched
+                        del self._raw_cache[target]
+                else:
+                    self._pending_decodes.discard(work_key[1])
+            self._update_loading_state()
 
     def shutdown(self) -> None:
         with self._signal_lock:
@@ -223,6 +258,9 @@ class ArchiveRadarFetcher(QObject):
         scan_time = self._nearest_scan_before(archive_time)
         if scan_time is None:
             return
+        if scan_time != self._target_scan:
+            self._target_scan = scan_time
+            self._drop_stale_work(scan_time)
         cache_key = self._decode_key(scan_time)
         scan = self._decoded_cache.get(cache_key)
         if scan is not None:
@@ -324,7 +362,7 @@ class ArchiveRadarFetcher(QObject):
             self._raw_cache[scan_time] = None
 
         self._emit(self.loading_changed, True)
-        self._submit(self._fetch_raw_then_decode, scan_time)
+        self._submit(("fetch", scan_time), self._fetch_raw_then_decode, scan_time)
 
     def _ensure_decoded(self, scan_time: datetime) -> None:
         cache_key = self._decode_key(scan_time)
@@ -337,7 +375,7 @@ class ArchiveRadarFetcher(QObject):
                 return
             self._pending_decodes.add(cache_key)
         self._emit(self.loading_changed, True)
-        self._submit(self._decode_cached_scan, scan_time, cache_key)
+        self._submit(("decode", cache_key), self._decode_cached_scan, scan_time, cache_key)
 
     def _fetch_raw_then_decode(self, scan_time: datetime) -> None:
         cache_key = self._decode_key(scan_time)
@@ -623,7 +661,8 @@ class ArchiveRadarFetcher(QObject):
         pos = idx.index(current_scan_time)
         lo = max(0, pos - BUFFER_BEFORE)
         hi = min(len(idx) - 1, pos + BUFFER_AFTER)
-        for i in range(lo, hi + 1):
+        # nearest first, and ahead before behind (playback runs forward)
+        for i in sorted(range(lo, hi + 1), key=lambda i: (abs(i - pos), i < pos)):
             t = idx[i]
             if self._raw_cache.get(t) is None and t not in self._pending_fetches:
                 self._ensure_fetched(t)

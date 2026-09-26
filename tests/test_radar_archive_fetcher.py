@@ -235,3 +235,37 @@ def test_a_failed_dealias_falls_back_to_raw_and_says_so(monkeypatch):
                            velocity=raf.VelocityOptions(dealias=True))
     assert scan.product == "VEL" and scan.velocity_processing == "raw: dealiasing failed"
     fetcher.shutdown()
+
+
+def test_a_seek_drops_stale_queued_downloads_and_fetches_the_new_scan_first(monkeypatch):
+    import threading, time
+    from datetime import timedelta
+    fetcher = _fetcher()
+    times = [_SCAN_TIME + timedelta(minutes=5 * i) for i in range(40)]
+    fetcher._index = list(times)
+    gate, started, lock = threading.Event(), [], threading.Lock()
+
+    def slow_download(scan_time):
+        with lock:
+            started.append(scan_time)
+        gate.wait(5)
+        return None
+    monkeypatch.setattr(fetcher, "_download_scan", slow_download)
+
+    fetcher.on_time_changed(times[2])                 # queues scan 2 and its buffer
+    deadline = time.time() + 2
+    while len(started) < 2 and time.time() < deadline:
+        time.sleep(0.01)
+    busy = list(started)                              # both workers now blocked
+    fetcher.on_time_changed(times[30] + timedelta(seconds=10))
+    waiting = [key[1] for key, future in fetcher._queued.items() if not future.running()]
+    assert waiting and all(t >= times[26] for t in waiting)   # nothing waiting for the old position
+    gate.set()
+    deadline = time.time() + 5
+    while len(started) < len(busy) + 9 and time.time() < deadline:
+        time.sleep(0.01)
+    after = started[len(busy):]
+    assert after[0] == times[30]
+    assert after[1:5] == [times[31], times[29], times[32], times[28]]   # nearest first, ahead first
+    assert not set(after) & set(times[:26])           # the old position's scans were dropped
+    fetcher.shutdown()

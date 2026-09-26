@@ -29,6 +29,7 @@ class MapBridge(QObject):
     private_pin_route_requested = pyqtSignal(float, float, str)
     track_point_add_requested    = pyqtSignal(float, float)  # lat, lon
     track_point_selected         = pyqtSignal(int)           # point_id
+    track_point_moved            = pyqtSignal(int, float, float, bool)  # point_id, lat, lon, keep_time
 
     @pyqtSlot(float, float)
     def on_map_click(self, lat: float, lon: float):
@@ -84,6 +85,10 @@ class MapBridge(QObject):
     @pyqtSlot(int)
     def on_track_point_select(self, point_id: int):
         self.track_point_selected.emit(point_id)
+
+    @pyqtSlot(int, float, float, bool)
+    def on_track_point_move(self, point_id: int, lat: float, lon: float, keep_time: bool):
+        self.track_point_moved.emit(point_id, lat, lon, keep_time)
 
     @pyqtSlot(float, float)
     def on_map_dblclick(self, lat: float, lon: float):

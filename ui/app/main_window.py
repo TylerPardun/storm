@@ -74,7 +74,10 @@ from core.scan_sector import ScanSector, feature_collection
 from core.drawing import DrawingAnnotation, DRAWING_TYPE_MAP, FRONT_TYPE_KEYS
 from core.observation import Observation
 from core.vehicle import Vehicle
-from core.storm_track import TrackPoint, track_filename, default_track_dir, write_track_csv, write_track_excel
+from core.storm_track import (
+    TrackPoint, case_id_for, default_track_dir, new_track_path, read_track_file,
+    track_filename, write_track_csv, write_track_excel,
+)
 from network.mqtt_client import MQTTClient
 from network.annotation_sync import AnnotationSync
 from network.storm_cone_sync import StormConeSync
@@ -1724,10 +1727,24 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.btn_track.toggled.connect(self._on_track_edit_toggled)
             self.track_controls.export_requested.connect(self._export_track_as)
             self.track_controls.clear_requested.connect(self._on_clear_track_requested)
+            self.track_controls.load_requested.connect(self._load_track_file)
+            self.track_controls.reset_requested.connect(self._reset_track_to_original)
+            self.track_controls.undo_requested.connect(self._undo_track_edit)
+            self.track_controls.redo_requested.connect(self._redo_track_edit)
+            self.track_controls.layers_changed.connect(self.map_widget.set_track_layers_visible)
             self.map_widget.track_point_add_requested.connect(self._on_track_point_add)
             self.map_widget.track_point_selected.connect(self._on_track_point_select)
-            self._track_delete_shortcut = QShortcut(QKeySequence("D"), self)
-            self._track_delete_shortcut.activated.connect(self._delete_selected_track_point)
+            self.map_widget.track_point_moved.connect(self._on_track_point_moved)
+            # D, Delete and Backspace all delete the selected point, as in MESO-VIEW
+            self._track_delete_shortcuts = []
+            for key in ("D", "Delete", "Backspace"):
+                shortcut = QShortcut(QKeySequence(key), self)
+                shortcut.activated.connect(self._delete_selected_track_point)
+                self._track_delete_shortcuts.append(shortcut)
+            self._track_undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+            self._track_undo_shortcut.activated.connect(self._undo_track_edit)
+            self._track_redo_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
+            self._track_redo_shortcut.activated.connect(self._redo_track_edit)
             self._track_toggle_shortcut_r = QShortcut(QKeySequence("R"), self)
             self._track_toggle_shortcut_r.activated.connect(self._toggle_radar_product_shortcut)
             self._track_toggle_shortcut_v = QShortcut(QKeySequence("V"), self)
@@ -1736,6 +1753,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # __init__, before _begin_archive_startup creates it) -- that
             # connection is made there instead, guarded by hasattr(self, "btn_track").
             self._init_track_state()
+            self._refresh_track_controls()
 
         self.btn_surface = self._toolbar_toggle(
             "SURFACE", "Surface observations", tb
@@ -4927,11 +4945,17 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     # See core/storm_track.py for the data model and file writers.
 
     def _init_track_state(self) -> None:
+        # No track until the user places a point or loads a file.
         self._track_points: list[TrackPoint] = []
         self._track_next_id = 1
         self._track_selected_id = None
-        self._track_saved_path = None
+        self._track_saved_path = None      # where edits autosave
         self._track_edit_active = False
+        self._track_loaded_path = None     # file the track was loaded from, if any
+        self._track_original: list[TrackPoint] = []  # as loaded, for Reset to Original
+        self._track_case_id = ""           # MESO-VIEW case ID carried by the file
+        self._track_undo: list[list[TrackPoint]] = []
+        self._track_redo: list[list[TrackPoint]] = []
 
     def _on_track_edit_toggled(self, checked: bool) -> None:
         self._track_edit_active = checked
@@ -4990,17 +5014,48 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.map_widget.set_track_geojson(json.dumps({"type": "FeatureCollection", "features": features}))
 
     def _autosave_track(self) -> None:
+        """Save after every edit: back into the file a track was loaded from
+        (as MESO-VIEW does), otherwise to a new file named from the first
+        point that never overwrites an existing one."""
         if not self._track_points:
             return
         if self._track_saved_path is None:
-            self._track_saved_path = default_track_dir() / track_filename(self._track_points[0].time)
+            self._track_saved_path = new_track_path(min(p.time for p in self._track_points))
         try:
-            write_track_csv(self._track_points, self._track_saved_path)
+            if self._track_saved_path.suffix.lower() == ".xlsx":
+                write_track_excel(self._track_points, self._track_saved_path, self._track_case_id)
+            else:
+                write_track_csv(self._track_points, self._track_saved_path, self._track_case_id)
         except Exception as exc:
             log.error("Track autosave failed: %s", exc)
             self.status_msg_label.setText(f"Track autosave failed: {exc}")
-        if hasattr(self, "track_controls"):
-            self.track_controls.set_point_count(len(self._track_points))
+
+    def _refresh_track_controls(self) -> None:
+        if not hasattr(self, "track_controls"):
+            return
+        self.track_controls.set_point_count(len(self._track_points))
+        if self._track_saved_path is not None:
+            self.track_controls.set_file(f"Saving to {self._track_saved_path}")
+        else:
+            self.track_controls.set_file("New track — nothing saved yet")
+        self.track_controls.set_edit_state(
+            loaded=self._track_loaded_path is not None,
+            can_undo=bool(self._track_undo), can_redo=bool(self._track_redo),
+        )
+
+    def _set_track_points(self, points: list[TrackPoint], *, record_undo: bool = True) -> None:
+        """Replace the track with `points` as one undoable edit, then redraw,
+        autosave and refresh the panel."""
+        if record_undo:
+            self._track_undo.append(list(self._track_points))
+            self._track_redo.clear()
+        self._track_points = sorted(points, key=lambda p: p.time)
+        self._track_next_id = max((p.point_id for p in self._track_points), default=0) + 1
+        if self._track_selected_id not in {p.point_id for p in self._track_points}:
+            self._track_selected_id = None
+        self._push_track_geojson()
+        self._autosave_track()
+        self._refresh_track_controls()
 
     def _on_track_point_add(self, lat: float, lon: float) -> None:
         radar_site, product, product_label, tilt_deg = self._current_track_radar_context()
@@ -5011,13 +5066,26 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             radar_site=radar_site, product=product, product_label=product_label,
             tilt_deg=tilt_deg,
         )
-        self._track_next_id += 1
-        is_first_point = not self._track_points
-        self._track_points.append(point)
-        self._push_track_geojson()
-        self._autosave_track()
+        is_first_point = self._track_saved_path is None
+        self._set_track_points(self._track_points + [point])
         if is_first_point and self._track_saved_path is not None:
             self.status_msg_label.setText(f"Track saved to {self._track_saved_path}")
+
+    def _on_track_point_moved(self, point_id: int, lat: float, lon: float, keep_time: bool) -> None:
+        """A dragged point takes the new position and, unless Alt/Option was
+        held, the current archive time -- MESO-VIEW's "the storm centre is
+        here, now" (source moved_retimed / moved_position_only)."""
+        if not self._track_edit_active:
+            return
+        from dataclasses import replace
+        moved = []
+        for p in self._track_points:
+            if p.point_id == point_id:
+                p = replace(p, lat=lat, lon=lon,
+                            time=p.time if keep_time else self._time_ctrl.current_time,
+                            source="moved_position_only" if keep_time else "moved_retimed")
+            moved.append(p)
+        self._set_track_points(moved)
 
     def _on_track_point_select(self, point_id: int) -> None:
         self._track_selected_id = point_id
@@ -5028,12 +5096,84 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             return
         if not self._track_edit_active or self._track_selected_id is None:
             return
-        self._track_points = [
-            p for p in self._track_points if p.point_id != self._track_selected_id
-        ]
+        self._set_track_points([p for p in self._track_points if p.point_id != self._track_selected_id])
+
+    def _undo_track_edit(self) -> None:
+        if self._shortcut_focus_is_text_entry() or not self._track_undo:
+            return
+        self._track_redo.append(list(self._track_points))
+        self._set_track_points(self._track_undo.pop(), record_undo=False)
+
+    def _redo_track_edit(self) -> None:
+        if self._shortcut_focus_is_text_entry() or not self._track_redo:
+            return
+        self._track_undo.append(list(self._track_points))
+        self._set_track_points(self._track_redo.pop(), record_undo=False)
+
+    def _load_track_file(self) -> None:
+        """Open an existing track (STORM or MESO-VIEW, CSV or Excel). Edits
+        then save back into that file; Reset to Original returns to it as
+        loaded."""
+        from pathlib import Path
+        from PyQt6.QtWidgets import QMessageBox
+        if self._track_points:
+            reply = QMessageBox.question(
+                self, "Load Track",
+                "Replace the current track with one from a file? The current track stays saved "
+                f"in {self._track_saved_path}." if self._track_saved_path else
+                "Replace the current track with one from a file?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Track", str(default_track_dir()), "Track files (*.csv *.xlsx);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            points = read_track_file(Path(path))
+        except Exception as exc:
+            QMessageBox.warning(self, "Load Track", f"Couldn't read a track from {Path(path).name}:\n{exc}")
+            return
+        if not points:
+            QMessageBox.warning(self, "Load Track", f"{Path(path).name} has no usable track points.")
+            return
+        self._track_loaded_path = Path(path)
+        self._track_saved_path = Path(path)
+        self._track_case_id = case_id_for(path)
+        self._track_original = list(points)
+        self._track_undo.clear()
+        self._track_redo.clear()
         self._track_selected_id = None
+        self._track_points = sorted(points, key=lambda p: p.time)
+        self._track_next_id = max(p.point_id for p in points) + 1
         self._push_track_geojson()
-        self._autosave_track()
+        self._refresh_track_controls()
+        start, end = self._time_ctrl.window
+        inside = [p for p in points if start <= p.time < end]
+        message = f"Loaded {len(points)} track points from {Path(path).name}"
+        if not inside:
+            first = min(p.time for p in points)
+            message += f" -- none fall in this session ({first:%Y-%m-%d} track); open that date to review it"
+        elif len(inside) < len(points):
+            message += f" ({len(points) - len(inside)} outside this session)"
+        self.status_msg_label.setText(message)
+
+    def _reset_track_to_original(self) -> None:
+        if self._track_loaded_path is None:
+            return
+        from PyQt6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self, "Reset Track",
+            f"Return the track to how it was when loaded from {self._track_loaded_path.name}? "
+            "This can be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._set_track_points(list(self._track_original))
 
     def _shortcut_focus_is_text_entry(self) -> bool:
         w = QApplication.focusWidget()
@@ -5076,9 +5216,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if p.suffix.lower() not in (".csv", ".xlsx"):
             p = p.with_suffix(".xlsx" if "xlsx" in selected_filter else ".csv")
         if p.suffix.lower() == ".xlsx":
-            write_track_excel(self._track_points, p)
+            write_track_excel(self._track_points, p, self._track_case_id)
         else:
-            write_track_csv(self._track_points, p)
+            write_track_csv(self._track_points, p, self._track_case_id)
         self.status_msg_label.setText(f"Track exported to {p}")
 
     def _on_clear_track_requested(self) -> None:
@@ -5086,18 +5226,18 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             from PyQt6.QtWidgets import QMessageBox
             reply = QMessageBox.question(
                 self, "Clear Track",
-                "Remove all track points? This cannot be undone.",
+                (f"Start a new track? The current one stays saved in {self._track_saved_path}."
+                 if self._track_saved_path else "Remove all track points? This cannot be undone."),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
-        self._track_points = []
-        self._track_next_id = 1
-        self._track_selected_id = None
-        self._track_saved_path = None
+        # a fresh start: the saved file stays on disk; the next point begins a new one
+        self._init_track_state()
+        self._track_edit_active = self.btn_track.isChecked()
         self._push_track_geojson()
-        self.track_controls.set_point_count(0)
+        self._refresh_track_controls()
         self.track_controls.set_status("")
         self.status_msg_label.setText("Track cleared")
 

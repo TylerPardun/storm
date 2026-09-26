@@ -452,7 +452,7 @@
   <div id="damage-path-tooltip"></div>
 
   <!-- ── Storm-Track Edit-Mode Banner ── -->
-  <div id="track-edit-banner">TRACK EDIT — click to add a point, click a point to select, D to delete</div>
+  <div id="track-edit-banner">TRACK EDIT — click to add · drag a point to move (Alt keeps its time) · D deletes · Ctrl+Z undoes</div>
 
   <script>
     window.onerror = function(msg, src, line) {
@@ -520,6 +520,7 @@
     window.stormSetPrivatePinOwnLocation = _stormNoop;
     window.stormSetTrackGeoJSON = _stormNoop;
     window.stormSetTrackEditMode = _stormNoop;
+    window.stormSetTrackLayersVisible = _stormNoop;
     // cwa overlay hooks (populated when the map loads)
     window.stormSetCwaGeoJSON = _stormNoop;
     window.stormSetCwaVisible = _stormNoop;
@@ -1291,7 +1292,52 @@
         if (window._trackEditActive) map.getCanvas().style.cursor = 'pointer';
       });
       map.on('mouseleave', 'storm-track-points', function() {
-        if (window._trackEditActive) map.getCanvas().style.cursor = 'crosshair';
+        if (window._trackEditActive && !window._trackDrag) map.getCanvas().style.cursor = 'crosshair';
+      });
+
+      // Drag a track point to move it (as in MESO-VIEW): the point and line
+      // follow the cursor locally; on release Python gets the new position,
+      // plus whether Alt/Option was held (keep the point's time rather than
+      // retiming it to the current archive time).
+      window._trackDrag = null;
+      window._trackDragEnd = null;  // {x, y, t} where the last drag was released
+      map.on('mousedown', 'storm-track-points', function(e) {
+        if (!window._trackEditActive || !e.features || !e.features.length) return;
+        e.preventDefault();  // no map pan for this gesture
+        window._trackDrag = {id: e.features[0].properties.point_id, moved: false};
+        if (bridge) bridge.on_track_point_select(window._trackDrag.id);
+      });
+      map.on('mousemove', function(e) {
+        var drag = window._trackDrag;
+        if (!drag) return;
+        drag.moved = true;
+        map.getCanvas().style.cursor = 'grabbing';
+        var data = window._trackGeoJSON;
+        if (!data) return;
+        var coords = [];
+        data.features.forEach(function(f) {
+          if (f.geometry.type !== 'Point') return;
+          if (f.properties.point_id === drag.id) f.geometry.coordinates = [e.lngLat.lng, e.lngLat.lat];
+          coords.push(f.geometry.coordinates);
+        });
+        data.features.forEach(function(f) {
+          if (f.geometry.type === 'LineString') f.geometry.coordinates = coords;
+        });
+        var src = map.getSource('storm-track');
+        if (src) src.setData(data);
+      });
+      map.on('mouseup', function(e) {
+        var drag = window._trackDrag;
+        if (!drag) return;
+        window._trackDrag = null;
+        map.getCanvas().style.cursor = window._trackEditActive ? 'crosshair' : '';
+        if (!drag.moved) return;
+        // The browser may send a click for the drag gesture itself, at the
+        // release point; that one must not add a point. Recognised by place
+        // and time rather than a flag, since often no such click comes.
+        window._trackDragEnd = {x: e.point.x, y: e.point.y, t: Date.now()};
+        var keepTime = !!(e.originalEvent && e.originalEvent.altKey);
+        if (bridge) bridge.on_track_point_move(drag.id, e.lngLat.lat, e.lngLat.lng, keepTime);
       });
 
       map.addSource('scan-sectors', {type:'geojson', data:{type:'FeatureCollection',features:[]}});
@@ -2140,6 +2186,10 @@
       }
       // in track-edit mode: hit an existing point to select it, otherwise add a new one.
       if (window._trackEditActive) {
+        var _dragEnd = window._trackDragEnd;
+        window._trackDragEnd = null;
+        if (_dragEnd && Date.now() - _dragEnd.t < 400 &&
+            Math.abs(e.point.x - _dragEnd.x) < 4 && Math.abs(e.point.y - _dragEnd.y) < 4) return;
         if (map.getLayer('storm-track-points')) {
           const trackHits = map.queryRenderedFeatures(e.point, {layers: ['storm-track-points']});
           if (trackHits.length > 0) {
@@ -3852,8 +3902,16 @@
       var src = map.getSource('storm-track');
       if (!src) return;
       try {
-        src.setData(JSON.parse(geojsonStr));
+        window._trackGeoJSON = JSON.parse(geojsonStr);  // kept for dragging
+        src.setData(window._trackGeoJSON);
       } catch(e) { console.warn('stormSetTrackGeoJSON:', e); }
+    };
+
+    window.stormSetTrackLayersVisible = function(lineVisible, pointsVisible) {
+      if (map.getLayer('storm-track-line'))
+        map.setLayoutProperty('storm-track-line', 'visibility', lineVisible ? 'visible' : 'none');
+      if (map.getLayer('storm-track-points'))
+        map.setLayoutProperty('storm-track-points', 'visibility', pointsVisible ? 'visible' : 'none');
     };
 
     window.stormSetTrackEditMode = function(active) {

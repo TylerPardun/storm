@@ -50,6 +50,7 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
     _cwa_parsed           = pyqtSignal(object)
     track_point_add_requested = pyqtSignal(float, float)  # lat, lon
     track_point_selected      = pyqtSignal(int)           # point_id
+    track_point_moved         = pyqtSignal(int, float, float, bool)  # point_id, lat, lon, keep_time
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -122,6 +123,7 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         self.bridge.map_pick_for_route.connect(self.map_pick_for_route)
         self.bridge.track_point_add_requested.connect(self.track_point_add_requested)
         self.bridge.track_point_selected.connect(self.track_point_selected)
+        self.bridge.track_point_moved.connect(self.track_point_moved)
 
         # queue for JS calls that arrive before MapLibre has fully loaded.
         self._map_ready = False
@@ -722,6 +724,12 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
 
     def set_track_edit_mode(self, active: bool) -> None:
         self.run_js(f"if(window.stormSetTrackEditMode) stormSetTrackEditMode({'true' if active else 'false'});")
+
+    def set_track_layers_visible(self, line: bool, points: bool) -> None:
+        self.run_js(
+            f"if(window.stormSetTrackLayersVisible) stormSetTrackLayersVisible("
+            f"{'true' if line else 'false'}, {'true' if points else 'false'});"
+        )
 
     def set_asos_bbox_mode(self, active: bool) -> None:
         """Toggle JS rectangle-selection mode for ASOS bbox selection."""

@@ -114,6 +114,13 @@ class RawLidarControls(QWidget):
         # mode starts (main_window._begin_archive_startup), not on open.
         col.addWidget(self._status_label)
 
+        # truck lidar orientation: shown when the file's heading was missing
+        # (estimated) or unknown, so the data problem is visible and reportable
+        self._orientation_label = QLabel()
+        self._orientation_label.setWordWrap(True)
+        self._orientation_label.hide()
+        col.addWidget(self._orientation_label)
+
         outer.addWidget(self._drawer)
 
     def toggle_drawer(self, checked: bool) -> None:
@@ -240,6 +247,7 @@ class RawLidarControls(QWidget):
         if self._btn_map.isChecked():
             self._btn_map.setChecked(False)
         self.set_status(self._availability_status)
+        self.set_orientation_notice(None)
         self._field_row.hide()
         self._btn_locate.hide()
         self._scale_label.clear()
@@ -288,7 +296,24 @@ class RawLidarControls(QWidget):
         site_name = rays.provenance.get("metadata", {}).get("Site_description")
         if site_name:
             self.set_status(str(site_name))
+        self.set_orientation_notice(rays.provenance)
         return True
+
+    def set_orientation_notice(self, provenance: dict | None) -> None:
+        """Amber when a missing truck heading was estimated, red when the
+        scan couldn't be oriented at all; hidden when the file's own
+        orientation is used."""
+        provenance = provenance or {}
+        if provenance.get("heading_missing_in_file"):
+            color, text = "#F5B942", "⚠ " + provenance.get("azimuth_reference", "")
+        elif provenance.get("north_referenced") is False:
+            color, text = "#F87171", "⚠ " + provenance.get("azimuth_reference", "")
+        else:
+            self._orientation_label.hide()
+            return
+        self._orientation_label.setStyleSheet(f"color: {color}; font-size: 10px;")
+        self._orientation_label.setText(text)
+        self._orientation_label.show()
 
     def _on_field_changed(self, _index=None):
         self._scale_label.clear()

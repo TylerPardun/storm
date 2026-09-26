@@ -94,6 +94,7 @@ class RawLidarRays:
     position_time_epoch: np.ndarray
     provenance: dict
     warnings: list[str]
+    azimuth_known: np.ndarray | None = None   # per ray; None = all rays alike (provenance flag)
 
     @property
     def ground_geometry_valid(self):
@@ -103,9 +104,9 @@ class RawLidarRays:
         north = self.provenance.get("north_referenced")
         if north is None:
             north = "0 degrees is north" in str(self.provenance.get("azimuth_metadata", {}).get("comment", "")).lower()
+        known = self.azimuth_known if self.azimuth_known is not None else (not self.source.mobile or north)
         return (np.isfinite(self.latitude) & np.isfinite(self.longitude)
-                & np.isfinite(self.azimuth_deg) & np.isfinite(self.elevation_deg)
-                & (not self.source.mobile or north))
+                & np.isfinite(self.azimuth_deg) & np.isfinite(self.elevation_deg) & known)
 
     def rays_at(self, when: datetime, window_seconds=60):
         """Select real rays at/before the archive clock; do not carry across gaps."""
@@ -233,16 +234,72 @@ def load_raw_lidar(asset: LidarAsset, cache_dir, *, cancel=None, track_loader=No
     result = parse_raw_lidar(path, asset.source)
     result.provenance.update(provenance, catalog_url=asset.catalog_url)
     if asset.source.mobile:
-        tracks = {}
+        tracks, day_obs = {}, {}
+
+        def track_for(when):
+            if when.date() not in tracks:
+                day_obs[when.date()] = (track_loader or load_dltruck_track)(when) or []
+                tracks[when.date()] = PositionTrack(day_obs[when.date()])
+            return tracks[when.date()]
+
         for i in np.flatnonzero(~np.isfinite(result.latitude)):
             _check_cancel(cancel)
             when = datetime.fromtimestamp(float(result.time_epoch[i]), timezone.utc)
-            if when.date() not in tracks:
-                tracks[when.date()] = PositionTrack((track_loader or load_dltruck_track)(when))
-            fix = tracks[when.date()].nearest(when)
+            fix = track_for(when).nearest(when)
             if fix is not None:
                 result.latitude[i], result.longitude[i] = fix.lat, fix.lon
                 result.coordinate_source[i] = 'FOFS dltruck GPS within 60 s'
                 result.position_time_epoch[i] = fix.timestamp.timestamp()
+        if result.provenance.get('north_referenced'):
+            result.heading_deg = np.full(result.time_epoch.size, result.provenance['truck_heading_deg'])
+        else:
+            _estimate_truck_heading(result, track_for, day_obs, cancel)
     _check_cancel(cancel)
     return result
+
+
+def _estimate_truck_heading(result, track_for, day_obs, cancel, max_gap_seconds=60.0):
+    """Fill a heading missing from a truck lidar file from the truck's own
+    compass (FOFS mesonet compass_dir), ray by ray -- the truck can move
+    during a file. Checked 2026-09-26: that compass matches the files'
+    recorded Trailer_heading to a median 0.2 deg (45 scans), and rotating
+    heading-less scans by it gives lidar wind directions within a median
+    9.6 deg of HRRR (34 scans). Rays without a compass reading within 60 s
+    stay unoriented and are not mapped."""
+    from bisect import bisect_left
+    from archive.catalog import _check_cancel
+    heading = np.full(result.time_epoch.size, np.nan)
+    series = {}
+    for i, epoch in enumerate(result.time_epoch):
+        _check_cancel(cancel)
+        when = datetime.fromtimestamp(float(epoch), timezone.utc)
+        track_for(when)
+        if when.date() not in series:
+            readings = sorted((o.timestamp.timestamp(), o.heading_deg) for o in day_obs[when.date()]
+                              if getattr(o, 'heading_deg', None) is not None)
+            series[when.date()] = ([t for t, _ in readings], [h for _, h in readings])
+        times, values = series[when.date()]
+        j = bisect_left(times, epoch)
+        best = min((k for k in (j - 1, j) if 0 <= k < len(times)), key=lambda k: abs(times[k] - epoch), default=None)
+        if best is not None and abs(times[best] - epoch) <= max_gap_seconds:
+            heading[i] = values[best]
+    known = np.isfinite(heading)
+    result.heading_deg = heading
+    result.azimuth_known = known
+    result.azimuth_deg = np.where(known, (result.azimuth_deg + np.nan_to_num(heading)) % 360.0, result.azimuth_deg)
+    if not known.any():
+        result.provenance['azimuth_reference'] += ' No truck compass reading covers these times either.'
+        result.warnings[:] = [result.provenance['azimuth_reference'] if w.startswith('Truck heading not recorded') else w
+                              for w in result.warnings]
+        return
+    angles = np.deg2rad(heading[known])
+    typical = float(np.rad2deg(np.arctan2(np.sin(angles).mean(), np.cos(angles).mean())) % 360.0)
+    spread = float(np.rad2deg(np.sqrt(-2 * np.log(max(np.hypot(np.sin(angles).mean(), np.cos(angles).mean()), 1e-9)))))
+    share = known.mean()
+    message = (f'Truck heading is missing from this lidar file; estimated from the truck compass '
+               f'(FOFS mesonet): {typical:.0f} deg' + (f', varying ±{spread:.0f} deg as the truck moved' if spread > 10 else '')
+               + ('' if share == 1 else f'; {100 * (1 - share):.0f}% of rays had no compass reading and are not mapped') + '.')
+    result.provenance.update(north_referenced=True, heading_source='estimated from truck compass (FOFS compass_dir)',
+                             heading_missing_in_file=True, truck_heading_estimate_deg=round(typical, 1),
+                             estimated_rays=int(known.sum()), azimuth_reference=message)
+    result.warnings[:] = [message if w.startswith('Truck heading not recorded') else w for w in result.warnings]

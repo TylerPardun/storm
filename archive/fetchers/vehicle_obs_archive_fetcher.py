@@ -97,6 +97,7 @@ _PHYSICAL_LIMITS = {
     "sfc_wspd": (0.0, 120.0),
     "sfc_wdir": (0.0, 360.0),
     "pressure": (500.0, 1100.0),
+    "compass_dir": (0.0, 360.0),
 }
 # A dewpoint can't meaningfully exceed the air temperature; allow for the
 # fast and slow sensors disagreeing slightly.
@@ -118,7 +119,7 @@ def _measurement(row: dict, column: str) -> float | None:
         return None
     if column in ("sfc_wspd", "sfc_wdir") and number >= _MISSING_WIND_AT_OR_ABOVE:
         return None
-    if column == "sfc_wdir" and -360.0 < number < 720.0:
+    if column in ("sfc_wdir", "compass_dir") and -360.0 < number < 720.0:
         number %= 360.0  # a few degrees past north either way is still a direction
     low, high = _PHYSICAL_LIMITS[column]
     return number if low <= number <= high else None
@@ -395,6 +396,7 @@ def _parse_vehicle_file(
             wind_speed_ms=_measurement(row, "sfc_wspd"),
             wind_dir_deg=_measurement(row, "sfc_wdir"),
             pressure_mb=_measurement(row, "pressure"),
+            heading_deg=_measurement(row, "compass_dir"),
         ))
 
     observations.sort(key=lambda obs: obs.timestamp)
@@ -502,6 +504,7 @@ def _with_timestamp(obs: Observation, timestamp: datetime) -> Observation:
         vehicle_id=obs.vehicle_id, lat=obs.lat, lon=obs.lon, timestamp=timestamp,
         icon_type=obs.icon_type, temperature_c=obs.temperature_c, dewpoint_c=obs.dewpoint_c,
         wind_speed_ms=obs.wind_speed_ms, wind_dir_deg=obs.wind_dir_deg, pressure_mb=obs.pressure_mb,
+        heading_deg=obs.heading_deg,
     )
 
 

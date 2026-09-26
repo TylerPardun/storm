@@ -17,6 +17,7 @@ class Observation:
         wind_speed_ms=None,
         wind_dir_deg=None,
         pressure_mb=None,
+        heading_deg=None,
     ):
         # assign vehicle id
         self.vehicle_id = vehicle_id
@@ -38,6 +39,8 @@ class Observation:
         self.wind_dir_deg = wind_dir_deg
         # assign pressure (mb/hpa)
         self.pressure_mb = pressure_mb
+        # vehicle compass heading (deg, direction it faces), when recorded
+        self.heading_deg = heading_deg
 
     # factory: create an observation timestamped to now (utc)
     @classmethod

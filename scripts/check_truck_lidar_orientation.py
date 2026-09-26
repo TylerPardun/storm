@@ -102,6 +102,9 @@ def main() -> int:
     source = next(s for s in KNOWN_RAW_LIDAR_SOURCES if s.platform_id == f"{platform}-PPI")
     names = _list_catalog_filenames(source.platform_dir, source.datastream)
     days = sorted({n.split(".")[2] for n in names})
+    if not days:
+        print(f"No {source.datastream} files: nothing to check (DL2 has no PPI scans).")
+        return 0
     if args.max_days:
         days = [days[i] for i in np.linspace(0, len(days) - 1, args.max_days).round().astype(int)]
     cache_dir = Path.home() / ".cache" / "storm" / "raw_lidar"

@@ -9,6 +9,7 @@ import tempfile
 import threading
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -34,6 +35,18 @@ _MOMENT_MAP: dict[str, str] = {
     "specific_differential_phase": "KDP",
     "clutter_filter_power_removed": "CFP",
 }
+
+@dataclass(frozen=True)
+class VelocityOptions:
+    """Optional velocity processing (core/velocity_processing.py). Part of
+    each decode request and cache key, so switching reuses earlier results
+    and a result can't be shown under the wrong options."""
+    dealias: bool = False
+    storm_motion: Optional[tuple[float, float]] = None   # (u, v) m/s, for storm-relative
+
+    def __bool__(self) -> bool:
+        return self.dealias or self.storm_motion is not None
+
 
 # stations not archived in the Unidata/NOAA Level-2 S3 bucket.
 ARCHIVE_UNAVAILABLE_STATIONS: frozenset[str] = frozenset({
@@ -84,6 +97,7 @@ class ArchiveRadarFetcher(QObject):
         self._date        = session_date
         self._product     = DEFAULT_L2_PRODUCT
         self._tilt_idx    = 0          # index into available tilts list
+        self._velocity    = VelocityOptions()
 
         # raw Level-2 files are written to a per-session tmp directory (~30 MB
         self._tmpdir = tempfile.mkdtemp(prefix="storm_radar_")
@@ -106,7 +120,7 @@ class ArchiveRadarFetcher(QObject):
         # independent of product/tilt) so switching product/tilt on an
         # already-fetched scan doesn't re-parse the raw bytes.
         self._parsed_cache: dict[datetime, object] = {}
-        self._decoded_cache: dict[tuple[datetime, str, int], Level2RadarScan] = {}
+        self._decoded_cache: dict[tuple, Level2RadarScan] = {}
         # sorted list of all known scan times for the date.
         self._index: list[datetime] = []
         self._index_lock = threading.Lock()
@@ -115,7 +129,7 @@ class ArchiveRadarFetcher(QObject):
         self._last_emitted_key: Optional[tuple] = None  # suppress re-render of same scan
         self._fetch_lock = threading.Lock()
         self._pending_fetches: set[datetime] = set()
-        self._pending_decodes: set[tuple[datetime, str, int]] = set()
+        self._pending_decodes: set[tuple] = set()
 
 
     @property
@@ -172,6 +186,16 @@ class ArchiveRadarFetcher(QObject):
         self._last_emitted_key = None
         if self._current_archive_time is not None:
             self.on_time_changed(self._current_archive_time)
+
+    def set_velocity_options(self, options: VelocityOptions) -> None:
+        """Dealias and/or storm-relative velocity; raw velocity stays cached."""
+        if options == self._velocity:
+            return
+        self._velocity = options
+        if self._product == "velocity":
+            self._last_emitted_key = None
+            if self._current_archive_time is not None:
+                self.on_time_changed(self._current_archive_time)
 
     def set_tilt_index(self, idx: int) -> None:
         """Switch the elevation tilt and reuse cached raw/decoded volumes."""
@@ -367,7 +391,8 @@ class ArchiveRadarFetcher(QObject):
         try:
             if self._closed.is_set():
                 return
-            scan = self._decode(scan_time, file_bytes, product=cache_key[1], tilt_idx=cache_key[2])
+            scan = self._decode(scan_time, file_bytes, product=cache_key[1], tilt_idx=cache_key[2],
+                                velocity=cache_key[3])
             if self._closed.is_set():
                 return
             self._decoded_cache[cache_key] = scan
@@ -385,8 +410,9 @@ class ArchiveRadarFetcher(QObject):
         if not self._pending_fetches and not self._pending_decodes:
             self._emit(self.loading_changed, False)
 
-    def _decode_key(self, scan_time: datetime) -> tuple[datetime, str, int]:
-        return (scan_time, self._product, self._tilt_idx)
+    def _decode_key(self, scan_time: datetime) -> tuple:
+        velocity = self._velocity if self._product == "velocity" and self._velocity else None
+        return (scan_time, self._product, self._tilt_idx, velocity)
 
     def _download_scan(self, scan_time: datetime) -> Optional[bytes]:
         """Fetch the raw Level-2 file bytes from AWS S3."""
@@ -438,7 +464,8 @@ class ArchiveRadarFetcher(QObject):
                 self._parsed_cache[scan_time] = f
             return f
 
-    def _decode(self, scan_time: datetime, file_bytes: bytes, *, product=None, tilt_idx=None) -> Optional[Level2RadarScan]:
+    def _decode(self, scan_time: datetime, file_bytes: bytes, *, product=None, tilt_idx=None,
+                velocity: Optional[VelocityOptions] = None) -> Optional[Level2RadarScan]:
         """Decode a Level-2 file with MetPy and return a Level2RadarScan."""
         from pyproj import Proj, Transformer
         from core.mem_probe import peak_rss_mb, log_delta
@@ -532,12 +559,16 @@ class ArchiveRadarFetcher(QObject):
             ng = len(row)
             data[i, :ng] = row  # already NaN for MISSING/RANGE_FOLD
 
+        ranges   = first_gate_km + np.arange(n_gates, dtype=np.float64) * gate_width_km
+        processing = []
+        if product == "velocity" and velocity:
+            data, processing = _process_velocity(data, sweep, azimuths, ranges, tilt_deg, velocity)
+
         # velocity is in m/s from MetPy — convert to knots.
         if product in ("velocity", "spectrum_width"):
             data *= 1.94384
 
         az_rad   = np.deg2rad(np.array(azimuths, dtype=np.float64))
-        ranges   = first_gate_km + np.arange(n_gates, dtype=np.float64) * gate_width_km
         # [n_rays, n_gates] east/north offsets in km
         x_km = np.outer(np.sin(az_rad), ranges)
         y_km = np.outer(np.cos(az_rad), ranges)
@@ -576,6 +607,9 @@ class ArchiveRadarFetcher(QObject):
             az_offset=float(azimuths[0]),
         )
         scan.tilt_index = tilt_idx
+        scan.velocity_processing = "; ".join(processing)
+        if velocity is not None and velocity.storm_motion is not None:
+            scan.product = "SRV"
         return scan
 
 
@@ -610,6 +644,30 @@ class ArchiveRadarFetcher(QObject):
                 for key in [k for k in self._decoded_cache if k[0] == t]:
                     del self._decoded_cache[key]
 
+
+
+def _process_velocity(data_ms, sweep, azimuths, ranges_km, tilt_deg, options: VelocityOptions):
+    """Apply the requested velocity processing to one sweep (m/s), returning
+    the field and a description of what was actually done."""
+    from core.storm_motion import StormMotion
+    from core.velocity_processing import dealias, storm_relative, sweep_nyquist
+    notes = []
+    if options.dealias:
+        nyquist = sweep_nyquist(sweep)
+        if nyquist is None:
+            notes.append("raw: no Nyquist velocity recorded, not dealiased")
+        else:
+            try:
+                data_ms = dealias(data_ms, azimuths, ranges_km, tilt_deg, nyquist)
+                notes.append(f"dealiased (Py-ART region-based, Nyquist {nyquist:.1f} m/s)")
+            except Exception as exc:
+                log.warning("ArchiveRadarFetcher: dealiasing failed, showing raw velocity: %s", exc)
+                notes.append("raw: dealiasing failed")
+    if options.storm_motion is not None:
+        u, v = options.storm_motion
+        data_ms = storm_relative(data_ms, azimuths, tilt_deg, u, v)
+        notes.append(f"storm-relative to track motion {StormMotion(u, v).describe()}")
+    return data_ms, notes
 
 
 def _parse_l2_filename_time(fname: str, station: str) -> Optional[datetime]:

@@ -154,6 +154,16 @@ def _clear_layout(layout):
             w.deleteLater()
 
 
+def _velocity_status_tag(scan) -> str:
+    """Short note for the radar status line on processed velocity."""
+    notes = getattr(scan, "velocity_processing", "") or ""
+    if "dealiased (" in notes:
+        return " · dealiased"
+    if notes.startswith("raw:"):
+        return " · not dealiased"
+    return ""
+
+
 class _NetChecker(QObject):
     """Worker that checks internet connectivity from a background thread."""
     result_ready = pyqtSignal(str)   # "ok", "slow", or "none"
@@ -836,6 +846,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.radar_controls.configure_for_archive(True)
         self.radar_controls.product_changed.connect(self._on_archive_product_changed)
         self.radar_controls.tilt_changed.connect(self._on_archive_tilt_changed)
+        self.radar_controls.velocity_options_changed.connect(self._apply_velocity_options)
+        self._refresh_velocity_options_row()
 
         self._push_radar_station_sites()
         self.map_widget.radar_station_clicked.connect(self._on_radar_station_clicked)
@@ -1064,6 +1076,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             parent=self,
         )
         self._archive_radar.scan_ready.connect(self._on_archive_radar_scan)
+        self._apply_velocity_options()
         if hasattr(self, "_archive_controls"):
             self._archive_radar.index_loaded.connect(self._on_archive_radar_index_loaded)
         self._archive_radar.loading_changed.connect(
@@ -1179,7 +1192,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 if hasattr(self, "_archive_controls"):
                     self._archive_controls.set_rendered_radar(scan)
                     self._archive_controls.set_radar_status(
-                        f"Radar: {scan.product} {scan.tilt_deg:.1f}°"
+                        f"Radar: {scan.product} {scan.tilt_deg:.1f}°{_velocity_status_tag(scan)}"
                     )
                 # Tier 2: (re)start the debounced super-res upgrade for this frame.
                 # Any earlier pending fire is implicitly superseded — QTimer.start()
@@ -1338,7 +1351,25 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if hasattr(self, "_archive_controls"):
             self._archive_controls.set_radar_status(f"Radar: loading tilt {tilt_idx}")
 
+    def _refresh_velocity_options_row(self) -> None:
+        """Dealias / storm-relative apply to archive WSR-88D velocity only."""
+        self.radar_controls.set_velocity_options_visible(
+            not self._noxp_active and self.radar_controls.current_product() == "velocity")
+
+    def _apply_velocity_options(self, *_args) -> None:
+        from archive.fetchers.radar_archive_fetcher import VelocityOptions
+        if not getattr(self, "_archive_radar", None):
+            return
+        dealias_on, storm_relative_on = self.radar_controls.velocity_options()
+        motion = self.track_storm_motion() if storm_relative_on and hasattr(self, "_track_points") else None
+        self._archive_radar.set_velocity_options(VelocityOptions(
+            dealias=dealias_on,
+            # rounded so a nudge of a track point doesn't redo every sweep
+            storm_motion=(round(motion.u_ms, 1), round(motion.v_ms, 1)) if motion else None,
+        ))
+
     def _on_archive_product_changed(self, pyart_field: str) -> None:
+        self._refresh_velocity_options_row()
         if self._noxp_active:
             # pyart_field is a NOXP native field name (DBZ, VEL, ...) here,
             # not a WSR-88D product code -- never hand it to the WSR-88D
@@ -4555,6 +4586,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             return
         self._noxp_generation += 1
         self._noxp_active = True
+        self._refresh_velocity_options_row()
         self.radar_controls.set_selected_site(NOXP_SITE_ID, emit=False)
         self._radar_overlay.hide(transient=False)
         if hasattr(self, "_archive_controls"):
@@ -4567,6 +4599,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _deactivate_noxp_radar(self) -> None:
         self._noxp_generation += 1
         self._noxp_active = False
+        self._refresh_velocity_options_row()
         if self._noxp_overlay is not None:
             self._noxp_overlay.clear()
         if hasattr(self, "_archive_controls"):
@@ -5177,6 +5210,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         now = motion_at(self._track_points, self._time_ctrl.current_time) if self._track_points else None
         self.track_controls.set_motion(mean.describe() if mean else None,
                                        now.describe() if now else None)
+        if hasattr(self, "radar_controls"):
+            self.radar_controls.set_storm_relative_available(mean is not None,
+                                                             mean.describe() if mean else "")
+            self._apply_velocity_options()
 
     def _set_track_points(self, points: list[TrackPoint], *, record_undo: bool = True) -> None:
         """Replace the track with `points` as one undoable edit, then redraw,

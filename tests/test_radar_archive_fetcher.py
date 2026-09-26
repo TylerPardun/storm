@@ -129,8 +129,8 @@ def test_product_changes_during_parse_do_not_change_requested_result(monkeypatch
         fetcher._tilt_idx = 2
         return _split_cut_volume()
     monkeypatch.setattr(fetcher, '_get_parsed', parse)
-    fetcher._decode_and_cache(_SCAN_TIME, b'', (_SCAN_TIME, 'velocity', 0))
-    assert fetcher._decoded_cache[(_SCAN_TIME, 'velocity', 0)].pyart_field == 'velocity'
+    fetcher._decode_and_cache(_SCAN_TIME, b'', (_SCAN_TIME, 'velocity', 0, None))
+    assert fetcher._decoded_cache[(_SCAN_TIME, 'velocity', 0, None)].pyart_field == 'velocity'
     fetcher.shutdown()
 
 
@@ -194,3 +194,44 @@ def test_shutdown_keeps_files_until_running_task_finishes():
     future.result(timeout=3)
     assert finished.is_set()
     assert emitted == []
+
+
+def test_velocity_options_are_part_of_the_velocity_cache_key_only():
+    fetcher = _fetcher()
+    raw_key = fetcher._decode_key(_SCAN_TIME)
+    fetcher.set_velocity_options(raf.VelocityOptions(dealias=True))
+    assert fetcher._decode_key(_SCAN_TIME) == raw_key            # reflectivity unaffected
+    fetcher._product = "velocity"
+    assert fetcher._decode_key(_SCAN_TIME)[3] == raf.VelocityOptions(dealias=True)
+    fetcher.set_velocity_options(raf.VelocityOptions())
+    assert fetcher._decode_key(_SCAN_TIME)[3] is None           # raw velocity key as before
+    fetcher.shutdown()
+
+
+def test_dealiasing_without_a_nyquist_says_raw_and_storm_relative_is_labelled(monkeypatch):
+    import numpy as np
+    fetcher = _fetcher()
+    monkeypatch.setattr(fetcher, '_get_parsed', lambda *args: _split_cut_volume())
+    scan = fetcher._decode(_SCAN_TIME, b'', product='velocity', tilt_idx=0,
+                           velocity=raf.VelocityOptions(dealias=True, storm_motion=(0.0, 10.0)))
+    assert scan.product == "SRV"
+    assert scan.velocity_processing.startswith("raw: no Nyquist velocity recorded")
+    assert "storm-relative to track motion from 180° at 10.0 m/s" in scan.velocity_processing
+    # azimuth 0 beam: 10 m/s outbound minus the northward motion (x cos 0.5° tilt) -> ~0
+    np.testing.assert_allclose(scan.data[0], 0.0, atol=1e-2)
+    np.testing.assert_allclose(scan.data[2], 20.0 * 1.94384, rtol=1e-4)   # 180°, in knots
+    fetcher.shutdown()
+
+
+def test_a_failed_dealias_falls_back_to_raw_and_says_so(monkeypatch):
+    import core.velocity_processing as vp
+    fetcher = _fetcher()
+    volume = _split_cut_volume()
+    for radial in volume.sweeps[1]:
+        radial.radial_consts = SimpleNamespace(nyq_vel=28.0)
+    monkeypatch.setattr(fetcher, '_get_parsed', lambda *args: volume)
+    monkeypatch.setattr(vp, 'dealias', lambda *a: (_ for _ in ()).throw(ValueError("too sparse")))
+    scan = fetcher._decode(_SCAN_TIME, b'', product='velocity', tilt_idx=0,
+                           velocity=raf.VelocityOptions(dealias=True))
+    assert scan.product == "VEL" and scan.velocity_processing == "raw: dealiasing failed"
+    fetcher.shutdown()

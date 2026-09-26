@@ -114,6 +114,7 @@ class RadarControls(QWidget):
     loop_toggled    = pyqtSignal(bool)
     speed_changed   = pyqtSignal(int)      # new interval in ms
     vad_requested   = pyqtSignal()         # VAD hodograph dialog requested
+    velocity_options_changed = pyqtSignal(bool, bool)  # archive: dealias, storm-relative
 
     # internal — emitted from the _refresh_product_availability background thread
     _products_refreshed = pyqtSignal(dict)  # {code: bool} availability map
@@ -282,6 +283,26 @@ class RadarControls(QWidget):
 
         drawer_layout.addWidget(row2)
 
+        # archive WSR-88D velocity processing; shown only while velocity is up
+        self._velocity_row = QWidget()
+        self._velocity_row.setObjectName("radarVelocityRow")
+        r3 = QHBoxLayout(self._velocity_row)
+        r3.setContentsMargins(0, 0, 0, 0)
+        r3.setSpacing(8)
+        self._chk_dealias = QCheckBox("Dealias")
+        self._chk_dealias.setToolTip(
+            "Unfold aliased velocities (Py-ART region-based, as in MESO-VIEW). "
+            "If a sweep can't be dealiased, raw velocity is shown and labelled raw.")
+        self._chk_storm_relative = QCheckBox("Storm-relative")
+        for chk in (self._chk_dealias, self._chk_storm_relative):
+            chk.setFixedHeight(22)
+            chk.toggled.connect(self._emit_velocity_options)
+            r3.addWidget(chk)
+        r3.addStretch()
+        self.set_storm_relative_available(False)
+        self._velocity_row.setVisible(False)
+        drawer_layout.addWidget(self._velocity_row)
+
         layout.addWidget(self._drawer)
 
         # measure natural height after layout settles, before first collapse
@@ -408,6 +429,36 @@ class RadarControls(QWidget):
         for w in (self._frame_slider, self._btn_back, self._btn_fwd,
                   self._btn_play, self._btn_jump_start, self._btn_jump_end):
             w.setEnabled(False)
+
+    def _emit_velocity_options(self, _checked: bool = False) -> None:
+        self.velocity_options_changed.emit(self._chk_dealias.isChecked(),
+                                           self._chk_storm_relative.isChecked())
+
+    def velocity_options(self) -> tuple[bool, bool]:
+        return self._chk_dealias.isChecked(), self._chk_storm_relative.isChecked()
+
+    def set_velocity_options_visible(self, visible: bool) -> None:
+        if self._velocity_row.isHidden() != visible:
+            return
+        self._velocity_row.setVisible(visible)
+        # the open drawer's height is pinned to a measured value; re-measure
+        self._drawer.adjustSize()
+        was = self.maximumHeight()
+        self.setMaximumHeight(16777215)
+        self._expanded_height = self.sizeHint().height()
+        self.setMaximumHeight(self._expanded_height if self._radar_on else was)
+
+    def set_storm_relative_available(self, available: bool, motion_text: str = "") -> None:
+        """Storm-relative needs a storm motion: the TRACK's mean motion."""
+        self._chk_storm_relative.setEnabled(available)
+        if available:
+            self._chk_storm_relative.setToolTip(
+                f"Subtract the storm track's mean motion ({motion_text}) along each beam")
+        else:
+            self._chk_storm_relative.setToolTip(
+                "Needs a storm motion: place at least two TRACK points at different times")
+            if self._chk_storm_relative.isChecked():
+                self._chk_storm_relative.setChecked(False)
 
     def configure_for_archive(self, enabled: bool) -> None:
         self._archive_mode = enabled

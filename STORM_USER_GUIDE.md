@@ -1476,6 +1476,14 @@ Missing certificates cause MQTT to fail silently — all other features remain o
 
 The reference marker (one at a time, like MESO-VIEW's review marker) is a precision aid: points clicked or dragged within about 20 px of it snap exactly onto it. It is not saved with the track.
 
+**Workspaces.** Tracks autosave into `~/STORM/workspaces/<workspace>/<YYYYMMDD>/` (default workspace "My work"). Pick or create a workspace at the top of the TRACK panel; the date's saved tracks are listed there to reopen. Opening a track from outside the workspace imports it: edits go to a copy in the workspace and the original file is left unchanged. **Export As…** writes anywhere.
+
+**Storm motion.** The TRACK panel shows the mean motion (first point to last, as in MESO-VIEW) and the motion of the track segment at the current time, as the direction the storm moves from and its speed. Nothing is extrapolated beyond the first or last point.
+
+**Track table.** **Table…** lists every point for exact editing. Edits apply as one undoable step when you click **Apply**; invalid cells, or two points at the same second, are highlighted and nothing is applied. Selecting a row selects the point on the map; double-clicking goes to its time.
+
+**Velocity processing (archive WSR-88D).** With velocity shown, the radar panel offers **Dealias** (Py-ART region-based, as in MESO-VIEW) and **Storm-relative** (subtracts the track's mean motion along each beam; needs two track points at different times). The status line says `dealiased`, or `not dealiased` when a sweep couldn't be; raw velocity is never labelled as dealiased. Dealiasing takes a few seconds per sweep.
+
 ---
 
 ## 17. Performance Tuning

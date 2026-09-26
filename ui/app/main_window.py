@@ -5470,6 +5470,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if hasattr(self, "trail_controls"):
             self.trail_controls.set_track_available(mean is not None)
             self._schedule_trails()
+        if getattr(self, "_sounding_dialog", None) is not None:
+            self._sounding_dialog.set_observed_storm_motion(mean)
 
     def _set_track_points(self, points: list[TrackPoint], *, record_undo: bool = True) -> None:
         """Replace the track with `points` as one undoable edit, then redraw,

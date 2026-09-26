@@ -30,7 +30,7 @@ from ui.sounding.params import (
 )
 from ui.sounding.theme import (
     _ACCENT, _AX_BG, _BARB_CLR, _BORDER, _DEWP_CLR, _EIL_CLR, _EXPORT_BTN_QSS,
-    _FIG_BG, _HDR_CLR, _HODO_LAYERS, _LM_CLR, _MUTED, _PARCEL_CLR, _RM_CLR,
+    _FIG_BG, _HDR_CLR, _HODO_LAYERS, _LM_CLR, _MUTED, _OBS_MOTION_CLR, _PARCEL_CLR, _RM_CLR,
     _SLIDER_QSS, _TEMP_CLR, _TEXT, _VPARCEL_CLR, _VTEMP_CLR, _force_bg, _lbl,
     _SOURCE_COLORS, _SOURCE_LABELS, _SOURCE_LS, _SOURCE_GLYPHS,
 )
@@ -96,8 +96,21 @@ class SoundingDialog(QDialog):
         self._pill_widgets: dict[str, QPushButton] = {}
         # comparison row labels: source_key → QLabel (one line per source)
         self._comp_row_labels: dict[str, QLabel] = {}
+        # observed storm motion from the archive storm track: (u_ms, v_ms) or None
+        self._observed_motion: tuple[float, float] | None = None
 
         self._build_ui()
+
+    def set_observed_storm_motion(self, motion) -> None:
+        """The storm track's mean motion (core.storm_motion.StormMotion), or
+        None. Shown on the hodograph as OBS beside Bunkers RM/LM, and used
+        for the 'SRH obs' column; the Bunkers-based values are unchanged."""
+        value = (motion.u_ms, motion.v_ms) if motion is not None else None
+        if value == self._observed_motion:
+            return
+        self._observed_motion = value
+        if self._sset is not None and self.isVisible():
+            self._draw()
 
 
     def load(self, sset: SoundingSet):
@@ -384,14 +397,18 @@ class SoundingDialog(QDialog):
         kg.setVerticalSpacing(1)
 
         kg.addWidget(_lbl("", color=_HDR_CLR, size=9, bold=True), 0, 0)
-        for c, hdr in enumerate(["Shear", "SRH", "SRW"]):
-            kg.addWidget(_lbl(hdr, color=_HDR_CLR, size=9, bold=True, align=_A), 0, c + 1)
+        for c, hdr in enumerate(["Shear", "SRH", "SRH obs", "SRW"]):
+            header = _lbl(hdr, color=_HDR_CLR, size=9, bold=True, align=_A)
+            if hdr == "SRH obs":
+                header.setToolTip("SRH using the observed storm motion from the archive storm track "
+                                  "(SRH uses Bunkers right-mover)")
+            kg.addWidget(header, 0, c + 1)
 
         _kin_rows = [
-            ("0-500m", "shear_500", "srh_500", "srw_500"),
-            ("0-1km",  "shear01",   "srh01",   "srw01"),
-            ("0-3km",  "shear03",   "srh03",   "srw03"),
-            ("0-6km",  "shear06",   None,      "srw06"),
+            ("0-500m", "shear_500", "srh_500", "srh_500_obs", "srw_500"),
+            ("0-1km",  "shear01",   "srh01",   "srh01_obs",   "srw01"),
+            ("0-3km",  "shear03",   "srh03",   "srh03_obs",   "srw03"),
+            ("0-6km",  "shear06",   None,      None,          "srw06"),
         ]
         for r, (row_lbl, *keys) in enumerate(_kin_rows):
             kg.addWidget(_lbl(row_lbl, color=_HDR_CLR, size=10, bold=True), r + 1, 0)
@@ -959,6 +976,17 @@ class SoundingDialog(QDialog):
         except Exception as e:
             log.debug("Bunkers storm motion failed: %s", e)
 
+        # observed storm motion from the archive storm track
+        if self._observed_motion is not None:
+            obs_u, obs_v = self._observed_motion
+            obs_u_kt, obs_v_kt = obs_u * 1.94384, obs_v * 1.94384
+            obs_dir = float((np.degrees(np.arctan2(obs_u, obs_v)) + 180) % 360)
+            ax.plot(obs_u_kt, obs_v_kt, "D", color=_OBS_MOTION_CLR, markersize=5,
+                    markeredgecolor=_FIG_BG, markeredgewidth=0.8, zorder=7)
+            ax.text(0.03, 0.83, f"OBS {obs_dir:.0f}°/{np.hypot(obs_u_kt, obs_v_kt):.0f}kt",
+                    transform=ax.transAxes, color=_OBS_MOTION_CLR,
+                    fontsize=5.5, fontweight="bold", va="top", ha="left", zorder=8)
+
         # secondary source hodograph overlays — same height colormap, different linestyle
         if secondary_snds:
             for sec_snd, src_key in secondary_snds:
@@ -1401,6 +1429,23 @@ class SoundingDialog(QDialog):
             log.debug("storm motion / SRH failed: %s", e)
             for k in ("srh01", "srh03", "srh_500"):
                 _set(k, None)
+
+        # the same helicities relative to the observed (storm track) motion
+        for k in ("srh_500_obs", "srh01_obs", "srh03_obs"):
+            _set(k, None)
+        if self._observed_motion is not None:
+            try:
+                if wind_valid.sum() < 4:
+                    raise ValueError("not enough finite wind levels")
+                obs_u = self._observed_motion[0] * units("m/s")
+                obs_v = self._observed_motion[1] * units("m/s")
+                for key, depth in (("srh_500_obs", 500 * units.m), ("srh01_obs", 1 * units.km),
+                                   ("srh03_obs", 3 * units.km)):
+                    srh, _, _ = mpcalc.storm_relative_helicity(
+                        wind_hgt_agl, wind_u_ms, wind_v_ms, depth=depth, storm_u=obs_u, storm_v=obs_v)
+                    _set(key, float(srh.to("m**2/s**2").m))
+            except Exception as e:
+                log.debug("observed-motion SRH failed: %s", e)
 
         shear06_kt = None
         for depth, key in [

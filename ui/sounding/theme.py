@@ -23,6 +23,7 @@ _VPARCEL_CLR = "#ff3366"    # virtual-temperature parcel trace
 _EIL_CLR    = "#00e676"
 _RM_CLR     = "#ff6b6b"
 _LM_CLR     = "#4fc3f7"
+_OBS_MOTION_CLR = "#FFD400"   # observed storm motion (archive storm track)
 
 # per-source identity for comparison overlay
 _SOURCE_COLORS = {"obs": "#ff6b6b", "hrrr": "#4fc3f7", "nssl": "#81c784"}

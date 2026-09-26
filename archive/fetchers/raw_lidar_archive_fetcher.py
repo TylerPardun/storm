@@ -97,8 +97,12 @@ class RawLidarRays:
 
     @property
     def ground_geometry_valid(self):
-        # North-referenced file angles do not need another heading rotation.
-        north = "0 degrees is north" in str(self.provenance.get("azimuth_metadata", {}).get("comment", "")).lower()
+        # Mapping needs true-north azimuths: the truck's are rotated from its
+        # recorded heading at parse time (_truck_azimuth); without one they
+        # can't be placed on a map.
+        north = self.provenance.get("north_referenced")
+        if north is None:
+            north = "0 degrees is north" in str(self.provenance.get("azimuth_metadata", {}).get("comment", "")).lower()
         return (np.isfinite(self.latitude) & np.isfinite(self.longitude)
                 & np.isfinite(self.azimuth_deg) & np.isfinite(self.elevation_deg)
                 & (not self.source.mobile or north))
@@ -174,15 +178,50 @@ def parse_raw_lidar(path, source: RawLidarSource):
         warnings = ['Native quality/intensity fields are retained; no undocumented SNR threshold is applied.']
         if source.product == 'csm':
             warnings.append('Continuous scan mode: provider cautions that these rays require careful interpretation.')
+        azimuth = rays('azimuth')
+        reference = {'north_referenced': True, 'azimuth_reference': 'as stored in the file'}
         if source.mobile:
-            warnings.append('Mobile mapping requires file-declared north azimuth. No additional platform-motion correction is applied to radial velocity.')
-        return RawLidarRays(source, times, axis, dimension, rays('azimuth'), rays('elevation'),
+            azimuth, reference = _truck_azimuth(azimuth, ds.attrs.get('Trailer_heading'))
+            warnings.append(reference['azimuth_reference'])
+            warnings.append('No platform-motion correction is applied to radial velocity.')
+        return RawLidarRays(source, times, axis, dimension, azimuth, rays('elevation'),
                             lat, lon, rays('alt'), rays('heading'), rays('snum'), fields, housekeeping,
                             origin, np.where(np.isfinite(lat), times, np.nan),
                             {'format': 'CLAMPS b1 raw lidar', 'metadata': {k: str(v) for k, v in ds.attrs.items()},
                              'distance_units_in_file': units,
-                             'azimuth_metadata': dict(ds['azimuth'].attrs),
+                             'azimuth_metadata': dict(ds['azimuth'].attrs), **reference,
                              'altitude_reference': ds['alt'].attrs.get('units', 'unknown') if 'alt' in ds else 'unknown'}, warnings)
+
+
+def _truck_azimuth(azimuth, trailer_heading):
+    """True-north azimuths for the LiDAR Truck.
+
+    The truck's files store azimuth relative to the truck (0 deg = straight
+    ahead of it), although the azimuth comment says "0 degrees is north"; the
+    truck's heading is recorded in the Trailer_heading attribute but not
+    applied, so true azimuth = stored + heading. Verified 2026-09-26
+    (scripts/check_truck_lidar_orientation.py, planning evidence): VAD wind
+    directions from the truck's PPI scans vs HRRR 80 m over 23 days / 62 scans
+    had a median error of 75.7 deg as stored and 10 deg once rotated by the
+    heading (85 % within 30 deg), while the CLAMPS trailers need no rotation.
+    That check also showed radial velocity is positive AWAY from the lidar
+    (rain in vertical stares is negative), despite the files' "positive
+    values are towards the lidar" comment -- STORM already displays it that
+    way (NWS colours), so only the truck azimuth needs correcting.
+    A missing heading (-999, NaN, or the 0.0 default of the 2020-21 files)
+    leaves the orientation unknown."""
+    try:
+        heading = float(trailer_heading)
+    except (TypeError, ValueError):
+        heading = float('nan')
+    if not np.isfinite(heading) or heading <= -900 or heading == 0.0 or not 0 <= heading <= 360:
+        return azimuth, {'north_referenced': False,
+                         'azimuth_reference': 'Truck heading not recorded in this file, so scan directions '
+                                              'relative to north are unknown; not placed on the map.'}
+    return (azimuth + heading) % 360.0, {
+        'north_referenced': True, 'truck_heading_deg': heading,
+        'azimuth_reference': f'Truck-relative azimuths rotated to true north using the recorded truck '
+                             f'heading ({heading:.1f} deg).'}
 
 
 def load_raw_lidar(asset: LidarAsset, cache_dir, *, cancel=None, track_loader=None):

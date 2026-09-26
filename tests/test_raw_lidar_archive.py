@@ -13,7 +13,7 @@ def _source(product='ppi', mobile=False):
     return next(s for s in raw.KNOWN_RAW_LIDAR_SOURCES if s.product == product and s.mobile == mobile)
 
 
-def _file(path, source, bad_time=False):
+def _file(path, source, bad_time=False, trailer_heading=None):
     dimension = 'height' if source.product == 'fp' else 'range'
     ds = xr.Dataset({
         'base_time': ((), 1782001159.),
@@ -29,6 +29,9 @@ def _file(path, source, bad_time=False):
               'Site_longitude': -999. if source.mobile else -97.})
     ds[dimension].attrs['units'] = 'km AGL' if dimension == 'height' else 'km'
     ds['velocity'].attrs['units'] = 'm/s'
+    ds['azimuth'].attrs['comment'] = '0 degrees is north'
+    if trailer_heading is not None:
+        ds.attrs['Trailer_heading'] = trailer_heading
     ds.to_netcdf(path, engine='h5netcdf')
 
 
@@ -95,3 +98,39 @@ def test_discovery_uses_advertised_daily_files_without_assuming_midnight_filenam
     assets = raw.discover_raw_lidar(source, date(2026, 7, 29), fetch_catalog=lambda *a: html)
     assert len(assets) == 1 and assets[0].filename == name
     assert raw.discover_raw_lidar(source, date(2026, 7, 28), fetch_catalog=lambda *a: html) == []
+
+
+@pytest.mark.parametrize('heading, expected', [(265.2, [26.2, 25.2, 27.2]), (180.0, [301., 300., 302.])])  # rays in time order
+def test_truck_azimuths_are_rotated_by_the_recorded_heading(heading, expected, tmp_path):
+    """The truck stores azimuth relative to the truck (0 = straight ahead)
+    despite the '0 degrees is north' comment; true = stored + heading."""
+    source = _source(mobile=True)
+    path = tmp_path / 'r.cdf'
+    _file(path, source, trailer_heading=heading)
+    result = raw.parse_raw_lidar(path, source)
+    np.testing.assert_allclose(result.azimuth_deg, np.array(expected) % 360)
+    assert result.provenance['north_referenced'] is True
+    assert result.provenance['truck_heading_deg'] == heading
+
+
+@pytest.mark.parametrize('heading', [None, -999.0, float('nan'), 0.0])
+def test_truck_scans_without_a_heading_are_not_mapped(heading, tmp_path):
+    source = _source(mobile=True)
+    path = tmp_path / 'r.cdf'
+    _file(path, source, trailer_heading=heading)
+    result = raw.parse_raw_lidar(path, source)
+    assert result.provenance['north_referenced'] is False
+    np.testing.assert_allclose(result.azimuth_deg, [121., 120., 122.])     # left as stored (time order)
+    result.latitude[:] = 35.0
+    result.longitude[:] = -97.0
+    assert not result.ground_geometry_valid.any()                            # even with GPS positions
+    assert 'heading not recorded' in result.provenance['azimuth_reference']
+
+
+def test_stationary_trailers_keep_file_azimuths(tmp_path):
+    source = _source(mobile=False)
+    path = tmp_path / 'r.cdf'
+    _file(path, source, trailer_heading=151.0)
+    result = raw.parse_raw_lidar(path, source)
+    np.testing.assert_allclose(result.azimuth_deg, [121., 120., 122.])
+    assert result.ground_geometry_valid.all()

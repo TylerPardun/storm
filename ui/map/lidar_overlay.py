@@ -38,6 +38,8 @@ def render_lidar_to_png(rays, when, field='velocity', grid_size=768, *, ray_indi
         idx = np.asarray(ray_indices, dtype=int)
     idx = idx[rays.ground_geometry_valid[idx]]
     if not len(idx):
+        if rays.provenance.get("north_referenced") is False:
+            raise ValueError(rays.provenance.get("azimuth_reference", "Scan orientation unknown"))
         raise ValueError('No positioned rays with north-referenced azimuth')
     ranges = np.asarray(rays.distance_m)
     if ranges.ndim == 1:

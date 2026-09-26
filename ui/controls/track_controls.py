@@ -24,6 +24,7 @@ class TrackControls(QWidget):
     workspace_selected(str)      user picked another workspace
     new_workspace_requested()    user picked "New workspace…"
     open_track_requested(str)    user opened one of this date's workspace tracks
+    table_requested()            user clicked "Table…"
     """
 
     load_requested = pyqtSignal()
@@ -36,6 +37,7 @@ class TrackControls(QWidget):
     workspace_selected = pyqtSignal(str)
     new_workspace_requested = pyqtSignal()
     open_track_requested = pyqtSignal(str)
+    table_requested = pyqtSignal()
 
     _NEW_WORKSPACE = "New workspace…"
 
@@ -111,6 +113,11 @@ class TrackControls(QWidget):
         col.addLayout(edit_row)
 
         btn_row = QHBoxLayout()
+        self._btn_table = QPushButton("TABLE…")
+        self._btn_table.setToolTip("Edit exact point times and positions in a table")
+        self._btn_table.clicked.connect(self.table_requested.emit)
+        btn_row.addWidget(self._btn_table)
+
         self._btn_export = QPushButton("EXPORT AS…")
         self._btn_export.setToolTip("Save a copy of the track as CSV or Excel")
         self._btn_export.clicked.connect(self.export_requested.emit)

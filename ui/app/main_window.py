@@ -1741,6 +1741,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.track_controls.undo_requested.connect(self._undo_track_edit)
             self.track_controls.redo_requested.connect(self._redo_track_edit)
             self.track_controls.layers_changed.connect(self.map_widget.set_track_layers_visible)
+            self.track_controls.table_requested.connect(self._open_track_table)
             self.track_controls.workspace_selected.connect(self._switch_track_workspace)
             self.track_controls.new_workspace_requested.connect(self._new_track_workspace)
             self.track_controls.open_track_requested.connect(
@@ -4977,6 +4978,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._track_origin = ""            # file an imported track was copied from
         self._track_undo: list[list[TrackPoint]] = []
         self._track_redo: list[list[TrackPoint]] = []
+        if not hasattr(self, "_track_table"):
+            self._track_table = None       # TrackTableDialog, created on first open
 
     def _on_track_edit_toggled(self, checked: bool) -> None:
         self._track_edit_active = checked
@@ -5129,6 +5132,36 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             can_undo=bool(self._track_undo), can_redo=bool(self._track_redo),
         )
         self._refresh_track_motion()
+        if self._track_table is not None:
+            self._track_table.load(self._track_points)
+            self._track_table.select_point(self._track_selected_id)
+
+    def _open_track_table(self) -> None:
+        from ui.dialogs.track_table_dialog import TrackTableDialog
+        if self._track_table is None:
+            self._track_table = TrackTableDialog(self._track_session_day(), self)
+            self._track_table.apply_requested.connect(self._apply_track_table)
+            self._track_table.point_selected.connect(self._on_track_point_select)
+            self._track_table.jump_requested.connect(self._jump_to_track_point)
+        self._track_table.set_default_time(self._time_ctrl.current_time)
+        self._track_table.load(self._track_points, force=True)
+        self._track_table.select_point(self._track_selected_id)
+        self._track_table.show()
+        self._track_table.raise_()
+
+    def _apply_track_table(self, points: list) -> None:
+        if points == self._track_points:
+            return
+        self._set_track_points(points)
+        self.status_msg_label.setText(f"Track: table edits applied ({len(points)} points)")
+
+    def _jump_to_track_point(self, point_id: int) -> None:
+        point = next((p for p in self._track_points if p.point_id == point_id), None)
+        if point is None:
+            return
+        self._on_track_point_select(point_id)
+        self._time_ctrl.pause()
+        self._time_ctrl.set_time(point.time)
 
     def track_storm_motion(self):
         """The track's mean storm motion (core.storm_motion.StormMotion),
@@ -5208,6 +5241,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _on_track_point_select(self, point_id: int) -> None:
         self._track_selected_id = point_id
         self._push_track_geojson()
+        if self._track_table is not None:
+            self._track_table.select_point(point_id)
 
     def _delete_selected_track_point(self) -> None:
         if self._shortcut_focus_is_text_entry():
@@ -5380,6 +5415,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if self._track_points:
             self._push_track_geojson()
             self._refresh_track_motion()
+        if self._track_table is not None:
+            self._track_table.set_default_time(when)
 
     def _export_track_as(self) -> None:
         if not self._track_points:

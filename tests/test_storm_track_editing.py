@@ -22,6 +22,7 @@ _METHODS = [
     "track_storm_motion", "_refresh_track_motion", "_on_time_changed_update_track_highlight",
     "_track_workspace", "_track_session_day", "_refresh_track_workspace_lists",
     "_switch_track_workspace", "_new_track_workspace", "_open_track",
+    "_open_track_table", "_apply_track_table", "_jump_to_track_point",
 ]
 
 _MESO_VIEW_CSV = """point_id,time,lat,lon,source,case_id,track_file_kind,edited_at
@@ -59,6 +60,12 @@ class _Clock:
     def __init__(self, now):
         self.current_time = now
         self.window = (now.replace(hour=0, minute=0, second=0), now.replace(hour=0) + timedelta(hours=30))
+
+    def pause(self):
+        pass
+
+    def set_time(self, when):
+        self.current_time = when
 
 
 class _Settings:
@@ -359,3 +366,33 @@ def test_the_panel_shows_mean_and_current_storm_motion(tmp_path, monkeypatch):
     w._time_ctrl.current_time += timedelta(minutes=5)      # past the last point
     w._on_time_changed_update_track_highlight(w._time_ctrl.current_time)
     assert "outside the track" in w.track_controls._motion_now.text()
+
+
+def test_the_table_follows_the_map_and_edits_come_back_as_one_undo_step(tmp_path, monkeypatch):
+    from ui.dialogs.track_table_dialog import TrackTableDialog
+
+    class _Unparented(TrackTableDialog):                    # the stub window isn't a QWidget
+        def __init__(self, day, parent=None):
+            super().__init__(day, None)
+    monkeypatch.setattr("ui.dialogs.track_table_dialog.TrackTableDialog", _Unparented)
+    w = _window(tmp_path, monkeypatch)
+    w._on_track_point_add(35.0, -97.0)
+    w._open_track_table()
+    table = w._track_table
+    w._time_ctrl.current_time += timedelta(minutes=4)
+    w._on_track_point_add(35.1, -97.1)                      # placed on the map
+    assert [r[0] for r in table.rows()] == [1, 2] and table._selected_point_id() is None
+
+    w._on_track_point_select(2)                             # selected on the map
+    assert table._selected_point_id() == 2
+    table._table.selectRow(0)                               # selected in the table
+    assert w._track_selected_id == 1
+
+    table._table.item(0, 2).setText("35.05")
+    table.apply()
+    assert w._track_points[0].lat == 35.05 and "table edits applied" in w.status_msg_label.text
+    w._undo_track_edit()
+    assert w._track_points[0].lat == 35.0 and table.rows()[0][2] == "35.00000"
+
+    table._on_double_clicked(1, 1)                          # go to point 2's time
+    assert w._time_ctrl.current_time == w._track_points[1].time and w._track_selected_id == 2

@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time as _time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -468,6 +469,7 @@ class ArchiveRadarFetcher(QObject):
             if self._closed.is_set():
                 return None
             url = f"{_S3_BASE}/{prefix}{suffix}"
+            t0 = _time.perf_counter()
             try:
                 resp = requests.get(url, timeout=60, stream=True)
                 if resp.status_code == 200:
@@ -477,9 +479,9 @@ class ArchiveRadarFetcher(QObject):
                     # bytes regardless of which suffix matched.
                     if data[:2] == b"\x1f\x8b":
                         data = gzip.decompress(data)
-                    log.debug(
-                        "ArchiveRadarFetcher: downloaded %s (%.1f MB)",
-                        url.split("/")[-1], len(data) / 1e6,
+                    log.info(
+                        "ArchiveRadarFetcher: download %s %.1f MB in %.0f ms",
+                        url.split("/")[-1], len(data) / 1e6, (_time.perf_counter() - t0) * 1000,
                     )
                     return data
             except Exception:
@@ -498,7 +500,10 @@ class ArchiveRadarFetcher(QObject):
             f = self._parsed_cache.get(scan_time)
             if f is None:
                 from metpy.io import Level2File
+                t0 = _time.perf_counter()
                 f = Level2File(io.BytesIO(file_bytes))
+                log.info("ArchiveRadarFetcher: parse %s %s in %.0f ms", self._station,
+                         scan_time.strftime("%H:%M:%S"), (_time.perf_counter() - t0) * 1000)
                 self._parsed_cache[scan_time] = f
             return f
 

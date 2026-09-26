@@ -59,18 +59,26 @@ class TrailBuilder:
         self.max_points = max_points
         self._cache: dict[str, tuple[tuple, dict, dict]] = {}
 
-    def _prepared(self, vehicle_id, observations):
-        key = (len(observations), observations[0].timestamp, observations[-1].timestamp) if observations else ()
+    def _prepared(self, vehicle_id, observations, station_pressure: bool = True):
+        key = ((len(observations), observations[0].timestamp, observations[-1].timestamp, station_pressure)
+               if observations else ())
         cached = self._cache.get(vehicle_id)
         if cached is None or cached[0] != key:
             columns = derived.observation_arrays(observations)
+            if not station_pressure:
+                # e.g. ASOS reports sea-level pressure/altimeter, not the pressure
+                # at the station: never use it for pressure or anything derived from it
+                columns["pressure"][:] = np.nan
             cached = (key, columns, derived.compute(columns))
             self._cache[vehicle_id] = cached
         return cached[1], cached[2]
 
     def build(self, observations_by_vehicle: dict, quantity_key: str, start: datetime, end: datetime, *,
-              track_points=(), motion=None, time_to_space: bool = False):
-        """Returns (FeatureCollection dict, (vmin, vmax), n_values)."""
+              track_points=(), motion=None, time_to_space: bool = False,
+              no_station_pressure: frozenset = frozenset()):
+        """Returns (FeatureCollection dict, (vmin, vmax), n_values).
+        `no_station_pressure`: platforms whose pressure isn't measured at the
+        station (sea-level/altimeter), so pressure-based values stay blank."""
         quantity = derived.QUANTITIES[quantity_key]
         t0, t1 = start.timestamp(), end.timestamp()
         features, shown = [], []
@@ -84,7 +92,8 @@ class TrailBuilder:
         for vehicle_id, observations in observations_by_vehicle.items():
             if not observations:
                 continue
-            columns, values_all = self._prepared(vehicle_id, observations)
+            columns, values_all = self._prepared(vehicle_id, observations,
+                                                 station_pressure=vehicle_id not in no_station_pressure)
             times = columns["time"]
             lo, hi = np.searchsorted(times, t0, "left"), np.searchsorted(times, t1, "right")
             if hi - lo < 2:

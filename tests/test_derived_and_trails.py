@@ -72,3 +72,14 @@ def test_time_to_space_collapses_a_platform_moving_with_the_storm():
 def test_color_scale_is_symmetric_for_signed_winds():
     stops = color_stops("radial_wind", -4, 4)
     assert stops[0] == -4 and stops[-2] == 4 and stops[len(stops) // 2 - 1] == 0
+
+
+def test_sea_level_pressure_platforms_get_no_pressure_based_values():
+    obs = [_obs("ASOS KSPS", s, 33.98, -98.49, p=1013.0) for s in range(0, 600, 60)]
+    for key, blank in (("theta_e", True), ("pressure", True), ("mixing_ratio", True), ("temperature", False)):
+        builder = TrailBuilder()
+        track = [TrackPoint(1, T0, 34.0, -98.8), TrackPoint(2, T0 + timedelta(minutes=10), 34.0, -98.6)]
+        fc, _, n = builder.build({"ASOS KSPS": obs}, key, T0, T0 + timedelta(minutes=9),
+                                 track_points=track, motion=StormMotion(10, 0), time_to_space=True,
+                                 no_station_pressure=frozenset({"ASOS KSPS"}))
+        assert (n == 0) == blank, key

@@ -2225,9 +2225,19 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         end = self._time_ctrl.current_time
         motion = self.track_storm_motion() if hasattr(self, "_track_points") else None
         track = list(getattr(self, "_track_points", []))
+        observations = self._trail_observations()
+        asos_ids = frozenset()
+        asos = getattr(self, "_archive_asos", None)
+        if time_to_space and motion is not None and asos is not None:
+            # fixed stations only make a path relative to the storm, so ASOS
+            # joins the trails in time-to-space mode (as in MESO-VIEW)
+            asos_obs = {f"ASOS {sid}": rows for sid, rows in asos._observations.items() if rows}
+            observations.update(asos_obs)
+            asos_ids = frozenset(asos_obs)
         fc, (vmin, vmax), n = self._trail_builder.build(
-            self._trail_observations(), quantity, end - timedelta(minutes=minutes), end,
+            observations, quantity, end - timedelta(minutes=minutes), end,
             track_points=track, motion=motion, time_to_space=time_to_space and motion is not None,
+            no_station_pressure=asos_ids,
         )
         units = QUANTITIES[quantity].units
         stops = color_stops(quantity, vmin, vmax) if n else []

@@ -93,6 +93,20 @@ class TrackControls(QWidget):
         btn_row.addWidget(self._btn_clear)
         col.addLayout(btn_row)
 
+        motion_title = QLabel("STORM MOTION")
+        motion_title.setStyleSheet("color: #8E97AB; font-size: 9px; letter-spacing: 1px;")
+        col.addWidget(motion_title)
+        self._motion_mean = QLabel()
+        self._motion_now = QLabel()
+        for label, tip in (
+            (self._motion_mean, "End-to-end: first point to last, as in MESO-VIEW"),
+            (self._motion_now, "The track segment at the current time"),
+        ):
+            label.setToolTip(tip)
+            label.setStyleSheet("color: #E3E8F2; font-size: 10px;")
+            col.addWidget(label)
+        self.set_motion(None, None)
+
         layer_row = QHBoxLayout()
         self._chk_line = QCheckBox("Line")
         self._chk_line.setChecked(True)
@@ -147,6 +161,11 @@ class TrackControls(QWidget):
 
     def set_point_count(self, count: int) -> None:
         self._count_label.setText(f"{count} point" + ("" if count == 1 else "s"))
+
+    def set_motion(self, mean: str | None, now: str | None) -> None:
+        """Motion readouts, e.g. "from 240° at 15.1 m/s (29 kt)"; None shows a dash."""
+        self._motion_mean.setText(f"Mean  {mean or '— (needs 2 points)'}")
+        self._motion_now.setText(f"Now   {now or '— (outside the track)'}")
 
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)

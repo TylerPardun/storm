@@ -5066,6 +5066,22 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             loaded=self._track_loaded_path is not None,
             can_undo=bool(self._track_undo), can_redo=bool(self._track_redo),
         )
+        self._refresh_track_motion()
+
+    def track_storm_motion(self):
+        """The track's mean storm motion (core.storm_motion.StormMotion),
+        or None -- for anything that works relative to the storm."""
+        from core.storm_motion import mean_motion
+        return mean_motion(self._track_points)
+
+    def _refresh_track_motion(self) -> None:
+        from core.storm_motion import motion_at
+        if not hasattr(self, "track_controls"):
+            return
+        mean = self.track_storm_motion()
+        now = motion_at(self._track_points, self._time_ctrl.current_time) if self._track_points else None
+        self.track_controls.set_motion(mean.describe() if mean else None,
+                                       now.describe() if now else None)
 
     def _set_track_points(self, points: list[TrackPoint], *, record_undo: bool = True) -> None:
         """Replace the track with `points` as one undoable edit, then redraw,
@@ -5282,6 +5298,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _on_time_changed_update_track_highlight(self, when: datetime) -> None:
         if self._track_points:
             self._push_track_geojson()
+            self._refresh_track_motion()
 
     def _export_track_as(self) -> None:
         if not self._track_points:

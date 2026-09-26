@@ -28,8 +28,8 @@ def test_surface_loader_keeps_all_platforms_and_prefers_first_source(monkeypatch
     requested = []
     def find(source, day):
         requested.append((source.platform_id, source.kind))
-        return 'https://example.test/data'
-    monkeypatch.setattr(module, '_find_file', find)
+        return ['https://example.test/data']
+    monkeypatch.setattr(module, '_find_files', find)
     monkeypatch.setattr(module, '_urlopen_with_retry', lambda *a, **kw: BytesIO(b'data'))
     monkeypatch.setattr(module, 'parse_clamps_surface_netcdf', lambda data, key, trusted: [Observation(key, 35, -97, t)])
     rows = module.fetch_clamps_surface_observations(t)

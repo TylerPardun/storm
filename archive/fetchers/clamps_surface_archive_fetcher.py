@@ -73,8 +73,6 @@ class ClampsSurfaceSource:
     datastream: str     # e.g. "clampsmwrC2.a1"
     kind: str            # "met_tower" | "mwr"
     trust_wind_direction: bool
-    deterministic_filename: bool  # True: <datastream>.<date>.000000.cdf
-                                    # False: catalog-listed, non-zero time suffix
 
 
 # Discovered by browsing the THREDDS catalog directly, 2026-09-08 -- see
@@ -83,10 +81,15 @@ class ClampsSurfaceSource:
 # fetch_clamps_surface_observations tries them in order and uses the
 # first with data for the requested date.
 KNOWN_CLAMPS_SURFACE_SOURCES: tuple[ClampsSurfaceSource, ...] = (
-    ClampsSurfaceSource("CLAMPS2", "clamps/clamps2", "clampsmetC2.a1", "met_tower", False, False),
-    ClampsSurfaceSource("CLAMPS1", "clamps/clamps1", "clampsmwrC1.a1", "mwr", True, True),
-    ClampsSurfaceSource("CLAMPS2", "clamps/clamps2", "clampsmwrC2.a1", "mwr", True, True),
+    ClampsSurfaceSource("CLAMPS2", "clamps/clamps2", "clampsmetC2.a1", "met_tower", False),
+    ClampsSurfaceSource("CLAMPS1", "clamps/clamps1", "clampsmwrC1.a1", "mwr", True),
+    ClampsSurfaceSource("CLAMPS2", "clamps/clamps2", "clampsmwrC2.a1", "mwr", True),
 )
+# Files are found through the catalog, never by guessing names: a file's
+# time suffix is when that day's recording started, and 658 of CLAMPS1's
+# 1,256 MWR days (checked 2026-09-25) have no .000000 file. The MWR streams
+# end in 2023 (CLAMPS1 2023-06-09, CLAMPS2 2023-11-28).
+_LISTING_CACHE: dict[tuple[str, str], list[str]] = {}
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -134,19 +137,18 @@ def _list_catalog_filenames(platform_dir: str, datastream: str) -> list[str]:
     return [f"{datastream}.{m}" for m in pattern.findall(html)]
 
 
-def _find_file(source: ClampsSurfaceSource, date_str: str) -> "str | None":
-    """Return the fileServer URL for this source/date, or None if there's
-    no file for that date."""
-    if source.deterministic_filename:
-        url = f"{_FRDD_ROOT}/{source.platform_dir}/ingested/{source.datastream}/{source.datastream}.{date_str}.000000.cdf"
-        return url
-
-    filenames = _list_catalog_filenames(source.platform_dir, source.datastream)
+def _find_files(source: ClampsSurfaceSource, date_str: str) -> list[str]:
+    """fileServer URLs of every file this source has for the date, in time
+    order (a restarted instrument writes a second file for the day)."""
+    key = (source.platform_dir, source.datastream)
+    filenames = _LISTING_CACHE.get(key)
+    if filenames is None:
+        filenames = _list_catalog_filenames(source.platform_dir, source.datastream)
+        if filenames:                      # an empty answer may be a failed fetch; ask again next time
+            _LISTING_CACHE[key] = filenames
     prefix = f"{source.datastream}.{date_str}."
-    matches = sorted(f for f in filenames if f.startswith(prefix))
-    if not matches:
-        return None
-    return f"{_FRDD_ROOT}/{source.platform_dir}/ingested/{source.datastream}/{matches[0]}"
+    return [f"{_FRDD_ROOT}/{source.platform_dir}/ingested/{source.datastream}/{name}"
+            for name in sorted(f for f in filenames if f.startswith(prefix))]
 
 
 def _dewpoint_c_from_rh(temp_c: float, rh_pct: float) -> "float | None":
@@ -235,25 +237,27 @@ def fetch_clamps_surface_observations(archive_date: datetime) -> "list[Observati
     for source in KNOWN_CLAMPS_SURFACE_SOURCES:
         if source.platform_id in by_platform:
             continue
-        url = _find_file(source, date_str)
-        if url is None:
+        urls = _find_files(source, date_str)
+        if not urls:
+            log.debug("CLAMPS surface: no %s file for %s on %s", source.kind, source.platform_id, date_str)
             continue
 
-        request = Request(url, headers={"User-Agent": _USER_AGENT})
-        try:
-            with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
-                data = response.read()
-        except Exception as exc:  # noqa: BLE001 - network/SSL errors, try next source
-            log.warning("CLAMPS surface fetch failed for %s (%s): %s", source.platform_id, source.kind, exc)
-            continue
-
-        try:
-            observations = parse_clamps_surface_netcdf(data, source.platform_id, source.trust_wind_direction)
-        except Exception as exc:  # noqa: BLE001 - malformed/unexpected schema
-            log.warning("CLAMPS surface parse failed for %s (%s): %s", source.platform_id, source.kind, exc)
-            continue
+        observations = []
+        for url in urls:
+            request = Request(url, headers={"User-Agent": _USER_AGENT})
+            try:
+                with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
+                    data = response.read()
+            except Exception as exc:  # noqa: BLE001 - network/SSL errors, try the next file/source
+                log.warning("CLAMPS surface fetch failed for %s (%s): %s", source.platform_id, source.kind, exc)
+                continue
+            try:
+                observations += parse_clamps_surface_netcdf(data, source.platform_id, source.trust_wind_direction)
+            except Exception as exc:  # noqa: BLE001 - malformed/unexpected schema
+                log.warning("CLAMPS surface parse failed for %s (%s): %s", source.platform_id, source.kind, exc)
 
         if observations:
-            by_platform[source.platform_id] = observations
+            unique = {obs.timestamp: obs for obs in observations}   # a restart can overlap
+            by_platform[source.platform_id] = [unique[t] for t in sorted(unique)]
 
     return sorted((obs for rows in by_platform.values() for obs in rows), key=lambda obs: obs.timestamp) or None

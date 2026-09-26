@@ -1,6 +1,6 @@
 """Tests for CLAMPS trailer surface-meteorology archive parsing."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pytest
@@ -219,3 +219,45 @@ def test_classic_netcdf_met_tower_is_read_without_netcdf4_dependency(tmp_path):
     assert observations[1].temperature_c == 26.
     assert observations[1].lat == 35.1
     assert observations[1].timestamp == datetime(2024, 4, 27, 0, 1, tzinfo=timezone.utc)
+
+
+def test_files_are_found_from_the_catalog_whatever_their_start_time(monkeypatch):
+    """Most CLAMPS1 MWR days have no .000000 file; guessing that name
+    missed them. A day with a restart has two files; both are used."""
+    from archive.fetchers import clamps_surface_archive_fetcher as module
+    source = module.KNOWN_CLAMPS_SURFACE_SOURCES[1]          # CLAMPS1 MWR
+    listing = [f"{source.datastream}.20190309.000512.cdf", f"{source.datastream}.20190309.141003.cdf",
+               f"{source.datastream}.20190310.001031.cdf"]
+    calls = []
+    monkeypatch.setattr(module, "_LISTING_CACHE", {})
+    monkeypatch.setattr(module, "_list_catalog_filenames", lambda *a: calls.append(a) or listing)
+    urls = module._find_files(source, "20190309")
+    assert [u.rsplit("/", 1)[1] for u in urls] == listing[:2]
+    assert module._find_files(source, "20240427") == []
+    assert len(calls) == 1                                    # the listing is fetched once
+
+
+def test_a_failed_listing_is_not_cached(monkeypatch):
+    from archive.fetchers import clamps_surface_archive_fetcher as module
+    source = module.KNOWN_CLAMPS_SURFACE_SOURCES[1]
+    answers = [[], [f"{source.datastream}.20190309.000512.cdf"]]
+    monkeypatch.setattr(module, "_LISTING_CACHE", {})
+    monkeypatch.setattr(module, "_list_catalog_filenames", lambda *a: answers.pop(0))
+    assert module._find_files(source, "20190309") == []
+    assert len(module._find_files(source, "20190309")) == 1
+
+
+def test_overlapping_restart_files_are_merged_without_duplicates(monkeypatch):
+    from io import BytesIO
+    from archive.fetchers import clamps_surface_archive_fetcher as module
+    from core.observation import Observation
+    t = datetime(2019, 3, 9, 14, 10, tzinfo=timezone.utc)
+    source = module.KNOWN_CLAMPS_SURFACE_SOURCES[1]
+    monkeypatch.setattr(module, "KNOWN_CLAMPS_SURFACE_SOURCES", (source,))
+    monkeypatch.setattr(module, "_find_files", lambda s, d: ["https://x/a", "https://x/b"])
+    monkeypatch.setattr(module, "_urlopen_with_retry", lambda req, timeout: BytesIO(req.full_url.encode()))
+    rows = {b"https://x/a": [t, t + timedelta(minutes=1)], b"https://x/b": [t + timedelta(minutes=1), t + timedelta(minutes=2)]}
+    monkeypatch.setattr(module, "parse_clamps_surface_netcdf",
+                        lambda data, key, trusted: [Observation(key, 35, -97, ts) for ts in rows[data]])
+    obs = module.fetch_clamps_surface_observations(t)
+    assert [o.timestamp for o in obs] == [t, t + timedelta(minutes=1), t + timedelta(minutes=2)]

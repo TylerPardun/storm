@@ -20,7 +20,7 @@ def test_round_trip_with_tracks_provenance_and_readme(tmp_path):
     path = case_package.build(tmp_path / "case.zip", case=CASE, tracks=[track], sources=provenance.snapshot())
 
     manifest, tracks = case_package.read(path)
-    assert manifest["case"] == CASE and manifest["format_version"] == 1
+    assert manifest["case"] == CASE and manifest["format_version"] == 2
     assert list(tracks) == [track.name] and tracks[track.name] == track.read_bytes()
     (source,) = manifest["sources"]
     import hashlib
@@ -58,3 +58,79 @@ def test_version_reports_the_checkout():
     version = case_package.storm_version()
     assert version["version"]                                 # from VERSION
     assert len(version.get("commit", "x" * 40)) == 40
+
+
+def _sources(provenance_module):
+    provenance_module.reset()
+    provenance_module.record("radar", "https://s3/KFDR_V06", b"R" * 3_000_000)   # large: re-downloaded
+    provenance_module.record("mesonet", "https://thredds/p1/20240427.txt", b"mesonet rows")
+    provenance_module.record("satellite", "https://goes/frame.nc", b"sat")
+    return provenance_module.snapshot()
+
+
+def test_chosen_data_types_are_packed_and_served_back(tmp_path, monkeypatch):
+    from core import package_sources
+    sources = _sources(provenance)
+    downloads = []
+
+    def fetch(url):
+        downloads.append(url)
+        return provenance.kept_bytes(url) or b"R" * 3_000_000
+    path = case_package.build(tmp_path / "case.zip", case=CASE, tracks=[], sources=sources,
+                              include_kinds={"radar", "mesonet"}, fetch=fetch)
+    manifest, _ = case_package.read(path)
+    assert {d["kind"] for d in manifest["data"]} == {"radar", "mesonet"}
+    assert [s["included"] for s in manifest["sources"] if s["kind"] == "satellite"] == [False]
+    readme = zipfile.ZipFile(path).read("README.txt").decode()
+    assert "Not included (downloaded from their sources when the package is opened): Satellite imagery" in readme
+
+    package_sources.activate(path, manifest["data"])
+    try:
+        assert package_sources.get("https://thredds/p1/20240427.txt") == b"mesonet rows"
+        assert package_sources.get("https://goes/frame.nc") is None          # left out: network instead
+        assert package_sources.served()["mesonet"] == 1
+    finally:
+        package_sources.deactivate()
+
+
+def test_a_file_changed_upstream_is_packed_but_marked(tmp_path):
+    sources = _sources(provenance)
+    path = case_package.build(tmp_path / "case.zip", case=CASE, tracks=[], sources=sources,
+                              include_kinds={"mesonet"}, fetch=lambda url: b"mesonet rows, reprocessed")
+    manifest, _ = case_package.read(path)
+    (entry,) = manifest["data"]
+    assert entry["viewed_sha256"] != entry["sha256"] and manifest["data_changed_since_viewed"] == 1
+
+
+def test_a_failed_download_is_reported_not_packed(tmp_path):
+    sources = _sources(provenance)
+
+    def fetch(url):
+        raise OSError("offline")
+    path = case_package.build(tmp_path / "case.zip", case=CASE, tracks=[], sources=sources,
+                              include_kinds={"radar"}, fetch=fetch)
+    manifest, _ = case_package.read(path)
+    assert manifest["data"] == [] and manifest["data_not_packed"][0]["error"] == "offline"
+
+
+def test_a_tampered_member_falls_back_to_the_network(tmp_path):
+    from core import package_sources
+    sources = _sources(provenance)
+    path = case_package.build(tmp_path / "case.zip", case=CASE, tracks=[], sources=sources,
+                              include_kinds={"mesonet"}, fetch=provenance.kept_bytes)
+    manifest, _ = case_package.read(path)
+    entry = dict(manifest["data"][0], sha256="0" * 64)
+    package_sources.activate(path, [entry])
+    try:
+        assert package_sources.get(entry["url"]) is None
+    finally:
+        package_sources.deactivate()
+
+
+def test_data_paths_outside_data_are_refused(tmp_path):
+    path = tmp_path / "bad.zip"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("package.json", json.dumps({"format": case_package.FORMAT, "format_version": 2,
+                                               "data": [{"member": "../../etc/x", "url": "u"}]}))
+    with pytest.raises(ValueError, match="unexpected entry"):
+        case_package.read(path)

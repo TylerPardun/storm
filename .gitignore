@@ -53,3 +53,6 @@ locs/deployment_locations.json
 data/storm_tracks/*
 !data/storm_tracks/README.md
 !data/storm_tracks/MESO-VIEW/
+
+# case packages users export (data/case_packages/<session date>/*.zip)
+data/case_packages/

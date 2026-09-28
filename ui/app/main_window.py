@@ -155,6 +155,23 @@ def _clear_layout(layout):
             w.deleteLater()
 
 
+CASE_PACKAGES_ROOT = Path(__file__).resolve().parents[2] / "data" / "case_packages"
+
+
+def _package_fetch(url: str) -> bytes:
+    """A loaded file's bytes for a case package: the copy kept during the
+    session when small, otherwise a fresh download (checked against the
+    recorded hash by case_package.build)."""
+    from urllib.request import Request, urlopen
+    from core import provenance
+    kept = provenance.kept_bytes(url)
+    if kept is not None:
+        return kept
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0 STORM/1.0"})
+    with urlopen(request, timeout=180, context=config.NSSL_SSL_CONTEXT) as response:
+        return response.read()
+
+
 def _velocity_status_tag(scan) -> str:
     """Short note for the radar status line on processed velocity."""
     notes = getattr(scan, "velocity_processing", "") or ""
@@ -212,8 +229,17 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         super().__init__()
         self._case_package_at_start = case_package
         self.restart_with = None   # (archive_time, package path) for main.py's session loop
-        from core import provenance
+        from core import package_sources, provenance
         provenance.reset()          # provenance records this session's loads only
+        package_sources.deactivate()
+        if case_package:
+            # serve the package's data files before any fetcher starts downloading
+            try:
+                from core import case_package as _case_package
+                _manifest, _ = _case_package.read(Path(case_package))
+                package_sources.activate(Path(case_package), _manifest.get("data", []))
+            except ValueError as exc:
+                log.warning("Case package %s not usable: %s", case_package, exc)
         self._debug = debug
         self._monitor = monitor
         self._viewer = viewer
@@ -2269,27 +2295,80 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         }
 
     def _export_case_package(self) -> None:
-        from PyQt6.QtWidgets import QMessageBox
+        """Choose what to include (all by default), then build the package
+        in the background with a progress bar and cancel."""
+        import threading
+        from PyQt6.QtWidgets import QMessageBox, QProgressDialog
         from core import case_package, provenance
-        clock = self._time_ctrl.current_time
-        default = Path.home() / "STORM" / "packages" / f"STORM_case_{clock:%Y%m%d_%H%MZ}.zip"
-        default.parent.mkdir(parents=True, exist_ok=True)
-        path, _ = QFileDialog.getSaveFileName(self, "Export Case Package", str(unused_path(default)),
-                                              "STORM case package (*.zip)")
-        if not path:
-            return
+        from ui.dialogs.case_export_dialog import CaseExportDialog
+        sources = provenance.snapshot()
+        groups = []
+        for kind, label in case_package.DATA_TYPES.items():
+            files = [s for s in sources if s["kind"] == kind]
+            if files:
+                groups.append((kind, label, len(files), sum(s.get("bytes") or 0 for s in files)))
         tracks = []
         if hasattr(self, "_track_points"):
             tracks = [t["path"] for t in self._track_workspace().tracks(self._track_session_day())]
-        try:
-            case_package.build(Path(path), case=self._case_settings(), tracks=tracks,
-                               sources=provenance.snapshot())
-        except Exception as exc:  # noqa: BLE001 -- disk full, permissions, ...
-            QMessageBox.warning(self, "Export Case Package", f"Couldn't write {Path(path).name}:\n{exc}")
+        dialog = CaseExportDialog(groups, len(tracks), self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
             return
-        self.status_msg_label.setText(
-            f"Case package saved: {Path(path).name} ({len(tracks)} track(s), "
-            f"{len(provenance.snapshot())} source files recorded)")
+        include_tracks, kinds = dialog.choices()
+        tracks = tracks if include_tracks else []
+
+        case = self._case_settings()
+        folder = CASE_PACKAGES_ROOT / self._track_session_day().strftime("%Y%m%d")
+        folder.mkdir(parents=True, exist_ok=True)
+        clock = self._time_ctrl.current_time
+        name = f"STORM_case_{self._track_session_day():%Y%m%d}_{case.get('radar_station') or 'noradar'}_{clock:%H%M}Z.zip"
+        path, _ = QFileDialog.getSaveFileName(self, "Export Case Package", str(unused_path(folder / name)),
+                                              "STORM case package (*.zip)")
+        if not path:
+            return
+        path = Path(path)
+
+        state = {"done": 0, "total": 1, "label": "", "error": None, "finished": False}
+        cancel = threading.Event()
+
+        def progress(done, total, label):
+            state.update(done=done, total=max(total, 1), label=label)
+
+        def work():
+            try:
+                case_package.build(path, case=case, tracks=tracks, sources=sources, include_kinds=kinds,
+                                   fetch=_package_fetch, progress=progress, cancel=cancel)
+            except Exception as exc:  # noqa: BLE001 -- disk full, canceled, ...
+                state["error"] = exc
+            finally:
+                state["finished"] = True
+
+        bar = QProgressDialog("Preparing case package…", "Cancel", 0, 100, self)
+        bar.setWindowTitle("Export Case Package")
+        bar.setMinimumDuration(0)
+        bar.canceled.connect(cancel.set)
+        threading.Thread(target=work, daemon=True, name="case-export").start()
+        while not state["finished"]:
+            bar.setValue(int(100 * state["done"] / state["total"]))
+            bar.setLabelText(f"Packing {state['done']} of {state['total']} files… {state['label']}")
+            QApplication.processEvents()
+            threading.Event().wait(0.05)
+        bar.close()
+        if isinstance(state["error"], InterruptedError):
+            self.status_msg_label.setText("Case export canceled")
+            return
+        if state["error"] is not None:
+            QMessageBox.warning(self, "Export Case Package", f"Couldn't write {path.name}:\n{state['error']}")
+            return
+        manifest, _ = case_package.read(path)
+        missing = len(manifest.get("data_not_packed", []))
+        detail = (f"{len(tracks)} storm track(s) and {len(manifest.get('data', []))} data file(s) included"
+                  + (f"; {missing} file(s) could not be downloaded and were left out" if missing else "")
+                  + (f"; {manifest['data_changed_since_viewed']} file(s) changed upstream since viewed"
+                     if manifest.get("data_changed_since_viewed") else "") + ".")
+        self.status_msg_label.setText(f"Case package saved: {path.name}")
+        self._notify_saved(path, "Case package saved",
+                           f"{detail}\n\nFolder: {path.parent}\n\nCase packages are kept in "
+                           f"{CASE_PACKAGES_ROOT}\norganized by session date.")
 
     def _open_case_package(self) -> None:
         folder = Path.home() / "STORM" / "packages"
@@ -2353,11 +2432,20 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.radar_controls._chk_storm_relative.setChecked(True)
         clock = datetime.fromisoformat(case["clock_time"].replace("Z", "+00:00"))
         self._later(1500 if at_start else 0, lambda: (self._time_ctrl.pause(), self._time_ctrl.set_time(clock)))
+        from core import package_sources
+        from core.case_package import DATA_TYPES
+        if not at_start and manifest.get("data"):
+            package_sources.activate(path, manifest["data"])
+        packed = sorted({d["kind"] for d in manifest.get("data", [])})
+        fetched = sorted({s["kind"] for s in manifest.get("sources", []) if not s.get("included")})
         made = manifest.get("storm", {})
-        self.status_msg_label.setText(
-            f"Opened {path.name}: {len(imported)} track(s) imported into workspace "
-            f"'{self._track_workspace().name if hasattr(self, '_track_points') else '—'}'; "
-            f"made with STORM {made.get('version', '?')}")
+        summary = (f"Made with STORM {made.get('version', '?')}. {len(imported)} storm track(s) imported into "
+                   f"workspace '{self._track_workspace().name if hasattr(self, '_track_points') else '—'}'."
+                   + (f"\n\nLoaded from the package: {', '.join(DATA_TYPES.get(k, k) for k in packed)}." if packed else "")
+                   + (f"\n\nNot in the package, downloaded from the source: "
+                      f"{', '.join(DATA_TYPES.get(k, k) for k in fetched)}." if fetched else ""))
+        self.status_msg_label.setText(f"Opened case package {path.name}")
+        self._notify_saved(path, "Case package opened", summary)
 
     def _renudge_archive_clock(self) -> None:
         self._time_ctrl.set_time(self._time_ctrl.current_time)
@@ -2403,6 +2491,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def closeEvent(self, event):
         self._closing = True
+        from core import package_sources
+        package_sources.deactivate()
         self._silence_archive_workers()
         self._lidar_overlay_generation = getattr(self, "_lidar_overlay_generation", 0) + 1
         self._lidar_overlay_platform_id = None
@@ -5415,20 +5505,25 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _notify_track_saved(self, path, what: str = "saved") -> None:
         """Tell the user exactly where a track went (first save of each file,
-        and exports): a non-blocking notice with a button to open the folder."""
+        and exports)."""
+        from core.workspace import workspaces_root
+        path = Path(path)
+        self._notify_saved(path, f"Storm track {what}",
+                           f"Folder: {path.parent}\n\nAll storm tracks are kept in STORM's track folder\n"
+                           f"{workspaces_root()}\norganized as <workspace>/<session date>/. "
+                           "Further edits save to this same file automatically.")
+
+    def _notify_saved(self, path, title: str, detail: str) -> None:
+        """Non-blocking notice naming the saved file, with an Open Folder button."""
         from PyQt6.QtCore import QUrl
         from PyQt6.QtGui import QDesktopServices
         from PyQt6.QtWidgets import QMessageBox
-        from core.workspace import workspaces_root
         path = Path(path)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
-        box.setWindowTitle(f"Storm track {what}")
-        box.setText(f"Storm track {what}:\n{path.name}")
-        box.setInformativeText(
-            f"Folder: {path.parent}\n\n"
-            f"All storm tracks are kept in STORM's track folder\n{workspaces_root()}\n"
-            "organized as <workspace>/<session date>/. Further edits save to this same file automatically.")
+        box.setWindowTitle(title)
+        box.setText(f"{title}:\n{path.name}")
+        box.setInformativeText(detail)
         open_btn = box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
         box.addButton(QMessageBox.StandardButton.Ok)
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent))))

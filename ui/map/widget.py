@@ -325,6 +325,9 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
             f"{json.dumps(icon)}, {json.dumps(hover_text)});"
         )
 
+    def remove_platform_marker(self, marker_id: str) -> None:
+        self.run_js(f"stormRemovePlatformMarker({json.dumps(marker_id)});")
+
     def set_radar_visible(self, visible: bool) -> None:
         """Show or hide the radar layer (e.g. under a lidar scan). Holds for
         a layer created later, too (RadarOverlay.inject honors it)."""

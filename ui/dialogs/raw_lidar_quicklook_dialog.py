@@ -183,30 +183,49 @@ class RawLidarQuicklookDialog(QDialog):
 
     # ---- data in ----------------------------------------------------------
     def set_rays(self, rays, title: str | None = None) -> None:
-        """Show a (new) file; the view list offers what it holds."""
+        """Show one file's scans (a lidar's timeline is set with set_scans)."""
         from core.lidar_scans import classify_scans
-        self._rays = rays
-        self._scans = getattr(rays, "scans", None) or classify_scans(rays)
+        scans = getattr(rays, "scans", None) or classify_scans(rays)
+        self.set_scans(scans, title, all_rays=rays)
+
+    def set_scans(self, scans, title: str | None = None, all_rays=None) -> None:
+        """Show a lidar's scans (core/lidar_scans.timeline: every file's, in
+        time order, each with its .source file); the view list offers what
+        they hold."""
+        self._scans = list(scans)
+        self._rays = all_rays
         if title:
             self._title = title
             self.setWindowTitle(f"Lidar viewer — {title}")
             self._header_label.setText(title)
         kinds = {s.kind for s in self._scans}
-        views = [v for v, kind in zip(self.VIEWS, ("RHI", "Stare", None)) if kind is None or kind in kinds]
+        views = [v for v, kind in zip(self.VIEWS, ("RHI", "Stare", "all")) if kind in kinds
+                 or (kind == "all" and all_rays is not None)]
         current = self._view_combo.currentText()
         self._view_combo.blockSignals(True)
         self._view_combo.clear()
         self._view_combo.addItems(views)
         self._view_combo.setCurrentIndex(max(0, views.index(current) if current in views else 0))
         self._view_combo.blockSignals(False)
+        names = []
+        for source in [all_rays] if all_rays is not None else {id(s.source): s.source for s in self._scans}.values():
+            names += [n for n in getattr(source, "fields", {}) if n not in names]
+        field = self._field_combo.currentText()
         self._field_combo.blockSignals(True)
         self._field_combo.clear()
-        names = list(rays.fields)
         self._field_combo.addItems(names)
-        if "velocity" in names:
+        if field in names:
+            self._field_combo.setCurrentText(field)
+        elif "velocity" in names:
             self._field_combo.setCurrentText("velocity")
         self._field_combo.blockSignals(False)
         self._redraw()
+
+    def show_view(self, kind: str) -> None:
+        """Switch to the view for a scan kind ('RHI' or 'Stare') if offered."""
+        view = {"RHI": self.VIEWS[0], "Stare": self.VIEWS[1]}.get(kind)
+        if view and self._view_combo.findText(view) >= 0 and self._view_combo.currentText() != view:
+            self._view_combo.setCurrentText(view)
 
     def set_time(self, when) -> None:
         """The archive clock moved: follow it (RHI at that time; time line)."""
@@ -239,26 +258,27 @@ class RawLidarQuicklookDialog(QDialog):
     def _redraw(self) -> None:
         self._fig.clear()
         ax = self._fig.add_subplot(111, facecolor=_AX_BG)
-        rays, field_name, view = self._rays, self._field_combo.currentText(), self._view_combo.currentText()
+        field_name, view = self._field_combo.currentText(), self._view_combo.currentText()
         rhi = view == self.VIEWS[0]
         self._btn_prev.setVisible(rhi)
         self._btn_next.setVisible(rhi)
-        if rays is None or not field_name or rays.time_epoch.size == 0:
+        if not field_name or (not self._scans and self._rays is None):
             self._status_label.setText("")
             return self._message(ax, "No data")
-        data = rays.fields[field_name]["data"]
-        units = rays.fields[field_name].get("units", "")
-        cmap, lo, hi = self._style(field_name, data)
         if rhi:
-            self._draw_rhi(ax, data, field_name, units, cmap, lo, hi)
+            self._draw_rhi(ax, field_name)
         elif view == self.VIEWS[1]:
-            self._draw_stares(ax, data, field_name, units, cmap, lo, hi)
+            self._draw_stares(ax, field_name)
         else:
-            self._draw_all(ax, data, field_name, units, cmap, lo, hi)
+            self._draw_all(ax, field_name)
         self._fig.tight_layout()
         self._canvas.draw_idle()
 
-    def _draw_rhi(self, ax, data, field_name, units, cmap, lo, hi):
+    def _field(self, rays, field_name):
+        field = rays.fields.get(field_name)
+        return (field["data"], field.get("units", "")) if field else (None, "")
+
+    def _draw_rhi(self, ax, field_name):
         from core.lidar_scans import scan_at
         rhis = [s for s in self._scans if s.kind == "RHI"]
         scan = scan_at(rhis, self._when, kinds=("RHI",), hold_s=24 * 3600) if self._when is not None else None
@@ -266,11 +286,15 @@ class RawLidarQuicklookDialog(QDialog):
             scan = rhis[0] if self._when is None or self._when < rhis[0].start else rhis[-1]
         if scan is None:
             self._status_label.setText("")
-            return self._message(ax, "No RHI scans in this file")
+            return self._message(ax, "No RHI scans for this lidar")
         number = rhis.index(scan) + 1
         self._btn_prev.setEnabled(number > 1)
         self._btn_next.setEnabled(number < len(rhis))
-        rays, idx = self._rays, scan.indices
+        rays, idx = scan.source, scan.indices
+        data, units = self._field(rays, field_name)
+        if data is None:
+            return self._message(ax, f"No {field_name} in this scan's file")
+        cmap, lo, hi = self._style(field_name, data[idx])
         order = np.argsort(rays.elevation_deg[idx])
         idx = idx[order]
         elevation = np.deg2rad(rays.elevation_deg[idx])
@@ -298,30 +322,48 @@ class RawLidarQuicklookDialog(QDialog):
         self._status_label.setText(f"{scan.rays} rays · the scan at or before the archive clock "
                                    f"({self._when:%H:%M:%S} UTC)" if self._when is not None else f"{scan.rays} rays")
 
-    def _draw_stares(self, ax, data, field_name, units, cmap, lo, hi):
-        rays = self._rays
-        idx = np.concatenate([s.indices for s in self._scans if s.kind == "Stare"])
-        idx.sort()
-        epochs, values = _with_gaps(rays.time_epoch[idx], data[idx])
-        times = [datetime.fromtimestamp(float(t), timezone.utc) for t in epochs]
-        elevation = float(np.median(rays.elevation_deg[idx]))
-        height = np.asarray(rays.distance_m, dtype=float) * np.sin(np.deg2rad(elevation))
-        mesh = ax.pcolormesh(times, height / 1000.0, values.T,
-                             shading="nearest", cmap=cmap, vmin=lo, vmax=hi)
+    def _draw_stares(self, ax, field_name):
+        stares = [s for s in self._scans if s.kind == "Stare"]
+        by_file = {}
+        for scan in stares:
+            by_file.setdefault(id(scan.source), (scan.source, []))[1].append(scan.indices)
+        mesh, first, last, count, units, elevation = None, None, None, 0, "", 90.0
+        for rays, parts in by_file.values():
+            data, units = self._field(rays, field_name)
+            if data is None:
+                continue
+            idx = np.sort(np.concatenate(parts))
+            epochs, values = _with_gaps(rays.time_epoch[idx], data[idx])
+            times = [datetime.fromtimestamp(float(t), timezone.utc) for t in epochs]
+            elevation = float(np.median(rays.elevation_deg[idx]))
+            height = np.asarray(rays.distance_m, dtype=float) * np.sin(np.deg2rad(elevation))
+            cmap, lo, hi = self._style(field_name, data[idx])
+            mesh = ax.pcolormesh(times, height / 1000.0, values.T, shading="nearest", cmap=cmap, vmin=lo, vmax=hi)
+            first = times[0] if first is None else min(first, times[0])
+            last = times[-1] if last is None else max(last, times[-1])
+            count += idx.size
+        if mesh is None:
+            return self._message(ax, f"No {field_name} in the stares")
         self._finish(ax, mesh, field_name, units)
         if self._when is not None:
             ax.axvline(self._when, color=_STORM_ACCENT, lw=1.2)
         ax.set_ylabel("Height above the lidar (km)", color=_TEXT, fontsize=9)
         ax.set_xlabel("Time (UTC)", color=_TEXT, fontsize=9)
         ax.set_ylim(0, 6)   # boundary-layer focus; raw lidar can report well above this
-        ax.set_title(f"Stares at {elevation:.0f}° elevation  ·  {times[0]:%Y-%m-%d %H:%M}–{times[-1]:%H:%M} UTC",
+        ax.set_title(f"Stares at {elevation:.0f}° elevation  ·  {first:%Y-%m-%d %H:%M}–{last:%H:%M} UTC",
                      color=_TEXT, fontsize=10)
         self._fig.autofmt_xdate()
-        self._status_label.setText(f"{idx.size} rays · line: archive clock"
+        self._status_label.setText(f"{count} rays · line: archive clock"
                                    + (f" ({self._when:%H:%M:%S} UTC)" if self._when is not None else ""))
 
-    def _draw_all(self, ax, data, field_name, units, cmap, lo, hi):
+    def _draw_all(self, ax, field_name):
         rays = self._rays
+        if rays is None:
+            return self._message(ax, "No file")
+        data, units = self._field(rays, field_name)
+        if data is None:
+            return self._message(ax, f"No {field_name}")
+        cmap, lo, hi = self._style(field_name, data)
         epochs, values = _with_gaps(rays.time_epoch, data)
         times = [datetime.fromtimestamp(float(t), timezone.utc) for t in epochs]
         mesh = ax.pcolormesh(times, np.asarray(rays.distance_m) / 1000.0, values.T,

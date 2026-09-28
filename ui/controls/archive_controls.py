@@ -24,6 +24,41 @@ _CT_TZ = ZoneInfo("America/Chicago") if _HAS_ZONEINFO else None
 _MT_TZ = ZoneInfo("America/Denver")  if _HAS_ZONEINFO else None
 
 
+class _CoverageStrip(QWidget):
+    """A thin strip under the time slider marking when something (e.g. the
+    chosen lidar) has data: colored spans over the session window."""
+
+    def __init__(self, controller, parent=None):
+        super().__init__(parent)
+        self._tc = controller
+        self._spans: list = []
+        self._color = "#00CFFF"
+        self.setFixedHeight(5)
+        self.setVisible(False)
+
+    def set_spans(self, spans, color: str, tooltip: str) -> None:
+        self._spans, self._color = list(spans), color
+        self.setToolTip(tooltip)
+        self.setVisible(bool(self._spans))
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        from PyQt6.QtGui import QColor, QPainter
+        start, end = self._tc.window
+        total = (end - start).total_seconds()
+        if total <= 0:
+            return
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(255, 255, 255, 18))
+        # the slider's groove runs a handle-width in from each side
+        inset = 8
+        width = max(1, self.width() - 2 * inset)
+        for a, b in self._spans:
+            x0 = inset + width * max(0.0, (a - start).total_seconds() / total)
+            x1 = inset + width * min(1.0, (b - start).total_seconds() / total)
+            painter.fillRect(int(x0), 0, max(2, int(x1 - x0)), self.height(), QColor(self._color))
+
+
 class ArchiveControls(QWidget):
     """
     Floating bottom bar providing time navigation controls for archive mode.
@@ -142,6 +177,9 @@ class ArchiveControls(QWidget):
         self._slider.sliderMoved.connect(self._on_slider_preview)
         self._slider.valueChanged.connect(self._on_slider_committed)
         root.addWidget(self._slider)
+        # when the chosen lidar was scanning (set_coverage), under the slider
+        self._coverage = _CoverageStrip(self._tc, self)
+        root.addWidget(self._coverage)
 
         row2 = QHBoxLayout()
         row2.setSpacing(5)
@@ -316,7 +354,13 @@ class ArchiveControls(QWidget):
         self._slider.setValue(self._tc.seconds_since_start())
         self._slider.blockSignals(False)
 
+    def set_coverage(self, spans, color: str = "#00CFFF", tooltip: str = "") -> None:
+        """Mark (start, end) spans under the slider, e.g. when a lidar was
+        scanning; an empty list hides the strip."""
+        self._coverage.set_spans(spans, color, tooltip)
+
     def _on_window_changed(self, start: datetime, end: datetime) -> None:
+        self._coverage.update()
         self._slider.blockSignals(True)
         self._slider.setRange(0, max(0, self._tc.window_seconds() - 1))
         self._slider.setValue(self._tc.seconds_since_start())

@@ -31,7 +31,7 @@ def test_scans_are_named_by_geometry_not_by_file():
     assert [s.kind for s in scans] == ["VAD", "PPI", "RHI", "Stare"]
     assert scans[3].rays == 10 and scans[2].azimuth_deg == 320.6
     assert [s.mappable for s in scans] == [True, True, False, False]
-    assert counts(scans) == "1 PPI · 1 VAD · 1 RHI · 1 stare"
+    assert counts(scans) == "1 PPI · 1 VAD · 1 RHI · 1 vertical stare"
 
 
 def test_the_map_shows_the_latest_plan_view_scan_and_the_clock_can_jump_to_one():
@@ -63,3 +63,31 @@ def test_an_rhi_says_when_its_azimuth_is_only_relative_to_the_truck():
     scan = classify_scans(rays)[0]
     assert scan.kind == "RHI" and not scan.north_referenced
     assert "relative to the truck (heading unknown)" in scan.describe()
+
+
+def test_a_lidars_files_make_one_timeline_with_scanning_periods():
+    from core.lidar_scans import describe_periods, periods, scanning_at, timeline
+    vad = _rays([(0, [(a, 60.0) for a in range(0, 360, 45)], 2, 1),
+                 (600, [(a, 60.0) for a in range(0, 360, 45)], 2, 2)])
+    stares = _rays([(3600, [(0.0, 90.0)] * 10, 3, np.nan)])
+    for rays in (vad, stares):
+        rays.scans = classify_scans(rays)
+    scans = timeline([stares, vad])
+    assert [s.kind for s in scans] == ["VAD", "VAD", "Stare"]
+    assert scans[0].source is vad and scans[2].source is stares
+    spans = periods(scans)
+    assert len(spans) == 2                                   # 18:00-18:10 and 19:00
+    assert describe_periods(spans) == "Scanning 18:00–18:10Z, 19:00–19:00Z"
+    late = [(T0 + timedelta(hours=6), T0 + timedelta(hours=8))]          # 00:00-02:00Z the next day
+    assert describe_periods(late) == "Scanning 00:00–02:00Z"
+    across = [(T0, T0 + timedelta(hours=8))]
+    assert describe_periods(across) == "Scanning 18:00Z May 17 – 02:00Z May 18"
+    assert scanning_at(scans, T0 + timedelta(minutes=5)) and not scanning_at(scans, T0 + timedelta(minutes=40))
+    assert [s.kind for s in timeline([vad, stares], start=T0 + timedelta(minutes=30))] == ["Stare"]
+
+
+def test_a_low_angle_stare_is_a_beam_for_the_map_not_a_vertical_stare():
+    rays = _rays([(0, [(300.0, 1.0)] * 10, 3, np.nan), (100, [(0.0, 90.0)] * 10, 3, np.nan)])
+    scans = classify_scans(rays)
+    assert [s.kind for s in scans] == ["Beam", "Stare"]
+    assert scans[0].mappable and not scans[1].mappable

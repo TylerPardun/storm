@@ -23,12 +23,36 @@ log = logging.getLogger(__name__)
 _RAW_LIDAR_CACHE_DIR = Path.home() / ".cache" / "storm" / "raw_lidar"
 
 
+def _remote_size(url: str) -> int | None:
+    """A file's size from a HEAD request, or None if it can't be told."""
+    from urllib.request import Request, urlopen
+    import config
+    try:
+        request = Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0 STORM/1.0"})
+        with urlopen(request, timeout=20, context=config.NSSL_SSL_CONTEXT) as response:
+            length = response.headers.get("Content-Length")
+        return int(length) if length else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class ArchiveRawLidarQuicklookFetcher(QObject):
     """Discovers raw-lidar assets for every known source on an archive
     date, and loads one selected asset's rays for the quicklook dialog."""
 
     assets_ready = pyqtSignal(dict)   # platform_id -> list[LidarAsset]
     sites_ready = pyqtSignal(dict)    # instrument -> {lat, lon, altitude_m, description} (trailers)
+    # load_instrument: one lidar's files for the session, loaded one by one
+    instrument_file_ready = pyqtSignal(str, object)       # instrument, RawLidarRays (with .scans)
+    instrument_large_file = pyqtSignal(str, object, int)  # instrument, LidarAsset, bytes -- not loaded unasked
+    instrument_loaded = pyqtSignal(str, int)              # instrument, files loaded
+
+    # A lidar's files load by themselves when it's chosen, except ones this
+    # big (a trailer's day of vertical stares can be 355 MB), which wait for
+    # the user to ask -- unless already downloaded.
+    AUTO_LOAD_MAX_BYTES = 150 * 1024 * 1024
+    # scan files first (small, and what the map shows), stares last
+    _LOAD_ORDER = {"ppi": 0, "other": 1, "csm": 2, "fp": 3}
     rays_ready = pyqtSignal(str, object)  # platform_id, RawLidarRays
     error = pyqtSignal(str)
 
@@ -97,6 +121,50 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
                 sites[source.instrument] = site
         if sites:
             self.sites_ready.emit(sites)
+
+    def load_instrument(self, instrument: str, assets, force_urls=()) -> None:
+        """Load every file of one lidar (a replaced selection stops the old
+        one). Files over AUTO_LOAD_MAX_BYTES that aren't cached are reported
+        with instrument_large_file instead, unless their URL is in force_urls."""
+        with self._lock:
+            self._load_seq += 1
+            self._latest_load = seq = self._load_seq
+        ordered = sorted(assets, key=lambda a: (self._LOAD_ORDER.get(a.source.product, 9), a.filename))
+        threading.Thread(target=self._load_instrument, args=(instrument, ordered, set(force_urls), seq),
+                         daemon=True).start()
+
+    def _load_instrument(self, instrument, assets, force_urls, seq) -> None:
+        from core.lidar_scans import classify_scans
+        loaded = 0
+        for asset in assets:
+            if self._is_superseded(seq):
+                return
+            if asset.url not in force_urls and not self._cached(asset):
+                size = _remote_size(asset.url)
+                if size is not None and size > self.AUTO_LOAD_MAX_BYTES:
+                    self.instrument_large_file.emit(instrument, asset, size)
+                    continue
+            try:
+                rays = load_raw_lidar(asset, _RAW_LIDAR_CACHE_DIR)
+                rays.scans = classify_scans(rays)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Lidar %s: %s failed to load: %s", instrument, asset.filename, exc)
+                if not self._is_superseded(seq):
+                    self.error.emit(f"Lidar {asset.filename}: {exc}")
+                continue
+            if self._is_superseded(seq):
+                return
+            loaded += 1
+            self.instrument_file_ready.emit(instrument, rays)
+        if not self._is_superseded(seq):
+            self.instrument_loaded.emit(instrument, loaded)
+
+    @staticmethod
+    def _cached(asset) -> bool:
+        import hashlib
+        key = hashlib.sha256(asset.url.encode()).hexdigest()
+        path = _RAW_LIDAR_CACHE_DIR / (key + Path(asset.filename).suffix)
+        return path.exists() and path.with_suffix(path.suffix + ".json").exists()
 
     def load(self, platform_id: str, asset) -> bool:
         """Load an asset's rays. While another load runs, this becomes the

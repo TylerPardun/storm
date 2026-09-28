@@ -154,7 +154,8 @@ def test_superseded_render_cannot_inject_and_pending_time_is_rendered():
     overlay = Mock()
     window = SimpleNamespace(
         _lidar_overlay_render_in_flight=True,
-        _lidar_overlay_platform_id='DLTRUCK1-DL1-CSM',
+        _lidar_instrument='DLTRUCK1',
+        raw_lidar_controls=SimpleNamespace(map_is_on=lambda: True),
         _lidar_overlay_generation=3,
         _lidar_overlay=overlay,
         _lidar_overlay_pending=True,

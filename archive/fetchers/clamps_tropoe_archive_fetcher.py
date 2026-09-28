@@ -37,6 +37,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from core.sounding import Sounding, SoundingSet
+from core import package_sources
 
 log = logging.getLogger(__name__)
 
@@ -106,8 +107,7 @@ def _list_catalog_filenames(platform_dir: str, datastream: str) -> list[str]:
     url = f"{_CATALOG_ROOT}/{platform_dir}/processed/{datastream}/catalog.html"
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     try:
-        with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
-            html = response.read().decode("utf-8", errors="replace")
+        html = package_sources.read_url("clamps profiles", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT).decode("utf-8", errors="replace")
     except HTTPError as exc:
         if exc.code in (404, 410):
             return []
@@ -205,8 +205,7 @@ def fetch_clamps_tropoe_soundings(archive_date: datetime) -> "SoundingSet | None
         url = f"{_FILESERVER_ROOT}/{platform.platform_dir}/processed/{datastream}/{filename}"
         request = Request(url, headers={"User-Agent": _USER_AGENT})
         try:
-            with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
-                data = response.read()
+            data = package_sources.read_url("clamps profiles", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT)
         except Exception as exc:  # noqa: BLE001 - network/SSL errors, try next platform
             log.warning("CLAMPS TROPoe fetch failed for %s: %s", platform.platform_id, exc)
             continue

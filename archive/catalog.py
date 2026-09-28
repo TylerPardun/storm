@@ -140,6 +140,15 @@ def _check_cancel(cancel: Event):
         raise ScanCanceled()
 
 
+def _catalog_kind(url: str) -> str:
+    """Which case-package data type a THREDDS listing belongs to."""
+    if "/NOXP/" in url:
+        return "noxp radar"
+    if "/FOFS/" in url:
+        return "mesonet"
+    return "raw lidar" if "/CLAMPS/" in url else "listings"
+
+
 def _fetch_catalog_html(url: str, cancel: Event) -> str:
     """One paced request with one interruptible retry; never bypass TLS checks.
 
@@ -148,6 +157,10 @@ def _fetch_catalog_html(url: str, cancel: Event) -> str:
     A socket already blocked in urllib returns at its timeout; cancellation
     stops reading, retries and subsequent requests, without killing a thread.
     """
+    from core import package_sources, provenance
+    packaged = package_sources.get(url)       # an opened case package's copy of this listing
+    if packaged is not None:
+        return packaged.decode("utf-8", errors="replace")
     request = Request(url, headers={
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -170,6 +183,7 @@ def _fetch_catalog_html(url: str, cancel: Event) -> str:
                 html = b"".join(chunks).decode("utf-8", errors="replace")
                 if "thredds" not in html.lower() or "catalog" not in html.lower():
                     raise ValueError("Server did not return a THREDDS catalog")
+                provenance.record(_catalog_kind(url), url, html.encode("utf-8"))
                 return html
         except HTTPError as exc:
             if exc.code == 404:

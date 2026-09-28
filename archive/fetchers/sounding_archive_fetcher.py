@@ -5,6 +5,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import requests
+
+from core import package_sources
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.sounding import Sounding, SoundingSet, PRESSURE_LEVELS
@@ -117,7 +119,7 @@ class ArchiveSoundingFetcher(QObject):
                 "wind_speed_unit": "ms",
                 "timezone": "UTC",
             }
-            resp = requests.get(_OPEN_METEO_ARCHIVE_URL, params=params, timeout=_REQUEST_TIMEOUT)
+            resp = package_sources.requests_get("soundings", _OPEN_METEO_ARCHIVE_URL, params=params, timeout=_REQUEST_TIMEOUT)
             resp.raise_for_status()
             sounding, elevation = _parse_open_meteo_archive(resp.json(), lat, lon, t)
             if sounding is None:

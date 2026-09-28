@@ -42,6 +42,7 @@ from archive.fetchers.vehicle_obs_archive_fetcher import load_dltruck_track
 from core.sounding import SoundingSet
 from archive.positions import PositionTrack
 from data.fetchers.clamps_sounding_fetcher import _FILENAME_RE, _format_label, _parse_skewt
+from core import package_sources
 
 log = logging.getLogger(__name__)
 
@@ -92,8 +93,7 @@ def _list_catalog_filenames(platform_dir: str, datastream: str) -> list[str]:
     url = f"{_CATALOG_ROOT}/{platform_dir}/ingested/{datastream}/catalog.html"
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     try:
-        with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
-            html = response.read().decode("utf-8", errors="replace")
+        html = package_sources.read_url("clamps profiles", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT).decode("utf-8", errors="replace")
     except Exception as exc:  # noqa: BLE001 - 404/network/SSL, all "nothing here"
         log.debug("CLAMPS sonde catalog listing failed for %s/%s: %s", platform_dir, datastream, exc)
         return []
@@ -126,8 +126,7 @@ def fetch_clamps_sonde_soundings(archive_date: datetime) -> "SoundingSet | None"
         url = f"{_FILESERVER_ROOT}/{_SONDE_PLATFORM_DIR}/ingested/{_SONDE_DATASTREAM}/{filename}"
         request = Request(url, headers={"User-Agent": _USER_AGENT})
         try:
-            with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
-                text = response.read().decode("utf-8", errors="replace")
+            text = package_sources.read_url("clamps profiles", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT).decode("utf-8", errors="replace")
         except Exception as exc:  # noqa: BLE001 - network/SSL errors, skip this launch
             log.warning("CLAMPS sonde fetch failed for %s: %s", filename, exc)
             continue

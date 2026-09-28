@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 import requests
 from PyQt6.QtCore import QObject, pyqtSignal
+from core import package_sources
 
 log = logging.getLogger(__name__)
 
@@ -196,7 +197,7 @@ class ArchiveSatelliteFetcher(QObject):
                 params = f"?list-type=2&prefix={quote(prefix)}"
                 if continuation:
                     params += f"&continuation-token={quote(continuation)}"
-                resp = requests.get(f"{base_url}/{params}", timeout=_REQUEST_TIMEOUT)
+                resp = package_sources.requests_get("satellite", f"{base_url}/{params}", timeout=_REQUEST_TIMEOUT)
                 resp.raise_for_status()
                 root = ET.fromstring(resp.content)
                 for key_el in root.findall(".//{*}Contents/{*}Key"):
@@ -256,7 +257,7 @@ class ArchiveSatelliteFetcher(QObject):
         cache_key = (mode, ref.timestamp)
         try:
             url = f"{_S3_URL_TEMPLATE.format(bucket=self._bucket)}/{ref.key}"
-            resp = requests.get(url, timeout=_REQUEST_TIMEOUT)
+            resp = package_sources.requests_get("satellite", url, timeout=_REQUEST_TIMEOUT)
             resp.raise_for_status()
             png_bytes, bbox = _render_goes_png(resp.content, mode, _MODE_CONFIG[mode].get("fixed_bbox"))
             frame = SatFrame(
@@ -293,7 +294,7 @@ class ArchiveSatelliteFetcher(QObject):
     def _read_bbox_for_key(self, mode: str, key: str) -> Optional[dict]:
         try:
             url = f"{_S3_URL_TEMPLATE.format(bucket=self._bucket)}/{key}"
-            resp = requests.get(url, timeout=_REQUEST_TIMEOUT)
+            resp = package_sources.requests_get("satellite", url, timeout=_REQUEST_TIMEOUT)
             resp.raise_for_status()
             _, bbox = _render_goes_png(resp.content, mode, _MODE_CONFIG[mode].get("fixed_bbox"), image_only=False)
             return _bbox_to_dict(bbox)

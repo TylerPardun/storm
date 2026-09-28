@@ -48,8 +48,9 @@ def _fetch_text(url: str, *, api_key: bool = False) -> Optional[str]:
         if api_key and config.NSSL_API_KEY:
             headers["X-API-Key"] = config.NSSL_API_KEY
         req = Request(url, headers=headers)
-        with urlopen(req, timeout=20, context=config.NSSL_SSL_CONTEXT) as resp:
-            return resp.read().decode("utf-8", errors="replace")
+        from core import package_sources
+        data = package_sources.read_url("mqtt history", req, urlopen, timeout=20, context=config.NSSL_SSL_CONTEXT)
+        return data.decode("utf-8", errors="replace")
     except HTTPError as exc:
         if exc.code == 404:
             return None
@@ -68,8 +69,6 @@ def _fetch_topic_text(topic: str, date_str: str) -> "tuple[str | None, str]":
     try:
         text = _fetch_text(thredds_url)
         if text is not None:
-            from core import provenance
-            provenance.record("mqtt history", thredds_url, text.encode("utf-8"))
             return text, "THREDDS"
     except Exception as exc:
         thredds_error = exc
@@ -77,9 +76,6 @@ def _fetch_topic_text(topic: str, date_str: str) -> "tuple[str | None, str]":
 
     api_url = f"{config.NSSL_API_ROOT}/{_ANNOTATIONS_PATH}/storm.{topic}.{date_str}"
     text = _fetch_text(api_url, api_key=True)
-    if text is not None:
-        from core import provenance
-        provenance.record("mqtt history", api_url, text.encode("utf-8"))
     if text is None and thredds_error is not None:
         raise RuntimeError(f"THREDDS availability unknown for {topic} {date_str}: {thredds_error}; API returned 404") from thredds_error
     return text, "API"

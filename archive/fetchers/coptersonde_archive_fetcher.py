@@ -54,6 +54,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from core.sounding import Sounding, SoundingSet
+from core import package_sources
 
 log = logging.getLogger(__name__)
 
@@ -109,8 +110,7 @@ def _list_catalog_filenames(year: str, iop: str) -> list[str]:
     url = f"{_CATALOG_ROOT}/{year}/CopterSonde/v1/{iop}/catalog.html"
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     try:
-        with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
-            html = response.read().decode("utf-8", errors="replace")
+        html = package_sources.read_url("coptersonde", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT).decode("utf-8", errors="replace")
     except Exception as exc:  # noqa: BLE001 - 404/network/SSL, all "nothing here"
         log.debug("CopterSonde catalog listing failed for %s/%s: %s", year, iop, exc)
         return []
@@ -201,8 +201,7 @@ def fetch_coptersonde_soundings(archive_date: datetime) -> "dict[str, SoundingSe
             url = f"{_FILESERVER_ROOT}/{year}/CopterSonde/v1/{iop}/{filename}"
             request = Request(url, headers={"User-Agent": _USER_AGENT})
             try:
-                with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
-                    data = response.read()
+                data = package_sources.read_url("coptersonde", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT)
             except Exception as exc:  # noqa: BLE001 - network/SSL errors, skip this flight
                 log.warning("CopterSonde fetch failed for %s: %s", filename, exc)
                 continue

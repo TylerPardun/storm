@@ -33,6 +33,7 @@ from urllib.request import Request, urlopen
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.vad import VADProfile, VADSet
+from core import package_sources
 
 log = logging.getLogger(__name__)
 
@@ -190,8 +191,7 @@ def _fetch_platform_wind_set(source: ClampsWindSource, date_str: str) -> "VADSet
     url = _source_url(source, date_str)
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     try:
-        with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
-            data = response.read()
+        data = package_sources.read_url("clamps profiles", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT)
     except HTTPError as exc:
         if exc.code in (404, 410):
             return None

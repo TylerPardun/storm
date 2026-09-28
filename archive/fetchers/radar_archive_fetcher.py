@@ -286,7 +286,8 @@ class ArchiveRadarFetcher(QObject):
             times = []
             for day in (start, start + timedelta(days=1)):
                 prefix = f"{day.strftime('%Y/%m/%d')}/{self._station}/"
-                resp = requests.get(f"{_S3_BASE}/?prefix={prefix}&list-type=2", timeout=15)
+                from core import package_sources
+                resp = package_sources.requests_get("radar", f"{_S3_BASE}/?prefix={prefix}&list-type=2", timeout=15)
                 resp.raise_for_status()
                 times += [t for t in self._parse_s3_listing(resp.text) if start <= t <= cap]
             with self._index_lock:
@@ -465,7 +466,13 @@ class ArchiveRadarFetcher(QObject):
         # try V06 first, then V03; the bucket was reorganized in 2025 to
         # store objects gzip-compressed with a ".gz" suffix on the key, so
         # also try gzip-suffixed variants of each.
-        for suffix in ("_V06", "_V03", "", "_V06.gz", "_V03.gz", ".gz"):
+        suffixes = ("_V06", "_V03", "", "_V06.gz", "_V03.gz", ".gz")
+        from core import package_sources
+        for suffix in suffixes:               # an opened case package's copy first, no network
+            data = package_sources.get(f"{_S3_BASE}/{prefix}{suffix}")
+            if data is not None:
+                return gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data
+        for suffix in suffixes:
             if self._closed.is_set():
                 return None
             url = f"{_S3_BASE}/{prefix}{suffix}"

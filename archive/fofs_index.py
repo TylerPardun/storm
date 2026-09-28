@@ -245,9 +245,9 @@ def _default_fetch_xml(catalog_path: str) -> bytes | None:
     from urllib.request import Request
     from archive.fetchers.vehicle_obs_archive_fetcher import _USER_AGENT, _urlopen_with_retry
     request = Request(f"{_CATALOG_BASE}/{catalog_path}", headers={"User-Agent": _USER_AGENT})
+    from core import package_sources
     try:
-        with _urlopen_with_retry(request, timeout=60) as response:
-            return response.read()
+        return package_sources.read_url("mesonet", request, _urlopen_with_retry, timeout=60)
     except HTTPError as exc:
         if exc.code == 404:
             return None

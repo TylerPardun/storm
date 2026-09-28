@@ -32,6 +32,7 @@ from urllib.request import Request, urlopen
 from PyQt6.QtCore import QObject, pyqtSignal
 
 import config
+from core import package_sources
 
 log = logging.getLogger(__name__)
 
@@ -225,8 +226,7 @@ def fetch_dat_damage_paths(
     for a genuine request failure."""
     url = _arcgis_query_url(west, south, east, north)
     request = Request(url, headers={"User-Agent": "Mozilla/5.0 STORM/1.0"})
-    with urlopen(request, timeout=_REQUEST_TIMEOUT, context=config.NSSL_SSL_CONTEXT) as response:
-        payload = response.read().decode("utf-8")
+    payload = package_sources.read_url("damage paths", request, urlopen, timeout=_REQUEST_TIMEOUT, context=config.NSSL_SSL_CONTEXT).decode("utf-8")
     fc = json.loads(payload)
     if not isinstance(fc, dict) or fc.get("type") != "FeatureCollection":
         raise RuntimeError("DAT query did not return a GeoJSON FeatureCollection")
@@ -248,8 +248,7 @@ def _ncei_details_url(year: int) -> str:
     base = NCEI_EVENT_CSV_BASE_URL.rstrip("/")
     index_url = base + "/"
     request = Request(index_url, headers={"User-Agent": "Mozilla/5.0 STORM/1.0"})
-    with urlopen(request, timeout=_NCEI_TIMEOUT, context=config.NSSL_SSL_CONTEXT) as response:
-        html = response.read().decode("utf-8", errors="replace")
+    html = package_sources.read_url("damage paths", request, urlopen, timeout=_NCEI_TIMEOUT, context=config.NSSL_SSL_CONTEXT).decode("utf-8", errors="replace")
     pattern = re.compile(rf"StormEvents_details-ftp_v1\.0_d{int(year)}_c(\d{{8}})\.csv\.gz")
     matches = sorted(set(pattern.findall(html)))
     if not matches:
@@ -353,8 +352,7 @@ def fetch_ncei_storm_events_damage_paths(
             log.warning("NCEI Storm Events index lookup failed for %s: %s", year, exc)
             continue
         request = Request(url, headers={"User-Agent": "Mozilla/5.0 STORM/1.0"})
-        with urlopen(request, timeout=_NCEI_TIMEOUT, context=config.NSSL_SSL_CONTEXT) as response:
-            raw = response.read()
+        raw = package_sources.read_url("damage paths", request, urlopen, timeout=_NCEI_TIMEOUT, context=config.NSSL_SSL_CONTEXT)
         text = gzip.decompress(raw).decode("utf-8", errors="replace")
         for row in csv.DictReader(io.StringIO(text)):
             if (row.get("EVENT_TYPE") or "").strip().upper() != "TORNADO":

@@ -55,6 +55,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from core.observation import Observation
+from core import package_sources
 
 log = logging.getLogger(__name__)
 
@@ -126,8 +127,7 @@ def _list_catalog_filenames(platform_dir: str, datastream: str) -> list[str]:
     url = f"{_CATALOG_ROOT}/{platform_dir}/ingested/{datastream}/catalog.html"
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     try:
-        with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
-            html = response.read().decode("utf-8", errors="replace")
+        html = package_sources.read_url("clamps surface", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT).decode("utf-8", errors="replace")
     except Exception as exc:  # noqa: BLE001 - 404/network/SSL, all treated as "nothing here"
         log.debug("CLAMPS surface catalog listing failed for %s/%s: %s", platform_dir, datastream, exc)
         return []
@@ -254,10 +254,7 @@ def fetch_clamps_surface_observations(archive_date: datetime) -> "list[Observati
         for url in urls:
             request = Request(url, headers={"User-Agent": _USER_AGENT})
             try:
-                with _urlopen_with_retry(request, timeout=_REQUEST_TIMEOUT) as response:
-                    data = response.read()
-                from core import provenance
-                provenance.record("clamps surface", url, data)
+                data = package_sources.read_url("clamps surface", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT)
             except Exception as exc:  # noqa: BLE001 - network/SSL errors, try the next file/source
                 log.warning("CLAMPS surface fetch failed for %s (%s): %s", source.platform_id, source.kind, exc)
                 continue

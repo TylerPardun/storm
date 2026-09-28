@@ -9,6 +9,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import requests
+
+from core import package_sources
 from PyQt6.QtCore import QObject, pyqtSignal
 from data.fetchers.hazard_fetcher import (
     _spc_cat_key,
@@ -154,7 +156,7 @@ class ArchiveHazardFetcher(QObject):
     def _fetch_sbw(self, rounded_time: datetime) -> None:
         try:
             ts = rounded_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-            resp = requests.get(_IEM_SBW_URL, params={"ts": ts}, timeout=20)
+            resp = package_sources.requests_get("hazards", _IEM_SBW_URL, params={"ts": ts}, timeout=20)
             resp.raise_for_status()
             geojson_str = _normalize_sbw_geojson(resp.text)
             self._sbw_cache[rounded_time] = geojson_str
@@ -181,7 +183,7 @@ class ArchiveHazardFetcher(QObject):
     def _fetch_watches(self, rounded_time: datetime) -> None:
         try:
             ts = rounded_time.strftime("%Y%m%d%H%M")   # spcwatch.py requires YYYYMMDDHHmm
-            resp = requests.get(_IEM_WATCH_URL, params={"ts": ts}, timeout=20)
+            resp = package_sources.requests_get("hazards", _IEM_WATCH_URL, params={"ts": ts}, timeout=20)
             resp.raise_for_status()
             geojson_str = _normalize_watch_geojson(resp.text)
             self._watch_cache[rounded_time] = geojson_str
@@ -222,7 +224,7 @@ class ArchiveHazardFetcher(QObject):
                 "hour2":   t_end.hour,
                 "minute2": t_end.minute,
             }
-            resp = requests.get(_IEM_MCD_GIS_URL, params=params, timeout=30)
+            resp = package_sources.requests_get("hazards", _IEM_MCD_GIS_URL, params=params, timeout=30)
             resp.raise_for_status()
 
             features = _parse_mcd_shapefile_zip(resp.content, rounded_time)
@@ -271,7 +273,7 @@ class ArchiveHazardFetcher(QObject):
                 for ct in candidates:
                     url = _archive_spc_url(day, ct, suffix)
                     try:
-                        resp = requests.get(url, timeout=20)
+                        resp = package_sources.requests_get("hazards", url, timeout=20)
                         if resp.status_code == 404:
                             continue
                         resp.raise_for_status()
@@ -307,7 +309,7 @@ class ArchiveHazardFetcher(QObject):
                 for ct in candidates:
                     url = _archive_spc_url(day, ct, suffix)
                     try:
-                        resp = requests.get(url, timeout=20)
+                        resp = package_sources.requests_get("hazards", url, timeout=20)
                         if resp.status_code == 404:
                             continue
                         resp.raise_for_status()
@@ -350,7 +352,7 @@ class ArchiveHazardFetcher(QObject):
                 for ct in candidates:
                     zip_url = _archive_spc_shapefile_zip_url(day, ct)
                     try:
-                        resp = requests.get(zip_url, timeout=20)
+                        resp = package_sources.requests_get("hazards", zip_url, timeout=20)
                         if resp.status_code == 404:
                             continue
                         resp.raise_for_status()

@@ -36,6 +36,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 import config
 from core.observation import Observation
 from data.fetchers.surface_fetcher import MAX_ASOS_STATIONS, load_asos_station_roster
+from core import package_sources
 
 log = logging.getLogger(__name__)
 
@@ -173,8 +174,7 @@ def fetch_asos_history(
             return merged
         url = _batch_url(batch, sts, ets)
         request = Request(url, headers={"User-Agent": "Mozilla/5.0 STORM/1.0"})
-        with _urlopen_with_retry(request) as response:
-            raw_text = response.read().decode("utf-8", errors="replace")
+        raw_text = package_sources.read_url("asos", request, _urlopen_with_retry).decode("utf-8", errors="replace")
         for stid, obs_list in parse_asos_history_csv(raw_text, roster).items():
             merged.setdefault(stid, []).extend(obs_list)
         if i < len(batches) - 1:

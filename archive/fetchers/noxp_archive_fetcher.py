@@ -506,6 +506,14 @@ def download_asset(url, cache_dir, cancel, filename, max_bytes=512 * 1024 * 1024
             _check_cancel(cancel)
             _record_session(url, provenance)
             return path, provenance
+    from core import package_sources
+    packaged = package_sources.get(url)       # an opened case package's copy (already hash-checked)
+    if packaged is not None:
+        path.write_bytes(packaged)
+        provenance = dict(url=url, sha256=hashlib.sha256(packaged).hexdigest(), bytes=len(packaged),
+                          fetched_at=datetime.now(timezone.utc).isoformat(), source='case package')
+        record.write_text(json.dumps(provenance, indent=2))
+        return path, provenance
     import tempfile
     temporary = None
     try:

@@ -845,15 +845,18 @@ class ArchiveVehicleObsFetcher(QObject):
         icon_type: str | None,
         file_date: date,
     ) -> tuple[list[Observation], _FileDating | None]:
-        request = Request(url, headers={"User-Agent": _USER_AGENT})
-        try:
-            with _urlopen_with_retry(request, timeout=30) as response:
-                raw = response.read()
-                text = raw.decode("utf-8", errors="replace")
-        except HTTPError as exc:
-            if exc.code in (404, 410):
-                return [], None
-            raise
+        from core import package_sources
+        raw = package_sources.get(url)          # an opened case package's copy, if it has one
+        if raw is None:
+            request = Request(url, headers={"User-Agent": _USER_AGENT})
+            try:
+                with _urlopen_with_retry(request, timeout=30) as response:
+                    raw = response.read()
+            except HTTPError as exc:
+                if exc.code in (404, 410):
+                    return [], None
+                raise
+        text = raw.decode("utf-8", errors="replace")
         if text.strip() and not _is_published_format(text):
             # e.g. a _legacy_data original in its logger's own format -- the
             # same rows as the published copy, which is read instead

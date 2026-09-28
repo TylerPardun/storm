@@ -7242,10 +7242,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._update_local_scan_from_vehicle(obs)
 
     def _archive_vehicle_hover_text(self, vehicle_id: str) -> str:
-        """Build the admin vehicle name and ground-speed tooltip (archive or live)."""
-        if not runtime_flags.FLAGS.admin_mode:
-            return vehicle_id
-
+        """The vehicle hover tooltip: its name and how fast it was driving
+        (ground speed from its GPS track, archive or live)."""
         if self._archive:
             if not hasattr(self, "_time_ctrl"):
                 return vehicle_id

@@ -31,8 +31,8 @@ def test_dense_speed_uses_one_and_fifteen_second_windows():
     assert speed.short_mph is not None
     assert speed.average_mph is not None
     assert abs(speed.short_mph - speed.average_mph) < 0.01
-    assert format_vehicle_speed(speed).startswith("1s ")
-    assert "15s avg" in format_vehicle_speed(speed)
+    assert format_vehicle_speed(speed).startswith("Vehicle speed (GPS): ")
+    assert "over 1 s" in format_vehicle_speed(speed) and "15 s avg" in format_vehicle_speed(speed)
 
 
 def test_mqtt_speed_uses_ten_and_thirty_second_windows():
@@ -46,8 +46,8 @@ def test_mqtt_speed_uses_ten_and_thirty_second_windows():
 
     assert speed.short_mph is not None
     assert speed.average_mph is not None
-    assert format_vehicle_speed(speed).startswith("10s ")
-    assert "30s avg" in format_vehicle_speed(speed)
+    assert "over 10 s" in format_vehicle_speed(speed)
+    assert "30 s avg" in format_vehicle_speed(speed)
 
 
 def test_speed_is_unavailable_until_window_has_history():
@@ -61,4 +61,4 @@ def test_speed_is_unavailable_until_window_has_history():
 
     assert speed.short_mph is None
     assert speed.average_mph is None
-    assert format_vehicle_speed(speed) == "1s -- mph | 15s avg -- mph"
+    assert format_vehicle_speed(speed) == "Vehicle speed (GPS): -- mph over 1 s | -- mph 15 s avg"

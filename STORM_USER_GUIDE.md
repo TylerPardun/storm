@@ -1084,6 +1084,8 @@ These update as each fetcher resolves data for the current archive timestamp.
 
 Each layer updates automatically as the archive clock advances. Data fetches are triggered when the clock crosses boundaries (e.g., every radar scan interval).
 
+**Hovering over a vehicle** shows its name and how fast the vehicle itself was driving, worked out from its GPS track: over the last second and averaged over 15 s (10 s and 30 s in live mode). This is the vehicle's ground speed, not wind; the wind is in the vehicle's station plot.
+
 The map opens centered on the case: the radar chosen for the session (the one nearest the vehicles at the start time), zoomed to its coverage.
 
 ---

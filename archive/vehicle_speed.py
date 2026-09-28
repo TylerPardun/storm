@@ -87,10 +87,11 @@ def calculate_vehicle_speed(
 
 
 def format_vehicle_speed(speed: VehicleSpeed) -> str:
-    """Return the compact second line used in the vehicle hover tooltip."""
+    """The vehicle hover tooltip's second line: how fast the vehicle itself
+    was driving, from its GPS track -- labeled so it isn't read as wind."""
     short = "--" if speed.short_mph is None else f"{speed.short_mph:.0f}"
     average = "--" if speed.average_mph is None else f"{speed.average_mph:.0f}"
     return (
-        f"{speed.short_seconds}s {short} mph | "
-        f"{speed.average_seconds}s avg {average} mph"
+        f"Vehicle speed (GPS): {short} mph over {speed.short_seconds} s | "
+        f"{average} mph {speed.average_seconds} s avg"
     )

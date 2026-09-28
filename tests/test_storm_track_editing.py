@@ -427,3 +427,11 @@ def test_shared_tracks_for_the_date_are_listed_and_open_as_a_copy(tmp_path, monk
     assert original.read_text() == before                   # the shared track is untouched
     assert w._track_saved_path == tmp_path / "ws" / "My work" / "20240427" / original.name
     assert pd.read_csv(w._track_saved_path)["case_id"].tolist() == ["N38"] * 3
+
+
+def test_a_point_can_be_placed_before_any_radar_is_chosen(tmp_path, monkeypatch):
+    w = _window(tmp_path, monkeypatch)
+    w._noxp_active, w._archive_radar, w._current_radar_scan = False, None, None
+    w.radar_controls = type("R", (), {"current_product": lambda self: "reflectivity"})()
+    context = MainWindow.__dict__["_current_track_radar_context"](w)
+    assert context[0] == "" and context[1] == "reflectivity"      # no radar yet: no crash, blank site

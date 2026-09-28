@@ -5307,7 +5307,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         from core.level2_radar_scan import L2_PRODUCTS
         product_label = L2_PRODUCTS.get(product, {}).get("label", product)
         tilt_deg = getattr(self._current_radar_scan, "tilt_deg", None)
-        return self._archive_radar.station, product, product_label, tilt_deg
+        # a point can be placed before any radar station has been chosen
+        radar = getattr(self, "_archive_radar", None)
+        return (radar.station if radar is not None else ""), product, product_label, tilt_deg
 
     def _nearest_track_point_id(self, when: datetime) -> int | None:
         if not self._track_points:

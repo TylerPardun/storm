@@ -49,6 +49,8 @@ class TrackControls(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
+        """Two compact rows, like the other toolbar drawers: controls on the
+        first, what's loaded / where it's saved / storm motion on the second."""
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 6, 8, 6)
         outer.setSpacing(5)
@@ -57,89 +59,74 @@ class TrackControls(QWidget):
 
         self._drawer = QWidget()
         self._drawer.setObjectName("trackDrawer")
+        # compact buttons so both rows fit within the toolbar's width
+        self._drawer.setStyleSheet("QPushButton { padding: 2px 9px; min-width: 0px; font-size: 10px; }")
         col = QVBoxLayout(self._drawer)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(5)
+        small = "color: #B5BDCC; font-size: 10px;"
 
-        ws_row = QHBoxLayout()
+        def button(text, tip, signal):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.setFixedHeight(24)
+            b.clicked.connect(signal.emit)
+            return b
+
+        # ---- row 1: workspace, saved tracks, editing, layers -------------
+        row = QHBoxLayout()
+        row.setSpacing(4)
         ws_label = QLabel("WORKSPACE")
         ws_label.setStyleSheet("color: #8E97AB; font-size: 9px; letter-spacing: 1px;")
-        ws_row.addWidget(ws_label)
+        row.addWidget(ws_label)
         self._workspace_combo = QComboBox()
+        self._workspace_combo.setFixedWidth(110)
         self._workspace_combo.setToolTip("Tracks are saved per workspace in STORM's data/storm_tracks folder")
         self._workspace_combo.activated.connect(self._on_workspace_activated)
-        ws_row.addWidget(self._workspace_combo, 1)
-        col.addLayout(ws_row)
-
-        saved_row = QHBoxLayout()
+        row.addWidget(self._workspace_combo)
         self._saved_combo = QComboBox()
-        self._saved_combo.setToolTip("Tracks saved in this workspace for this date, most recent first")
-        saved_row.addWidget(self._saved_combo, 1)
+        self._saved_combo.setFixedWidth(200)
+        self._saved_combo.setToolTip("Tracks saved for this date, yours first; [MESO-VIEW] marks shared tracks")
+        row.addWidget(self._saved_combo)
         self._btn_open_saved = QPushButton("OPEN")
-        self._btn_open_saved.setToolTip("Resume the selected track")
+        self._btn_open_saved.setToolTip("Open the selected track (a shared track opens as a copy in your workspace)")
+        self._btn_open_saved.setFixedHeight(24)
         self._btn_open_saved.clicked.connect(self._on_open_saved)
-        saved_row.addWidget(self._btn_open_saved)
-        col.addLayout(saved_row)
-        self.set_saved_tracks([])
+        row.addWidget(self._btn_open_saved)
+        row.addSpacing(8)
+        self._btn_load = button("LOAD…", "Open a track file from anywhere (CSV or Excel, STORM or MESO-VIEW)",
+                                self.load_requested)
+        self._btn_reset = button("RESET", "Undo every edit since the track was loaded", self.reset_requested)
+        self._btn_reset.setEnabled(False)
+        self._btn_undo = button("UNDO", "Undo the last track edit (Ctrl+Z)", self.undo_requested)
+        self._btn_redo = button("REDO", "Redo the last undone edit (Ctrl+Shift+Z)", self.redo_requested)
+        self._btn_table = button("TABLE…", "Edit exact point times and positions in a table", self.table_requested)
+        self._btn_export = button("EXPORT…", "Save a copy of the track as CSV or Excel", self.export_requested)
+        self._btn_clear = button("CLEAR", "Start a new track (the current one stays saved)", self.clear_requested)
+        for b in (self._btn_load, self._btn_reset, self._btn_undo, self._btn_redo,
+                  self._btn_table, self._btn_export, self._btn_clear):
+            row.addWidget(b)
+        row.addStretch()
+        col.addLayout(row)
 
+        # ---- row 2: what's loaded, where it saves, storm motion ----------
+        info = QHBoxLayout()
+        info.setSpacing(8)
         self._count_label = QLabel("0 points")
-        self._count_label.setStyleSheet("color: #B5BDCC; font-size: 10px; letter-spacing: 0.5px;")
-        col.addWidget(self._count_label)
-
-        file_row = QHBoxLayout()
+        self._count_label.setStyleSheet(small)
+        info.addWidget(self._count_label)
         self._file_label = QLabel("New track — nothing saved yet")
-        self._file_label.setWordWrap(True)
         self._file_label.setStyleSheet("color: #8E97AB; font-size: 10px;")
-        file_row.addWidget(self._file_label, 1)
+        info.addWidget(self._file_label)
         self._btn_open_folder = QPushButton("OPEN FOLDER")
         self._btn_open_folder.setToolTip("Show STORM's storm-track folder, where every track is saved")
+        self._btn_open_folder.setFixedHeight(22)
         self._btn_open_folder.clicked.connect(self.open_folder_requested.emit)
-        file_row.addWidget(self._btn_open_folder)
-        col.addLayout(file_row)
-
-        load_row = QHBoxLayout()
-        self._btn_load = QPushButton("LOAD TRACK…")
-        self._btn_load.setToolTip("Open an existing track (CSV or Excel, from STORM or MESO-VIEW) to view and edit")
-        self._btn_load.clicked.connect(self.load_requested.emit)
-        load_row.addWidget(self._btn_load)
-        self._btn_reset = QPushButton("RESET TO ORIGINAL")
-        self._btn_reset.setToolTip("Undo every edit since the track was loaded")
-        self._btn_reset.clicked.connect(self.reset_requested.emit)
-        self._btn_reset.setEnabled(False)
-        load_row.addWidget(self._btn_reset)
-        col.addLayout(load_row)
-
-        edit_row = QHBoxLayout()
-        self._btn_undo = QPushButton("UNDO")
-        self._btn_undo.setToolTip("Undo the last track edit (Ctrl+Z)")
-        self._btn_undo.clicked.connect(self.undo_requested.emit)
-        edit_row.addWidget(self._btn_undo)
-        self._btn_redo = QPushButton("REDO")
-        self._btn_redo.setToolTip("Redo the last undone edit (Ctrl+Shift+Z)")
-        self._btn_redo.clicked.connect(self.redo_requested.emit)
-        edit_row.addWidget(self._btn_redo)
-        col.addLayout(edit_row)
-
-        btn_row = QHBoxLayout()
-        self._btn_table = QPushButton("TABLE…")
-        self._btn_table.setToolTip("Edit exact point times and positions in a table")
-        self._btn_table.clicked.connect(self.table_requested.emit)
-        btn_row.addWidget(self._btn_table)
-
-        self._btn_export = QPushButton("EXPORT AS…")
-        self._btn_export.setToolTip("Save a copy of the track as CSV or Excel")
-        self._btn_export.clicked.connect(self.export_requested.emit)
-        btn_row.addWidget(self._btn_export)
-
-        self._btn_clear = QPushButton("CLEAR TRACK")
-        self._btn_clear.setToolTip("Remove all track points and start a new file")
-        self._btn_clear.clicked.connect(self.clear_requested.emit)
-        btn_row.addWidget(self._btn_clear)
-        col.addLayout(btn_row)
-
+        info.addWidget(self._btn_open_folder)
+        info.addSpacing(8)
         motion_title = QLabel("STORM MOTION")
         motion_title.setStyleSheet("color: #8E97AB; font-size: 9px; letter-spacing: 1px;")
-        col.addWidget(motion_title)
+        info.addWidget(motion_title)
         self._motion_mean = QLabel()
         self._motion_now = QLabel()
         for label, tip in (
@@ -148,24 +135,24 @@ class TrackControls(QWidget):
         ):
             label.setToolTip(tip)
             label.setStyleSheet("color: #E3E8F2; font-size: 10px;")
-            col.addWidget(label)
-        self.set_motion(None, None)
-
-        layer_row = QHBoxLayout()
+            info.addWidget(label)
+        info.addStretch()
         self._chk_line = QCheckBox("Line")
         self._chk_line.setChecked(True)
         self._chk_points = QCheckBox("Points")
         self._chk_points.setChecked(True)
         for chk in (self._chk_line, self._chk_points):
-            chk.setStyleSheet("color: #B5BDCC; font-size: 10px;")
+            chk.setStyleSheet(small)
             chk.toggled.connect(self._emit_layers)
-            layer_row.addWidget(chk)
-        layer_row.addStretch()
-        col.addLayout(layer_row)
+            info.addWidget(chk)
+        col.addLayout(info)
+        self.set_motion(None, None)
+        self.set_saved_tracks([])
 
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet("color: #6E7A8F; font-size: 10px;")
+        self._status_label.hide()
         col.addWidget(self._status_label)
 
         outer.addWidget(self._drawer)
@@ -195,8 +182,11 @@ class TrackControls(QWidget):
     def _emit_layers(self, _checked: bool = False) -> None:
         self.layers_changed.emit(self._chk_line.isChecked(), self._chk_points.isChecked())
 
-    def set_file(self, text: str) -> None:
-        self._file_label.setText(text)
+    def set_file(self, text: str, full_path: str = "") -> None:
+        """Long paths are shortened in the middle; hover shows the full path."""
+        metrics = self._file_label.fontMetrics()
+        self._file_label.setText(metrics.elidedText(text, Qt.TextElideMode.ElideMiddle, 300))
+        self._file_label.setToolTip(full_path or text)
 
     def set_edit_state(self, *, loaded: bool, can_undo: bool, can_redo: bool) -> None:
         self._btn_reset.setEnabled(loaded)
@@ -238,8 +228,9 @@ class TrackControls(QWidget):
 
     def set_motion(self, mean: str | None, now: str | None) -> None:
         """Motion readouts, e.g. "from 240° at 15.1 m/s (29 kt)"; None shows a dash."""
-        self._motion_mean.setText(f"Mean  {mean or '— (needs 2 points)'}")
-        self._motion_now.setText(f"Now   {now or '— (outside the track)'}")
+        self._motion_mean.setText(f"Mean {mean or '— (2 points needed)'}")
+        self._motion_now.setText(f"   Now {now or '— (outside the track)'}")
 
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)
+        self._status_label.setVisible(bool(text))

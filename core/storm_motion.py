@@ -45,6 +45,10 @@ class StormMotion:
         """Meteorological convention, like wind: the direction the storm moves from."""
         return (270.0 - math.degrees(math.atan2(self.v_ms, self.u_ms))) % 360.0
 
+    def short(self) -> str:
+        """Compact form for tight panels, e.g. "240° · 15.2 m/s (30 kt)"."""
+        return f"{self.direction_from_deg:03.0f}° · {self.speed_ms:.1f} m/s ({self.speed_kt:.0f} kt)"
+
     def describe(self) -> str:
         return f"from {self.direction_from_deg:03.0f}° at {self.speed_ms:.1f} m/s ({self.speed_kt:.0f} kt)"
 

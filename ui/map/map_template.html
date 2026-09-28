@@ -176,7 +176,9 @@
     #track-edit-banner {
       display: none;
       position: absolute;
-      top: 14px;
+      bottom: 150px;               /* clear of the time bar and the status box; the top sits under the toolbar */
+      max-width: min(600px, 70%);
+      text-align: center;
       left: 50%;
       transform: translateX(-50%);
       pointer-events: none;
@@ -189,7 +191,7 @@
       font-weight: 600;
       color: #E8EDF5;
       letter-spacing: 0.3px;
-      white-space: nowrap;
+      white-space: normal;
       z-index: 200;
       box-shadow: 0 4px 14px rgba(0,0,0,0.35);
     }
@@ -452,7 +454,7 @@
   <div id="damage-path-tooltip"></div>
 
   <!-- ── Storm-Track Edit-Mode Banner ── -->
-  <div id="track-edit-banner">TRACK EDIT — click to add (a point already at this frame moves) · drag to move (Alt keeps time) · right-click for marker · A adds at marker · D deletes · Shift skips snapping · Ctrl+Z undoes</div>
+  <div id="track-edit-banner">TRACK EDIT — click: add (moves the point already at this frame) · drag: move (Alt keeps its time) · right-click: marker · A: add at marker · D: delete · Shift: no snapping · Ctrl+Z: undo</div>
 
   <script>
     window.onerror = function(msg, src, line) {

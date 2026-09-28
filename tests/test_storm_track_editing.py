@@ -359,12 +359,12 @@ def test_r_flips_reflectivity_and_velocity_for_every_radar_source(codes, start, 
 def test_the_panel_shows_mean_and_current_storm_motion(tmp_path, monkeypatch):
     w = _window(tmp_path, monkeypatch)
     w._on_track_point_add(35.0, -98.0)
-    assert "needs 2 points" in w.track_controls._motion_mean.text()
+    assert "2 points needed" in w.track_controls._motion_mean.text()
     w._time_ctrl.current_time += timedelta(minutes=10)
     w._on_track_point_add(35.0, -97.9)                      # due east
     assert w.track_storm_motion().direction_from_deg == pytest.approx(270)
-    assert w.track_controls._motion_mean.text().startswith("Mean  from 270° at 15.2 m/s")
-    assert "from 270°" in w.track_controls._motion_now.text()
+    assert w.track_controls._motion_mean.text().startswith("Mean 270° · 15.2 m/s")
+    assert "270°" in w.track_controls._motion_now.text()
 
     w._time_ctrl.current_time += timedelta(minutes=5)      # past the last point
     w._on_time_changed_update_track_highlight(w._time_ctrl.current_time)

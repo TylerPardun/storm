@@ -194,6 +194,7 @@ class ArchiveControls(QWidget):
         case_menu.addAction("Open case package…", self.open_case_requested.emit)
         case_btn.setMenu(case_menu)
         case_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        case_btn.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0px; }")   # arrow overlapped the text
         row2.addWidget(case_btn)
 
         change_day_btn = self._ctrl_btn("EXIT", "Exit this session and pick a different day")

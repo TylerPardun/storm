@@ -5466,7 +5466,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             return
         self.track_controls.set_point_count(len(self._track_points))
         if self._track_saved_path is not None:
-            self.track_controls.set_file(f"Saving to {self._track_saved_path}")
+            from core.workspace import workspaces_root
+            try:
+                shown = self._track_saved_path.relative_to(workspaces_root())
+            except ValueError:
+                shown = self._track_saved_path
+            self.track_controls.set_file(f"Saving to {shown}", str(self._track_saved_path))
         else:
             self.track_controls.set_file("New track — nothing saved yet")
         self.track_controls.set_edit_state(
@@ -5517,8 +5522,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             return
         mean = self.track_storm_motion()
         now = motion_at(self._track_points, self._time_ctrl.current_time) if self._track_points else None
-        self.track_controls.set_motion(mean.describe() if mean else None,
-                                       now.describe() if now else None)
+        self.track_controls.set_motion(mean.short() if mean else None,
+                                       now.short() if now else None)
         if hasattr(self, "radar_controls"):
             self.radar_controls.set_storm_relative_available(mean is not None,
                                                              mean.describe() if mean else "")

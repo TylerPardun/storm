@@ -86,7 +86,7 @@ class TrackControls(QWidget):
         row.addWidget(self._workspace_combo)
         self._saved_combo = QComboBox()
         self._saved_combo.setFixedWidth(200)
-        self._saved_combo.setToolTip("Tracks saved for this date, yours first; [MESO-VIEW] marks shared tracks")
+        self._saved_combo.setToolTip("Tracks saved for this date, yours first; [Pardun_Tracks] (or another workspace name) marks shared tracks")
         row.addWidget(self._saved_combo)
         self._btn_open_saved = QPushButton("OPEN")
         self._btn_open_saved.setToolTip("Open the selected track (a shared track opens as a copy in your workspace)")
@@ -220,6 +220,12 @@ class TrackControls(QWidget):
             self._saved_combo.addItem("No saved tracks for this date")
         self._saved_combo.setEnabled(bool(tracks))
         self._btn_open_saved.setEnabled(bool(tracks))
+
+    def select_saved_track(self, path: str) -> None:
+        """Show `path` as the selected saved track, if it's listed."""
+        index = self._saved_combo.findData(path)
+        if index >= 0:
+            self._saved_combo.setCurrentIndex(index)
 
     def _on_open_saved(self) -> None:
         path = self._saved_combo.currentData()

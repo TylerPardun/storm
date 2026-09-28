@@ -23,6 +23,7 @@ _METHODS = [
     "_track_workspace", "_track_session_day", "_refresh_track_workspace_lists",
     "_switch_track_workspace", "_new_track_workspace", "_open_track",
     "_open_track_table", "_apply_track_table", "_jump_to_track_point",
+    "_on_track_edit_toggled", "_session_tracks", "_open_session_track",
 ]
 
 _MESO_VIEW_CSV = """point_id,time,lat,lon,source,case_id,track_file_kind,edited_at
@@ -45,6 +46,9 @@ class _Map:
 
     def set_track_geojson(self, text):
         self.geojson = json.loads(text)
+
+    def set_track_edit_mode(self, on):
+        pass
 
 
 class _MarkerMap(_Map):
@@ -99,6 +103,8 @@ def _window(tmp_path, monkeypatch, now=datetime(2024, 4, 27, 20, 0, tzinfo=timez
     w._current_track_radar_context = lambda: ("KTLX", "N0B", "Reflectivity", 0.5)
     w._archive_time = now
     w._init_track_state()
+    w._track_session_opened = False
+    w._set_track_letter_keys = lambda editing: None
     w._track_edit_active = True
     monkeypatch.setattr("ui.app.main_window.default_track_dir", lambda: tmp_path)
     monkeypatch.setattr("core.storm_track.default_track_dir", lambda: tmp_path)
@@ -132,7 +138,7 @@ def test_placing_points_autosaves_a_new_file(tmp_path, monkeypatch):
     w._time_ctrl.current_time += timedelta(minutes=2)
     w._on_track_point_add(35.1, -97.1)
 
-    case_dir = tmp_path / "ws" / "My work" / "20240427"
+    case_dir = tmp_path / "ws" / "My work"
     assert w._track_saved_path == case_dir / "storm_20240427_2000_track.csv"
     df = pd.read_csv(w._track_saved_path)
     assert df["lat"].tolist() == [35.0, 35.1]
@@ -140,7 +146,7 @@ def test_placing_points_autosaves_a_new_file(tmp_path, monkeypatch):
     assert len(_points(w)) == 2
     manifest = json.loads((case_dir / "manifest.json").read_text())
     assert manifest["tracks"][0]["file"] == "storm_20240427_2000_track.csv"
-    assert manifest["tracks"][0]["points"] == 2 and manifest["session_date"] == "2024-04-27"
+    assert manifest["tracks"][0]["points"] == 2 and manifest["tracks"][0]["session_date"] == "2024-04-27"
     assert [p.name for p in case_dir.iterdir()] and not list(case_dir.glob(".*tmp"))  # no stray temp files
 
 
@@ -187,7 +193,7 @@ def test_an_imported_track_is_edited_as_a_workspace_copy(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == [track]   # loading alone writes nothing
 
     w._on_track_point_add(39.05, -99.02)
-    copy = tmp_path / "ws" / "My work" / "20190528" / track.name
+    copy = tmp_path / "ws" / "My work" / track.name
     assert w._track_saved_path == copy
     df = pd.read_csv(copy)
     assert len(df) == 3 and set(df["case_id"]) == {"T10"}   # still a MESO-VIEW T10 track
@@ -231,7 +237,7 @@ def test_workspaces_keep_tracks_apart(tmp_path, monkeypatch):
     assert w.track_controls._saved_combo.itemText(0).startswith(f"[My work] {mine.name}")
 
     w._on_track_point_add(36.0, -98.0)
-    assert w._track_saved_path.parent == tmp_path / "ws" / "Tyler  test" / "20240427"
+    assert w._track_saved_path.parent == tmp_path / "ws" / "Tyler  test"
     assert len(pd.read_csv(mine)) == 1                    # the other workspace's track is untouched
 
     w._switch_track_workspace("My work")
@@ -405,28 +411,64 @@ def test_the_first_save_tells_the_user_where_the_track_went(tmp_path, monkeypatc
     w = _window(tmp_path, monkeypatch)
     w._on_track_point_add(35.0, -97.0)
     assert w.notices == [(w._track_saved_path, "saved")]
-    assert w._track_saved_path.parent == tmp_path / "ws" / "My work" / "20240427"
+    assert w._track_saved_path.parent == tmp_path / "ws" / "My work"
     w._time_ctrl.current_time += timedelta(minutes=2)
     w._on_track_point_add(35.1, -97.1)
     assert len(w.notices) == 1                              # autosaves after the first don't nag
 
 
+def _shared_track(tmp_path, name="storm_20240427_1815_track.csv", start="2024-04-27 18:15:00",
+                  end="2024-04-27 18:20:00"):
+    shared = tmp_path / "ws" / "Pardun_Tracks"
+    shared.mkdir(parents=True, exist_ok=True)
+    path = shared / name
+    path.write_text(f"point_id,time,lat,lon\n1,{start},34.0,-99.0\n2,{end},34.05,-98.95\n")
+    return path
+
+
 def test_shared_tracks_for_the_date_are_listed_and_open_as_a_copy(tmp_path, monkeypatch):
-    shared = tmp_path / "ws" / "MESO-VIEW" / "20240427"
-    shared.mkdir(parents=True)
-    original = shared / "N38_20240427_1815_autosave_edited.csv"
-    original.write_text("point_id,time,lat,lon,case_id\n1,2024-04-27 18:15:00,34.0,-99.0,N38\n"
-                        "2,2024-04-27 18:20:00,34.05,-98.95,N38\n")
+    original = _shared_track(tmp_path)
     before = original.read_text()
     w = _window(tmp_path, monkeypatch)
     w._refresh_track_workspace_lists()
     combo = w.track_controls._saved_combo
-    assert combo.itemText(0).startswith("[MESO-VIEW] N38_20240427_1815") and combo.isEnabled()
+    assert combo.itemText(0).startswith("[Pardun_Tracks] storm_20240427_1815_track.csv") and combo.isEnabled()
     w.track_controls._btn_open_saved.click()
     w._on_track_point_add(34.1, -98.9)
     assert original.read_text() == before                   # the shared track is untouched
-    assert w._track_saved_path == tmp_path / "ws" / "My work" / "20240427" / original.name
-    assert pd.read_csv(w._track_saved_path)["case_id"].tolist() == ["N38"] * 3
+    assert w._track_saved_path == tmp_path / "ws" / "My work" / original.name
+    w._refresh_track_workspace_lists()                      # the copy stands in for the original
+    assert [combo.itemText(i) for i in range(combo.count())] == ["storm_20240427_1815_track.csv  (3 pts)"]
+
+
+def test_clicking_track_opens_the_dates_saved_track(tmp_path, monkeypatch):
+    _shared_track(tmp_path, "storm_20240427_1815_track.csv", "2024-04-27 18:15:00", "2024-04-27 18:40:00")
+    later = _shared_track(tmp_path, "storm_20240427_1940_track.csv", "2024-04-27 19:40:00", "2024-04-27 20:30:00")
+    _shared_track(tmp_path, "storm_20240428_1900_track.csv", "2024-04-28 19:00:00", "2024-04-28 19:30:00")
+    w = _window(tmp_path, monkeypatch)                      # playback at 20:00Z
+    w._refresh_track_workspace_lists()
+    w._on_track_edit_toggled(True)
+    assert w._track_loaded_path == later and len(w._track_points) == 2   # the storm on screen now
+    assert w.track_controls._saved_combo.currentData() == str(later)
+    _yes(monkeypatch)
+    w._on_clear_track_requested()                           # starting fresh isn't undone by the next click
+    w._on_track_edit_toggled(False)
+    w._on_track_edit_toggled(True)
+    assert w._track_points == []
+
+
+def test_an_overnight_track_opens_with_the_evening_before(tmp_path, monkeypatch):
+    overnight = _shared_track(tmp_path, "storm_20240428_0130_track.csv", "2024-04-28 01:30:00", "2024-04-28 02:00:00")
+    w = _window(tmp_path, monkeypatch)
+    w._on_track_edit_toggled(True)
+    assert w._track_loaded_path == overnight
+
+
+def test_with_no_saved_track_track_starts_empty(tmp_path, monkeypatch):
+    _shared_track(tmp_path, "storm_20240428_1900_track.csv", "2024-04-28 19:00:00", "2024-04-28 19:30:00")
+    w = _window(tmp_path, monkeypatch)
+    w._on_track_edit_toggled(True)
+    assert w._track_points == [] and w._track_loaded_path is None
 
 
 def test_a_point_can_be_placed_before_any_radar_is_chosen(tmp_path, monkeypatch):

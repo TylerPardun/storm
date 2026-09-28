@@ -52,7 +52,7 @@ locs/deployment_locations.json
 # workspaces (tracks they create or edit) stay on their machine
 data/storm_tracks/*
 !data/storm_tracks/README.md
-!data/storm_tracks/MESO-VIEW/
+!data/storm_tracks/Pardun_Tracks/
 
 # case packages users export (data/case_packages/<session date>/*.zip)
 data/case_packages/

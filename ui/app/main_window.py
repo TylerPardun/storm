@@ -1844,6 +1844,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # __init__, before _begin_archive_startup creates it) -- that
             # connection is made there instead, guarded by hasattr(self, "btn_track").
             self._init_track_state()
+            self._track_session_opened = False   # the date's saved track opens on the first TRACK click
             self._refresh_track_controls()
             self._refresh_track_workspace_lists()
 
@@ -2309,7 +2310,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 groups.append((kind, label, len(files), sum(s.get("bytes") or 0 for s in files)))
         tracks = []
         if hasattr(self, "_track_points"):
-            tracks = [t["path"] for t in self._track_workspace().tracks(self._track_session_day())]
+            tracks = [t["path"] for t in self._session_tracks()]
         dialog = CaseExportDialog(groups, len(tracks), self)
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
@@ -2403,7 +2404,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         imported = []
         if hasattr(self, "_track_points") and tracks:
             workspace, day = self._track_workspace(), self._track_session_day()
-            folder = workspace.case_dir(day)
+            folder = workspace.root
             folder.mkdir(parents=True, exist_ok=True)
             for name, data in tracks.items():
                 # reopening the same package reuses the identical copy already here
@@ -5369,6 +5370,50 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._track_edit_active = checked
         self.map_widget.set_track_edit_mode(checked)
         self._set_track_letter_keys(checked)
+        if checked and not self._track_session_opened:
+            self._track_session_opened = True
+            self._open_session_track()
+
+    def _session_tracks(self) -> list[dict]:
+        """The date's tracks from every workspace, the active one's first, in
+        time order (file names start with the first point's time). A
+        track the active workspace already has a copy of (same file name) is
+        left out -- the copy is the one being worked on."""
+        from core.workspace import tracks_for_date
+        active = self._track_workspace().name
+        found = tracks_for_date(self._track_session_day())
+        mine = {t["path"].name for t in found if t["workspace"] == active}
+        found = [t for t in found if t["workspace"] == active or t["path"].name not in mine]
+        found.sort(key=lambda t: (t["workspace"] != active, t["path"].name))   # active first, then by time
+        return found
+
+    def _open_session_track(self) -> None:
+        """Open the date's saved track, if there is one -- nothing to pick or
+        load by hand. With several (a day with more than one storm), the one
+        nearest the current time. With none, TRACK starts empty for a new one."""
+        if self._track_points:
+            return
+        found = self._session_tracks()
+        if not found:
+            return
+        now = self._time_ctrl.current_time if hasattr(self, "_time_ctrl") else self._archive_time
+
+        def distance(track):
+            try:
+                times = [p.time for p in read_track_file(track["path"])]
+            except Exception:
+                return float("inf")
+            if not times:
+                return float("inf")
+            if min(times) <= now <= max(times):
+                return 0.0
+            return min(abs((min(times) - now).total_seconds()), abs((max(times) - now).total_seconds()))
+
+        best = min(found, key=distance)      # ties keep the order: active workspace, most recent
+        if distance(best) == float("inf"):
+            return
+        self._open_track(best["path"], confirmed=True)
+        self.track_controls.select_saved_track(str(best["path"]))
 
     def _set_track_letter_keys(self, editing: bool) -> None:
         """Hand D and A to the track editor while TRACK is on and back to
@@ -5451,7 +5496,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         workspace, day = self._track_workspace(), self._track_session_day()
         first_save = self._track_saved_path is None
         if first_save:
-            folder = workspace.case_dir(day)
+            folder = workspace.root
             if self._track_origin:
                 self._track_saved_path = unused_path(folder / f"{Path(self._track_origin).stem}.csv")
             else:
@@ -5473,22 +5518,21 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _refresh_track_workspace_lists(self) -> None:
         """The date's tracks from every workspace -- the active one first --
-        so the shared MESO-VIEW tracks show up next to the user's own.
+        so the shared Pardun_Tracks show up next to the user's own.
         Opening one from another workspace edits a copy in the active one."""
-        from core.workspace import list_workspaces, tracks_for_date
+        from core.workspace import list_workspaces
         if not hasattr(self, "track_controls"):
             return
         workspace = self._track_workspace()
         self.track_controls.set_workspaces(list_workspaces(), workspace.name)
-        found = tracks_for_date(self._track_session_day())
-        found.sort(key=lambda t: t["workspace"] != workspace.name)          # stable: active first
         tracks = []
-        for t in found:
-            tags = [t.get("category", "")] + ([f"{t['points']} pts"] if t["points"] is not None else [])
+        for t in self._session_tracks():
             where = "" if t["workspace"] == workspace.name else f"[{t['workspace']}] "
-            tracks.append((f"{where}{t['path'].name}  ({', '.join(x for x in tags if x)})".replace("  ()", ""),
-                           str(t["path"])))
+            count = f"  ({t['points']} pts)" if t["points"] is not None else ""
+            tracks.append((f"{where}{t['path'].name}{count}", str(t["path"])))
         self.track_controls.set_saved_tracks(tracks)
+        if self._track_loaded_path is not None or self._track_saved_path is not None:
+            self.track_controls.select_saved_track(str(self._track_saved_path or self._track_loaded_path))
 
     def _open_track_folder(self) -> None:
         """The folder of the track being edited, else this date's folder in
@@ -5497,7 +5541,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         from PyQt6.QtGui import QDesktopServices
         from core.workspace import workspaces_root
         folder = (self._track_saved_path.parent if self._track_saved_path is not None
-                  else self._track_workspace().case_dir(self._track_session_day()))
+                  else self._track_workspace().root)
         if not folder.is_dir():
             folder = workspaces_root()
             folder.mkdir(parents=True, exist_ok=True)
@@ -5510,7 +5554,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         path = Path(path)
         self._notify_saved(path, f"Storm track {what}",
                            f"Folder: {path.parent}\n\nAll storm tracks are kept in STORM's track folder\n"
-                           f"{workspaces_root()}\norganized as <workspace>/<session date>/. "
+                           f"{workspaces_root()}\n(one folder per workspace). "
                            "Further edits save to this same file automatically.")
 
     def _notify_saved(self, path, title: str, detail: str) -> None:
@@ -5754,7 +5798,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _load_track_file(self) -> None:
         """Pick a track file to open (see _open_track)."""
         from PyQt6.QtWidgets import QMessageBox
-        folder = self._track_workspace().case_dir(self._track_session_day())
+        folder = self._track_workspace().root
         start_dir = folder if folder.is_dir() else default_track_dir()
         if self._track_points:
             reply = QMessageBox.question(
@@ -5873,7 +5917,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if not self._track_points:
             self.status_msg_label.setText("Track: no points to export")
             return
-        folder = self._track_workspace().case_dir(self._track_session_day())
+        folder = self._track_workspace().root
         folder.mkdir(parents=True, exist_ok=True)
         default_path = str(unused_path(folder / track_filename(self._track_points[0].time)))
         path, selected_filter = QFileDialog.getSaveFileName(

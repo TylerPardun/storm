@@ -75,10 +75,13 @@ class TrailBuilder:
 
     def build(self, observations_by_vehicle: dict, quantity_key: str, start: datetime, end: datetime, *,
               track_points=(), motion=None, time_to_space: bool = False,
-              no_station_pressure: frozenset = frozenset()):
+              no_station_pressure: frozenset = frozenset(), wind_barbs: bool = False):
         """Returns (FeatureCollection dict, (vmin, vmax), n_values).
         `no_station_pressure`: platforms whose pressure isn't measured at the
-        station (sea-level/altimeter), so pressure-based values stay blank."""
+        station (sea-level/altimeter), so pressure-based values stay blank.
+        `wind_barbs` adds the measured wind as barb points along each trail
+        (about BARBS_PER_TRAIL each, evenly spaced in time), drawn where the
+        trail is drawn -- in time-to-space mode, at the relocated positions."""
         quantity = derived.QUANTITIES[quantity_key]
         t0, t1 = start.timestamp(), end.timestamp()
         features, shown = [], []
@@ -116,9 +119,13 @@ class TrailBuilder:
                 keep = np.isfinite(lat)
                 lat, lon, values, sub_time = lat[keep], lon[keep], values[keep], sub["time"][keep]
             else:
+                keep = np.ones(sub["time"].size, dtype=bool)
                 sub_time = sub["time"]
             if sub_time.size < 2:
                 continue
+            if wind_barbs:
+                features += _barbs(lat, lon, sub_time, sub["wind_speed"][keep], sub["wind_dir"][keep],
+                                   vehicle_id, (t1 - t0) / BARBS_PER_TRAIL)
             spacing = np.diff(sub_time)
             gap = max(120.0, 5.0 * float(np.median(spacing)))
             for i in range(sub_time.size - 1):
@@ -142,6 +149,36 @@ class TrailBuilder:
             features += _rings(*center_now)
         vmin, vmax = value_range(quantity_key, np.array(shown))
         return _collection(features), (vmin, vmax), len(shown)
+
+
+BARBS_PER_TRAIL = 15
+_MS_TO_KT = 1.943844
+
+
+def barb_image(speed_kt: float) -> str:
+    """The map's barb icon for a speed: 'barb-0' calm (under 2.5 kt), else
+    the speed rounded to the nearest 5 kt (the barb's own resolution)."""
+    return f"barb-{int(5 * round(speed_kt / 5)) if speed_kt >= 2.5 else 0}"
+
+
+def _barbs(lat, lon, times, speed_ms, direction, vehicle_id, spacing_s) -> list:
+    """Barb points along one trail: the first observation with a wind at or
+    after each multiple of spacing_s, so barbs stay put as the clock runs."""
+    features, last_slot = [], None
+    for i in range(times.size):
+        slot = int(times[i] // spacing_s)
+        if slot == last_slot:
+            continue
+        if not (np.isfinite(speed_ms[i]) and np.isfinite(direction[i]) and np.isfinite(lat[i])):
+            continue
+        last_slot = slot
+        kt = float(speed_ms[i]) * _MS_TO_KT
+        features.append({"type": "Feature",
+                         "geometry": {"type": "Point", "coordinates": [round(float(lon[i]), 6), round(float(lat[i]), 6)]},
+                         "properties": {"kind": "barb", "img": barb_image(kt), "dir": round(float(direction[i]) % 360, 1),
+                                        "kt": round(kt), "vehicle": vehicle_id,
+                                        "t": datetime.fromtimestamp(times[i], timezone.utc).strftime("%H:%M:%SZ")}})
+    return features
 
 
 def _collection(features):

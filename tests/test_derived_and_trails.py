@@ -83,3 +83,26 @@ def test_sea_level_pressure_platforms_get_no_pressure_based_values():
                                  track_points=track, motion=StormMotion(10, 0), time_to_space=True,
                                  no_station_pressure=frozenset({"ASOS KSPS"}))
         assert (n == 0) == blank, key
+
+
+def test_wind_barbs_along_a_trail_only_when_asked():
+    from core.trails import BARBS_PER_TRAIL, barb_image
+    obs = [_obs("p1", s, 35 + s * 1e-4, -98, spd=12.9, wdir=225.0) for s in range(0, 1800, 2)]   # 25 kt from SW
+    start, end = T0, T0 + timedelta(minutes=30)
+    fc, _, _ = TrailBuilder().build({"p1": obs}, "temperature", start, end)
+    assert not [f for f in fc["features"] if f["properties"]["kind"] == "barb"]
+    fc, _, _ = TrailBuilder().build({"p1": obs}, "temperature", start, end, wind_barbs=True)
+    barbs = [f["properties"] for f in fc["features"] if f["properties"]["kind"] == "barb"]
+    assert BARBS_PER_TRAIL - 1 <= len(barbs) <= BARBS_PER_TRAIL + 1          # evenly spaced, not one per fix
+    assert {(b["img"], b["dir"], b["kt"]) for b in barbs} == {("barb-25", 225.0, 25)}
+
+
+def test_barb_icons_round_to_five_knots():
+    from core.trails import barb_image
+    assert [barb_image(k) for k in (0, 2.4, 2.6, 7.4, 7.6, 52)] == ["barb-0", "barb-0", "barb-5", "barb-5", "barb-10", "barb-50"]
+
+
+def test_barbs_skip_missing_wind():
+    obs = [_obs("p1", s, 35, -98 + s * 1e-4, spd=None) for s in range(0, 600, 2)]
+    fc, _, _ = TrailBuilder().build({"p1": obs}, "temperature", T0, T0 + timedelta(minutes=10), wind_barbs=True)
+    assert not [f for f in fc["features"] if f["properties"]["kind"] == "barb"]

@@ -1802,23 +1802,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 shortcut.activated.connect(self._toggle_radar_product_shortcut)
                 self._radar_product_shortcuts.append(shortcut)
 
-        if self._archive and feature_flags.is_enabled("obs_trails"):
-            self.btn_trails = self._toolbar_toggle(
-                "TRAILS", "Observation trails colored by measured and derived quantities", tb
-            )
-            self.trail_controls = TrailControls(self._map_container)
-            self.trail_controls.setObjectName("floatingToolbar")
-            self.btn_trails.toggled.connect(self.trail_controls.toggle_drawer)
-            self.btn_trails.toggled.connect(self._start_layout_pulse)
-            self.btn_trails.toggled.connect(self._schedule_trails)
-            self.trail_controls.settings_changed.connect(self._schedule_trails)
-            from core.trails import TrailBuilder
-            self._trail_builder = TrailBuilder()
-            self._trails_timer = QTimer(self)
-            self._trails_timer.setSingleShot(True)
-            self._trails_timer.setInterval(250)     # coalesce clock ticks while playing
-            self._trails_timer.timeout.connect(self._refresh_trails)
-
+        # TRACK before TRAILS: trails' time-to-space and storm-relative
+        # quantities use the storm track
         if self._archive and feature_flags.is_enabled("storm_track"):
             self.btn_track = self._toolbar_toggle(
                 "TRACK", "Subjectively track the mesocyclone", tb
@@ -1871,6 +1856,23 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._track_session_opened = False   # the date's saved track opens on the first TRACK click
             self._refresh_track_controls()
             self._refresh_track_workspace_lists()
+
+        if self._archive and feature_flags.is_enabled("obs_trails"):
+            self.btn_trails = self._toolbar_toggle(
+                "TRAILS", "Observation trails colored by measured and derived quantities", tb
+            )
+            self.trail_controls = TrailControls(self._map_container)
+            self.trail_controls.setObjectName("floatingToolbar")
+            self.btn_trails.toggled.connect(self.trail_controls.toggle_drawer)
+            self.btn_trails.toggled.connect(self._start_layout_pulse)
+            self.btn_trails.toggled.connect(self._schedule_trails)
+            self.trail_controls.settings_changed.connect(self._schedule_trails)
+            from core.trails import TrailBuilder
+            self._trail_builder = TrailBuilder()
+            self._trails_timer = QTimer(self)
+            self._trails_timer.setSingleShot(True)
+            self._trails_timer.setInterval(250)     # coalesce clock ticks while playing
+            self._trails_timer.timeout.connect(self._refresh_trails)
 
         self.btn_surface = self._toolbar_toggle(
             "SURFACE", "Surface observations", tb
@@ -2271,7 +2273,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if not self.btn_trails.isChecked():
             self.map_widget.set_trails(None)
             return
-        quantity, minutes, time_to_space = self.trail_controls.settings()
+        quantity, minutes, time_to_space, wind_barbs = self.trail_controls.settings()
         end = self._time_ctrl.current_time
         motion = self.track_storm_motion() if hasattr(self, "_track_points") else None
         track = list(getattr(self, "_track_points", []))
@@ -2287,7 +2289,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         fc, (vmin, vmax), n = self._trail_builder.build(
             observations, quantity, end - timedelta(minutes=minutes), end,
             track_points=track, motion=motion, time_to_space=time_to_space and motion is not None,
-            no_station_pressure=asos_ids,
+            no_station_pressure=asos_ids, wind_barbs=wind_barbs,
         )
         units = QUANTITIES[quantity].units
         stops = color_stops(quantity, vmin, vmax) if n else []
@@ -2679,10 +2681,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 _stack(self.sfcoa_controls)
             if hasattr(self, "raw_lidar_controls") and self.btn_raw_lidar.isChecked():
                 _stack(self.raw_lidar_controls)
-            if hasattr(self, "trail_controls") and self.btn_trails.isChecked():
-                _stack(self.trail_controls)
             if hasattr(self, "track_controls") and self.btn_track.isChecked():
                 _stack(self.track_controls)
+            if hasattr(self, "trail_controls") and self.btn_trails.isChecked():
+                _stack(self.trail_controls)
             if hasattr(self, "surface_controls") and self.btn_surface.isChecked():
                 _stack(self.surface_controls)
             if hasattr(self, "sounding_controls") and self.btn_sounding.isChecked():

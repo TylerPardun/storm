@@ -1295,8 +1295,61 @@
         filter: ['==', ['get', 'kind'], 'center'],
         paint: {'circle-radius': 4, 'circle-color': '#FFD400', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#0A0A0F'}
       });
+      // Wind barbs along the trails (TRAILS > Wind barbs; core/trails.py
+      // _barbs). One icon per 5 kt, staff drawn toward north from the
+      // observation and rotated to the direction the wind blows from;
+      // standard feathers: half 5 kt, full 10 kt, pennant 50 kt.
+      (function addBarbImages() {
+        var R = 2, S = 60, c = S / 2, L = 22, F = 9, STEP = 3.6;
+        for (var kt = 0; kt <= 200; kt += 5) {
+          var cv = document.createElement('canvas');
+          cv.width = cv.height = S * R;
+          var g = cv.getContext('2d');
+          g.scale(R, R);
+          g.lineCap = 'round'; g.lineJoin = 'round';
+          var paths = [], flags = [];
+          if (kt === 0) {
+            paths.push(function(){ g.beginPath(); g.arc(c, c, 4, 0, 2 * Math.PI); });
+          } else {
+            paths.push(function(){ g.beginPath(); g.moveTo(c, c); g.lineTo(c, c - L); });
+            var left = kt, y = c - L;
+            while (left >= 50) { (function(y0){ flags.push(function(){ g.beginPath(); g.moveTo(c, y0); g.lineTo(c + F, y0 - 3); g.lineTo(c, y0 + 5); g.closePath(); }); })(y); y += 6.5; left -= 50; }
+            while (left >= 10) { (function(y0){ paths.push(function(){ g.beginPath(); g.moveTo(c, y0); g.lineTo(c + F, y0 - 4); }); })(y); y += STEP; left -= 10; }
+            if (left >= 5) {
+              if (kt === 5) y += STEP;               // a lone half barb sits in from the tip
+              (function(y0){ paths.push(function(){ g.beginPath(); g.moveTo(c, y0); g.lineTo(c + F / 2, y0 - 2); }); })(y);
+            }
+          }
+          [['#0A0A0F', 3.6], ['#F2F5FA', 1.6]].forEach(function(style) {
+            g.strokeStyle = style[0]; g.lineWidth = style[1];
+            paths.forEach(function(draw) { draw(); g.stroke(); });
+            flags.forEach(function(draw) { draw(); g.fillStyle = '#F2F5FA'; g.fill(); g.stroke(); });
+          });
+          map.addImage('barb-' + kt, g.getImageData(0, 0, S * R, S * R), {pixelRatio: R});
+        }
+      })();
+      map.addLayer({
+        id: 'obs-trails-barbs', type: 'symbol', source: 'obs-trails',
+        filter: ['==', ['get', 'kind'], 'barb'],
+        layout: {
+          'icon-image': ['get', 'img'],
+          'icon-rotate': ['get', 'dir'],
+          'icon-rotation-alignment': 'map',
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 6, 0.75, 11, 1.1]
+        }
+      });
       window._trailUnits = '';
       var _trailPopup = new maplibregl.Popup({closeButton: false, closeOnClick: false, offset: 8});
+      map.on('mousemove', 'obs-trails-barbs', function(e) {
+        if (!e.features || !e.features.length) return;
+        var p = e.features[0].properties;
+        _trailPopup.setLngLat(e.lngLat)
+          .setHTML('<b>' + p.vehicle + '</b> ' + p.t + '<br>Wind ' + Math.round(p.dir) + '° at ' + p.kt + ' kt')
+          .addTo(map);
+      });
+      map.on('mouseleave', 'obs-trails-barbs', function() { _trailPopup.remove(); });
       map.on('mousemove', 'obs-trails-line', function(e) {
         if (!e.features || !e.features.length) return;
         var p = e.features[0].properties;

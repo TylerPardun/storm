@@ -1,6 +1,7 @@
 """Floating drawer for observation trails (core/trails.py): which quantity
 colors the trails, how far back they reach, time-to-space, and the color
-bar. Same collapsible-drawer shell as TrackControls."""
+bar, and wind barbs along the trails. Same collapsible-drawer shell as
+TrackControls."""
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve
@@ -85,6 +86,11 @@ class TrailControls(QWidget):
         self._time_to_space.setStyleSheet(small)
         self._time_to_space.toggled.connect(self.settings_changed.emit)
         row.addWidget(self._time_to_space)
+        self._wind_barbs = QCheckBox("Wind barbs")
+        self._wind_barbs.setStyleSheet(small)
+        self._wind_barbs.setToolTip("Measured wind along each trail (knots; half barb 5, full 10, flag 50)")
+        self._wind_barbs.toggled.connect(self.settings_changed.emit)
+        row.addWidget(self._wind_barbs)
         row.addSpacing(8)
 
         self._min_label, self._max_label = QLabel(""), QLabel("")
@@ -105,10 +111,11 @@ class TrailControls(QWidget):
         self.set_track_available(False)
 
     # ---- state -------------------------------------------------------
-    def settings(self) -> tuple[str, int, bool]:
-        """(quantity key, window minutes, time-to-space)"""
+    def settings(self) -> tuple[str, int, bool, bool]:
+        """(quantity key, window minutes, time-to-space, wind barbs)"""
         return (self._quantity.currentData(), self._window.currentData(),
-                self._time_to_space.isChecked() and self._time_to_space.isEnabled())
+                self._time_to_space.isChecked() and self._time_to_space.isEnabled(),
+                self._wind_barbs.isChecked())
 
     def set_track_available(self, available: bool) -> None:
         """Storm-relative quantities and time-to-space need a storm track."""

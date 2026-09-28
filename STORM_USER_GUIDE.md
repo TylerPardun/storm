@@ -583,6 +583,7 @@ The MAP drawer groups map-context tools and optional offline base layers:
 |--------|-------------|
 | **ROUTE** | Opens turn-by-turn routing controls. Hidden in VIEWER mode. |
 | **MEASURE** | Starts the distance measurement tool. |
+| **ANNOTATIONS** | Shows or hides the annotations: fronts, boundaries and other drawings, annotation markers, and storm-motion cones with their time labels. On by default; anything recorded while it is off stays hidden until you turn it back on. |
 | **LANDCOVER** | Toggles the offline NLCD land-cover raster when `tiles/storm_nlcd.mbtiles` is installed. |
 | **SAT** | Toggles the offline USGS satellite basemap when `tiles/satellite.mbtiles` is installed. |
 

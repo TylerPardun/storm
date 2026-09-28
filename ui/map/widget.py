@@ -842,6 +842,10 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
             f"if(window.stormSetScanSectors) stormSetScanSectors({json.dumps(json.dumps(geojson))});"
         )
 
+    def set_annotations_visible(self, visible: bool) -> None:
+        """Drawings (fronts, boundaries...), annotation markers and storm cones."""
+        self.run_js(f"if(window.stormSetAnnotationsVisible) stormSetAnnotationsVisible({'true' if visible else 'false'});")
+
     def set_scan_sectors_visible(self, visible: bool) -> None:
         self.run_js(f"if(window.stormSetScanSectorsVisible) stormSetScanSectorsVisible({'true' if visible else 'false'});")
 

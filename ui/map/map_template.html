@@ -523,6 +523,7 @@
     window.stormSetTrackGeoJSON = _stormNoop;
     window.stormSetTrackEditMode = _stormNoop;
     window.stormSetTrackLayersVisible = _stormNoop;
+    window.stormSetAnnotationsVisible = _stormNoop;
     // cwa overlay hooks (populated when the map loads)
     window.stormSetCwaGeoJSON = _stormNoop;
     window.stormSetCwaVisible = _stormNoop;
@@ -3988,6 +3989,38 @@
       catch(e) { console.warn('scan sector setData failed', e); }
     };
 
+    // MAP > ANNOTATIONS: show or hide the crew's annotations -- drawings
+    // (fronts, boundaries, lines, areas), annotation markers and storm-motion
+    // cones with their time labels. Ones added while hidden stay hidden.
+    window._annotationsHidden = false;
+    function _applyAnnotationVisibility() {
+      var vis = window._annotationsHidden ? 'none' : 'visible';
+      (map.getStyle().layers || []).forEach(function(l) {
+        var id = l.id;
+        if ((id.indexOf('drawing-') === 0 && id.indexOf('drawing-preview') !== 0) || id.indexOf('storm-cone-') === 0) {
+          map.setLayoutProperty(id, 'visibility', vis);
+        }
+      });
+      Object.keys(window._stormAnnotations || {}).forEach(function(k) {
+        var m = window._stormAnnotations[k];
+        var el = m._isFork ? m._el : (m.getElement ? m.getElement() : null);
+        if (el) el.style.display = window._annotationsHidden ? 'none' : '';
+      });
+    }
+    window.stormSetAnnotationsVisible = function(visible) {
+      window._annotationsHidden = !visible;
+      _applyAnnotationVisibility();
+      map.triggerRepaint();       // fronts are painted on the front canvas each render
+    };
+    ['stormAddDrawing', 'stormAddAnnotation', 'stormAddStormCone'].forEach(function(name) {
+      var add = window[name];
+      window[name] = function() {
+        var result = add.apply(this, arguments);
+        if (window._annotationsHidden) _applyAnnotationVisibility();
+        return result;
+      };
+    });
+
     window.stormSetScanSectorsVisible = function(visible) {
       ['scan-sector-fill', 'scan-sector-line', 'scan-sector-point', 'scan-sector-label'].forEach(function(layerId) {
         if (!map.getLayer(layerId)) return;
@@ -5114,7 +5147,7 @@
         frontCtx.clearRect(0, 0, frontCanvas.width, frontCanvas.height);
         var dpr = window.devicePixelRatio || 1;
 
-        Object.values(window._stormDrawings || {}).forEach(function(d) {
+        Object.values(window._annotationsHidden ? {} : (window._stormDrawings || {})).forEach(function(d) {
           if (d.drawing_type !== 'polyline' && d.drawing_type !== 'polygon') {
             _drawFront(frontCtx, d, dpr);
           }

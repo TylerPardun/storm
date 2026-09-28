@@ -1901,6 +1901,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.btn_map.toggled.connect(self._start_layout_pulse)
 
         self.btn_measure = self.map_controls.btn_measure
+        self.map_controls.btn_annotations.toggled.connect(self.map_widget.set_annotations_visible)
         self.btn_route = self.map_controls.btn_route
         self.btn_nlcd = self.map_controls.btn_landcover
         self.btn_satellite_basemap = self.map_controls.btn_satellite_basemap

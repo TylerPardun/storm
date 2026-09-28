@@ -91,3 +91,28 @@ def test_a_low_angle_stare_is_a_beam_for_the_map_not_a_vertical_stare():
     scans = classify_scans(rays)
     assert [s.kind for s in scans] == ["Beam", "Stare"]
     assert scans[0].mappable and not scans[1].mappable
+
+
+def test_the_truck_has_one_location_per_stop_and_a_trailer_one_at_its_site():
+    from core.lidar_scans import locations
+    rays = _rays([(0, [(a, 60.0) for a in range(0, 360, 45)], 2, 1),        # stop 1
+                  (600, [(a, 60.0) for a in range(0, 360, 45)], 2, 2),      # stop 1 again, 100 m on
+                  (1200, [(a, 60.0) for a in range(0, 360, 45)], 2, 3)])    # stop 2, 5 km away
+    n = rays.time_epoch.size
+    rays.latitude = np.array([35.0] * 8 + [35.0009] * 8 + [35.045] * 8)
+    rays.longitude = np.full(n, -98.0)
+    scans = classify_scans(rays)
+    stops, unplaced = locations("DLTRUCK1", scans)
+    assert [len(s.scans) for s in stops] == [2, 1] and unplaced == 0
+    assert (stops[0].number, stops[0].lat, stops[1].lat) == (1, 35.0, 35.045)
+    assert stops[0].start == scans[0].start and stops[0].end == scans[1].end
+    site, _ = locations("CLAMPS1", scans, site={"lat": 34.98, "lon": -97.52, "description": "NWC Vehicle Bay"})
+    assert len(site) == 1 and len(site[0].scans) == 3 and site[0].place == "NWC Vehicle Bay"
+
+
+def test_a_stare_running_past_the_session_start_is_cut_to_the_session():
+    from core.lidar_scans import timeline
+    rays = _rays([(0, [(0.0, 90.0)] * 100, 60, np.nan)])       # 18:00 onward, one ray a minute
+    rays.scans = classify_scans(rays)
+    [stare] = timeline([rays], start=T0 + timedelta(minutes=30))
+    assert stare.start == T0 + timedelta(minutes=30) and stare.rays == 70 and stare.source is rays

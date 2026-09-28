@@ -227,8 +227,24 @@ def timeline(files, start: datetime | None = None, end: datetime | None = None) 
     for rays in files:
         for scan in getattr(rays, "scans", None) or classify_scans(rays):
             if (start is None or scan.end >= start) and (end is None or scan.start <= end):
-                scans.append(scan)
+                scans.append(_trim(scan, start, end))
     return sorted(scans, key=lambda s: (s.start, s.end))
+
+
+def _trim(scan: LidarScan, start, end) -> LidarScan:
+    """A scan that runs past the session's edges (a trailer's day-long
+    stare), cut to the rays inside it."""
+    if (start is None or scan.start >= start) and (end is None or scan.end <= end):
+        return scan
+    import dataclasses
+    times = np.asarray(scan.source.time_epoch, dtype=float)[scan.indices]
+    keep = np.ones(times.size, dtype=bool)
+    if start is not None:
+        keep &= times >= start.timestamp()
+    if end is not None:
+        keep &= times <= end.timestamp()
+    idx = scan.indices[keep]
+    return dataclasses.replace(scan, indices=idx, start=_utc(times[keep][0]), end=_utc(times[keep][-1]))
 
 
 def periods(scans: list[LidarScan], join_s: float = PERIOD_JOIN_S) -> list[tuple[datetime, datetime]]:
@@ -260,3 +276,75 @@ def describe_periods(spans: list[tuple[datetime, datetime]]) -> str:
             return f"{a:%H:%M}–{b:%H:%M}Z {b:%b} {b.day}"
         return f"{a:%H:%M}Z {a:%b} {a.day} – {b:%H:%M}Z {b:%b} {b.day}"
     return "Scanning " + ", ".join(span(a, b) for a, b in spans)
+
+
+# ---- where each lidar scanned from: the locations to click, like radar sites --
+
+STOP_RADIUS_M = 250.0     # scans within this of a stop's first scan are that stop
+
+
+@dataclass(eq=False)
+class LidarLocation:
+    """One place a lidar scanned from during the session: a trailer's site,
+    or one of the truck's stops. Its position is where its first scan was
+    taken; `scans` are every scan made there, in time order."""
+    instrument: str
+    number: int               # 1-based, in time order among the instrument's locations
+    lat: float
+    lon: float
+    scans: list
+    place: str = ""           # a trailer's site description
+
+    @property
+    def start(self) -> datetime:
+        return self.scans[0].start
+
+    @property
+    def end(self) -> datetime:
+        return max(s.end for s in self.scans)
+
+    @property
+    def key(self) -> str:
+        return f"{self.instrument}-{self.number}"
+
+
+def _scan_position(scan) -> tuple[float, float] | None:
+    rays = scan.source
+    idx = scan.indices
+    lat = np.asarray(rays.latitude, dtype=float)[idx]
+    lon = np.asarray(rays.longitude, dtype=float)[idx]
+    good = np.isfinite(lat) & np.isfinite(lon)
+    if not good.any():
+        return None
+    i = int(np.flatnonzero(good)[0])
+    return float(lat[i]), float(lon[i])
+
+
+def _metres(a: tuple[float, float], b: tuple[float, float]) -> float:
+    import math
+    dlat = math.radians(b[0] - a[0])
+    dlon = math.radians(b[1] - a[1]) * math.cos(math.radians((a[0] + b[0]) / 2))
+    return 6371000.0 * math.hypot(dlat, dlon)
+
+
+def locations(instrument: str, scans: list[LidarScan], site: dict | None = None,
+              radius_m: float = STOP_RADIUS_M) -> tuple[list[LidarLocation], int]:
+    """(the instrument's locations, scans that had no position). A trailer
+    (`site` given) is one location at its site; the truck gets one per stop:
+    consecutive scans within radius_m of the stop's first scan."""
+    ordered = sorted(scans, key=lambda s: (s.start, s.end))
+    if site is not None:
+        found = [LidarLocation(instrument, 1, site["lat"], site["lon"], ordered, site.get("description", ""))]
+        return (found if ordered else []), 0
+    found: list[LidarLocation] = []
+    unplaced = 0
+    for scan in ordered:
+        position = _scan_position(scan)
+        if position is None:
+            unplaced += 1
+            continue
+        if found and _metres((found[-1].lat, found[-1].lon), position) <= radius_m:
+            found[-1].scans.append(scan)
+        else:
+            found.append(LidarLocation(instrument, len(found) + 1, position[0], position[1], [scan]))
+    return found, unplaced

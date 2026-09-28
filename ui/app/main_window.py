@@ -592,13 +592,16 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._lidar_overlay = None
         self._lidar_overlay_field = None
         self._lidar_sites = {}               # trailer -> recorded site (header of its files)
-        self._lidar_instrument = ""          # the lidar chosen in RAW LIDAR
-        self._lidar_files = []               # its loaded files (RawLidarRays with .scans)
-        self._lidar_scans = []               # its scans this session (core/lidar_scans.timeline)
-        self._lidar_large = []               # (asset, bytes) held back for their size
-        self._lidar_start_site = None        # where it was when it started scanning
-        self._lidar_moved_clock = False      # clock already brought to its scanning
-        self._lidar_viewer_dismissed = False # the user closed the viewer for this lidar
+        self._lidar_files_by = {}            # instrument -> its loaded files (RawLidarRays with .scans)
+        self._lidar_large_by = {}            # instrument -> files held back for size (loaded once chosen)
+        self._lidar_locations = []           # every place a lidar scanned from (core/lidar_scans.locations)
+        self._lidar_unplaced = {}            # instrument -> scans with no position
+        self._lidar_marker_ids = set()       # location markers on the map (while LIDAR is open)
+        self._lidar_survey_done = False
+        self._lidar_location = None          # the chosen location
+        self._lidar_instrument = ""          # its lidar
+        self._lidar_scans = []               # its scans
+        self._lidar_viewer_dismissed = False # the user closed the viewer for this location
         self._lidar_overlay_render_in_flight = False
         self._lidar_overlay_pending = False
         if feature_flags.is_enabled("raw_lidar_quicklook"):
@@ -609,6 +612,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._archive_raw_lidar.instrument_file_ready.connect(self._on_lidar_file_ready)
             self._archive_raw_lidar.instrument_large_file.connect(self._on_lidar_large_file)
             self._archive_raw_lidar.instrument_loaded.connect(self._on_lidar_instrument_loaded)
+            self._archive_raw_lidar.survey_done.connect(self._on_lidar_survey_done)
             self._watch_worker_errors(self._archive_raw_lidar, self._archive_raw_lidar.error, "Raw lidar")
             self._archive_raw_lidar.fetch(self._archive_time)
             self._time_ctrl.time_changed.connect(self._on_time_changed_update_lidar_overlay)
@@ -1711,7 +1715,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         # It opens only once the date is known to have lidar data.
         if self._archive and feature_flags.is_enabled("raw_lidar_quicklook"):
             self.btn_raw_lidar = self._toolbar_toggle(
-                "RAW LIDAR", "Doppler lidar scans: the lidar truck and the CLAMPS trailers", tb
+                "LIDAR", "Doppler lidar: the lidar truck and the CLAMPS trailers", tb
             )
             self.btn_raw_lidar.setEnabled(False)
             self.btn_raw_lidar.setToolTip("Looking for lidar data for this date…")
@@ -1721,14 +1725,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.raw_lidar_controls.set_sources(KNOWN_RAW_LIDAR_SOURCES)
             self.btn_raw_lidar.toggled.connect(self.raw_lidar_controls.toggle_drawer)
             self.btn_raw_lidar.toggled.connect(self._start_layout_pulse)
+            self.btn_raw_lidar.toggled.connect(self._show_lidar_locations)
             self.raw_lidar_controls.availability_changed.connect(self._on_raw_lidar_availability)
-            self.raw_lidar_controls.instrument_selected.connect(self._on_lidar_instrument_selected)
             self.raw_lidar_controls.viewer_requested.connect(self._on_lidar_viewer_requested)
             self.raw_lidar_controls.map_toggled.connect(self._on_lidar_map_toggled)
             self.raw_lidar_controls.field_selected.connect(self._on_raw_lidar_field_selected)
-            self.raw_lidar_controls.locate_requested.connect(self._on_raw_lidar_locate)
             self.raw_lidar_controls.scan_step_requested.connect(self._on_raw_lidar_scan_step)
-            self.raw_lidar_controls.load_large_requested.connect(self._on_lidar_load_large)
             self.raw_lidar_controls.radar_visible_toggled.connect(self.map_widget.set_radar_visible)
             if not feature_flags.is_enabled("noxp_radar"):       # else connected with NOXP below
                 self.map_widget.platform_marker_clicked.connect(self._on_platform_marker_clicked)
@@ -5041,11 +5043,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _on_platform_marker_clicked(self, platform_id: str) -> None:
         if platform_id == "noxp":
             self._activate_noxp_radar()
-        elif platform_id.startswith("lidar-") and hasattr(self, "btn_raw_lidar"):
-            # a lidar site marker: open RAW LIDAR on that lidar
-            if self.btn_raw_lidar.isEnabled() and not self.btn_raw_lidar.isChecked():
-                self.btn_raw_lidar.setChecked(True)
-            self.raw_lidar_controls.select_instrument(platform_id[len("lidar-"):])
+        elif platform_id.startswith("lidarloc-") and hasattr(self, "btn_raw_lidar"):
+            self._on_lidar_location_clicked(platform_id[len("lidarloc-"):])
 
     def _on_time_changed_update_noxp_overlay(self, when) -> None:
         """Auto-advance NOXP's loaded volume as the archive clock moves,
@@ -5110,22 +5109,29 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             )
 
     # -- Doppler lidar: the lidar truck and the CLAMPS trailers (archive) --
-    # Like a radar station: choosing a lidar in RAW LIDAR marks where it was
-    # when it started scanning, loads every one of its files for the session
-    # by itself, marks when it was scanning under the time slider and brings
-    # the clock there; each scan then shows as the clock reaches it -- PPI/VAD
-    # on the map, RHIs and stares in the vertical viewer (core/lidar_scans.py).
+    # Chosen like a radar station: while LIDAR is open, every place a lidar
+    # scanned from this session is marked on the map (a trailer's site, or
+    # each of the truck's stops -- core/lidar_scans.locations). The lidars'
+    # files are surveyed in the background as soon as they're found, so the
+    # places are ready when LIDAR opens. Clicking one moves the clock to its
+    # first scan, and its scans show as the clock reaches them -- PPI/VAD and
+    # fixed beams on the map, RHIs and vertical stares in the viewer; outside
+    # them the map is blank, as with a radar that has no volume then.
 
     def _on_raw_lidar_availability(self, available: bool) -> None:
         self.btn_raw_lidar.setEnabled(available)
         self.btn_raw_lidar.setToolTip(
-            "Doppler lidar scans: the lidar truck and the CLAMPS trailers" if available
+            "Doppler lidar: the lidar truck and the CLAMPS trailers" if available
             else "No lidar data for this date")
         if not available and self.btn_raw_lidar.isChecked():
             self.btn_raw_lidar.setChecked(False)
 
     def _on_archive_raw_lidar_assets_ready(self, assets_by_source: dict) -> None:
         self.raw_lidar_controls.set_assets_for_all_sources(assets_by_source)
+        found = self.raw_lidar_controls.assets_by_instrument()
+        if found:
+            self.raw_lidar_controls.set_status("Finding where the lidars scanned this session…")
+            self._archive_raw_lidar.survey(found)
 
     def _case_radar_site(self):
         station = getattr(getattr(self, "_archive_radar", None), "station", None)
@@ -5141,73 +5147,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         return f", {6371.0 * math.hypot(dlat, dlon):.0f} km from {radar['site_id']}"
 
     def _on_raw_lidar_sites_ready(self, sites: dict) -> None:
-        """Mark each trailer's recorded site on the map and say where it is
-        relative to the case (a trailer is often parked at home in Norman
-        while the truck is deployed)."""
-        from ui.controls.raw_lidar_controls import instrument_name
         self._lidar_sites = dict(sites)
-        for instrument, site in sites.items():
-            place = site.get("description") or "its recorded site"
-            self.raw_lidar_controls.set_site_text(
-                instrument, f"at {place} ({site['lat']:.3f}, {site['lon']:.3f})"
-                            f"{self._distance_from_case(site['lat'], site['lon'])}")
-            self.map_widget.set_platform_marker(
-                f"lidar-{instrument}", site["lat"], site["lon"], "#00CFFF", "lidar",
-                f"{instrument_name(instrument)} lidar\n{place}")
-        if self._lidar_instrument in sites:
-            self.raw_lidar_controls.set_locate_available(True)
-
-    # ---- choosing a lidar ------------------------------------------------------
-    def _on_lidar_instrument_selected(self, instrument: str) -> None:
-        from ui.controls.raw_lidar_controls import instrument_name
-        self._lidar_instrument = instrument
-        self._lidar_files, self._lidar_scans, self._lidar_large = [], [], []
-        self._lidar_moved_clock = False
-        self._lidar_viewer_dismissed = False
-        self._lidar_overlay_generation += 1
-        if self._lidar_overlay is not None:
-            self._lidar_overlay.clear()
-        self._archive_controls.set_coverage([])
-        if self._lidar_start_site is not None and self._lidar_start_site.get("instrument") == "DLTRUCK1":
-            self.map_widget.remove_platform_marker("lidar-DLTRUCK1")
-        self._lidar_start_site = None
-        if self._raw_lidar_dialog is not None:
-            self._raw_lidar_dialog.hide()
-        if not instrument:
-            self.map_widget.set_radar_visible(True)
-            return
-        self.map_widget.set_radar_visible(self.raw_lidar_controls.radar_is_on())
-        site = self._lidar_sites.get(instrument)
-        if site is not None:                      # a trailer: its recorded site, like a radar station
-            self._lidar_start_site = {"instrument": instrument, "lat": site["lat"], "lon": site["lon"]}
-            self.raw_lidar_controls.set_locate_available(True)
-            self.map_widget.fly_to(site["lat"], site["lon"], zoom=9)
-        elif instrument == "DLTRUCK1":
-            self.raw_lidar_controls.set_site_text(instrument, "is placed from the truck's GPS track (it moves)")
-        assets = self.raw_lidar_controls.assets_for(instrument)
-        self.raw_lidar_controls.set_progress(f"loading its scans ({len(assets)} file{'s' if len(assets) != 1 else ''})…")
-        self.status_msg_label.setText(f"Lidar: loading the {instrument_name(instrument).lower()}'s scans…")
-        self._archive_raw_lidar.load_instrument(instrument, assets)
-
-    def _on_lidar_file_ready(self, instrument: str, rays) -> None:
-        from core import lidar_scans
-        if instrument != self._lidar_instrument:
-            return
-        self._lidar_files.append(rays)
-        self._lidar_scans = lidar_scans.timeline(self._lidar_files, *self._lidar_session_span())
-        fields = {}
-        for f in self._lidar_files:
-            for name, field in f.fields.items():
-                fields.setdefault(name, field.get("units", ""))
-        self.raw_lidar_controls.set_fields(fields)
-        noticed = next((f.provenance for f in self._lidar_files
-                        if f.provenance.get("heading_missing_in_file") or f.provenance.get("north_referenced") is False),
-                       None)
-        self.raw_lidar_controls.set_orientation_notice(noticed)
-        self._update_lidar_coverage()
-        self._place_lidar_start()
-        self._bring_clock_to_lidar()
-        self._on_time_changed_update_lidar_overlay(self._time_ctrl.current_time)
+        for instrument in sites:
+            self._rebuild_lidar_locations(instrument)
 
     def _lidar_session_span(self):
         """The lidar scans that belong to this session: from 12Z on the
@@ -5217,95 +5159,153 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         start, end = self._time_ctrl.window
         return max(start, session_bounds(self._archive_time)[0] + SESSION_DAY_ACTIVITY_FROM), end
 
-    def _on_lidar_large_file(self, instrument: str, asset, size: int) -> None:
-        if instrument != self._lidar_instrument:
-            return
-        self._lidar_large.append((asset, size))
-        kinds = {a.source.product for a, _ in self._lidar_large}
-        what = "stares" if kinds == {"fp"} else "large files"
-        self.raw_lidar_controls.set_large_files(sum(n for _, n in self._lidar_large), what)
+    # ---- the survey: where and when each lidar scanned ---------------------------
+    def _on_lidar_file_ready(self, instrument: str, rays) -> None:
+        self._lidar_files_by.setdefault(instrument, []).append(rays)
+        self._rebuild_lidar_locations(instrument)
 
-    def _on_lidar_load_large(self) -> None:
-        assets = [a for a, _ in self._lidar_large]
-        if not assets:
-            return
-        self._lidar_large = []
-        self.raw_lidar_controls.set_progress(f"loading {len(assets)} large file{'s' if len(assets) != 1 else ''}…")
-        self._archive_raw_lidar.load_instrument(self._lidar_instrument, assets, force_urls=[a.url for a in assets])
+    def _on_lidar_large_file(self, instrument: str, asset, size: int) -> None:
+        self._lidar_large_by.setdefault(instrument, []).append(asset)
+        if self._lidar_location is not None and self._lidar_location.instrument == instrument:
+            self._load_lidar_large(instrument)
+
+    def _load_lidar_large(self, instrument: str) -> None:
+        """The chosen lidar's big files (a trailer's day of vertical stares):
+        loaded right after its scans, without asking."""
+        assets = self._lidar_large_by.pop(instrument, [])
+        if assets:
+            self.raw_lidar_controls.set_status(f"Loading its vertical stares ({len(assets)} large "
+                                               f"file{'s' if len(assets) != 1 else ''}) in the background…")
+            self._archive_raw_lidar.load_files(instrument, assets)
 
     def _on_lidar_instrument_loaded(self, instrument: str, files: int) -> None:
-        if instrument != self._lidar_instrument:
-            return
-        self.raw_lidar_controls.set_progress("")
-        if self._lidar_large:
-            what = "stares" if {a.source.product for a, _ in self._lidar_large} == {"fp"} else "files"
-            self.raw_lidar_controls.set_progress(
-                f"its vertical {what} are large, so they load when you ask (button above)" if what == "stares"
-                else "some of its files are large, so they load when you ask (button above)")
-        self._update_lidar_coverage()
-        self.status_msg_label.setText("Lidar: scans loaded" if self._lidar_scans else
-                                      "Lidar: no scans during this session (its files cover other hours)")
+        if self._lidar_survey_done:
+            self._show_lidar_status()
 
-    def _update_lidar_coverage(self) -> None:
+    def _on_lidar_survey_done(self) -> None:
+        self._lidar_survey_done = True
+        self._show_lidar_status()
+
+    def _show_lidar_status(self) -> None:
+        from ui.controls.raw_lidar_controls import instrument_name
+        if not self._lidar_survey_done:
+            return
+        if not self._lidar_locations:
+            self.raw_lidar_controls.set_status("No lidar scans during this session (the files cover other hours).")
+            return
+        count = {}
+        for loc in self._lidar_locations:
+            count[loc.instrument] = count.get(loc.instrument, 0) + 1
+        parts = [f"{instrument_name(i)}: {n} location{'s' if n != 1 else ''}" for i, n in count.items()]
+        unplaced = sum(self._lidar_unplaced.values())
+        text = " · ".join(parts)
+        if unplaced:
+            text += f" · {unplaced} scan{'s' if unplaced != 1 else ''} without a position (not shown)"
+        if self._lidar_location is None:
+            text += " -- click one on the map"
+        self.raw_lidar_controls.set_status(text)
+
+    def _rebuild_lidar_locations(self, instrument: str) -> None:
+        from core import lidar_scans
+        scans = lidar_scans.timeline(self._lidar_files_by.get(instrument, []), *self._lidar_session_span())
+        site = self._lidar_sites.get(instrument)
+        found, unplaced = lidar_scans.locations(instrument, scans, site)
+        self._lidar_unplaced[instrument] = unplaced
+        self._lidar_locations = [loc for loc in self._lidar_locations if loc.instrument != instrument] + found
+        chosen = self._lidar_location
+        if chosen is not None and chosen.instrument == instrument:
+            # the same place, now with whatever the new file added
+            same = next((loc for loc in found if chosen.scans and chosen.scans[0] in loc.scans), None)
+            if same is not None:
+                self._lidar_location = same
+                self._lidar_scans = same.scans
+                self._show_lidar_location_details()
+        self._show_lidar_locations(self.btn_raw_lidar.isChecked())
+        self._show_lidar_status()
+
+    # ---- the location markers --------------------------------------------------------
+    def _lidar_location_text(self, loc, with_distance: bool = True) -> str:
+        from ui.controls.raw_lidar_controls import instrument_name
+        name = instrument_name(loc.instrument)
+        total = sum(1 for other in self._lidar_locations if other.instrument == loc.instrument)
+        where = loc.place or f"stop {loc.number} of {total}"
+        text = f"{name} · {where} ({loc.lat:.3f}, {loc.lon:.3f})"
+        return text + (self._distance_from_case(loc.lat, loc.lon) if with_distance else "")
+
+    def _show_lidar_locations(self, shown: bool) -> None:
+        """Every lidar location on the map while LIDAR is open, like the radar
+        station picker; the chosen one in yellow."""
         from core import lidar_scans
         from ui.controls.raw_lidar_controls import instrument_name
-        scans = self._lidar_scans
-        spans = lidar_scans.periods(scans)
-        text = ""
-        if scans:
-            text = f"{lidar_scans.describe_periods(spans)}  ·  {lidar_scans.counts(scans)}"
-        elif self._lidar_files:
-            text = "No scans during this session"
-        vertical = any(s.kind in ("RHI", "Stare") for s in scans)
-        self.raw_lidar_controls.set_coverage(text, vertical)
-        self._archive_controls.set_coverage(
-            spans, "#00CFFF", f"{instrument_name(self._lidar_instrument)}: {lidar_scans.describe_periods(spans)}")
+        wanted = {}
+        if shown:
+            for loc in self._lidar_locations:
+                wanted[f"lidarloc-{loc.key}"] = loc
+        for marker_id in self._lidar_marker_ids - set(wanted):
+            self.map_widget.remove_platform_marker(marker_id)
+        for marker_id, loc in wanted.items():
+            chosen = loc is self._lidar_location
+            total = sum(1 for other in self._lidar_locations if other.instrument == loc.instrument)
+            title = (f"{instrument_name(loc.instrument)} · "
+                     + (loc.place or f"stop {loc.number} of {total}"))
+            hover = (f"{title}\n{lidar_scans.describe_periods(lidar_scans.periods(loc.scans))}\n"
+                     f"{lidar_scans.counts(loc.scans)}" + ("\n(chosen)" if chosen else "\nclick to show its scans"))
+            self.map_widget.set_platform_marker(marker_id, loc.lat, loc.lon,
+                                                "#FFD400" if chosen else "#00CFFF", "lidar", hover)
+        self._lidar_marker_ids = set(wanted)
 
-    def _place_lidar_start(self) -> None:
-        """The truck: mark where it was when it started scanning (a trailer's
-        site is marked already), and center the map there once."""
-        import numpy as np
-        if self._lidar_start_site is not None or not self._lidar_scans:
+    def _on_lidar_location_clicked(self, key: str) -> None:
+        loc = next((l for l in self._lidar_locations if l.key == key), None)
+        if loc is None:
             return
-        for scan in self._lidar_scans:
-            rays = scan.source
-            fixed = scan.indices[np.isfinite(rays.latitude[scan.indices]) & np.isfinite(rays.longitude[scan.indices])]
-            if fixed.size:
-                i = fixed[0]
-                lat, lon = float(rays.latitude[i]), float(rays.longitude[i])
-                self._lidar_start_site = {"instrument": self._lidar_instrument, "lat": lat, "lon": lon}
-                self.map_widget.set_platform_marker(
-                    f"lidar-{self._lidar_instrument}", lat, lon, "#00CFFF", "lidar",
-                    f"Lidar truck\nstarted scanning here at {scan.start:%H:%M:%SZ}")
-                self.raw_lidar_controls.set_site_text(
-                    self._lidar_instrument,
-                    f"started scanning at {scan.start:%H:%M:%SZ} at ({lat:.3f}, {lon:.3f})"
-                    f"{self._distance_from_case(lat, lon)}; it moves, and each scan is drawn where it was taken")
-                self.raw_lidar_controls.set_locate_available(True)
-                self.map_widget.fly_to(lat, lon, zoom=11)
-                return
-
-    def _bring_clock_to_lidar(self) -> None:
-        """Once per choice: if the clock isn't in one of the lidar's scanning
-        periods, move it to the start of the next one (else the last one)."""
-        from core import lidar_scans
-        scans = self._lidar_scans
-        if self._lidar_moved_clock or not scans:
-            return
-        self._lidar_moved_clock = True
-        now = self._time_ctrl.current_time
-        if lidar_scans.scanning_at(scans, now):
-            return
-        after = [s for s in scans if s.start >= now]
-        target = (after[0] if after else scans[-1]).end
+        self._lidar_location = loc
+        self._lidar_instrument = loc.instrument
+        self._lidar_scans = loc.scans
+        self._lidar_viewer_dismissed = False
+        self._lidar_overlay_generation += 1
+        if self._lidar_overlay is not None:
+            self._lidar_overlay.clear()
+        if self._raw_lidar_dialog is not None:
+            self._raw_lidar_dialog.hide()
+        self.map_widget.set_radar_visible(self.raw_lidar_controls.radar_is_on())
+        self._show_lidar_location_details()
+        self._show_lidar_locations(self.btn_raw_lidar.isChecked())
+        self._show_lidar_status()
+        # to the start of its first scan, so what was happening then is on screen
         self._time_ctrl.pause()
-        self._time_ctrl.set_time(target)
-        self.status_msg_label.setText(f"Lidar: moved to its scanning, {target:%H:%M:%S} UTC")
+        self._time_ctrl.set_time(loc.start)
+        self.status_msg_label.setText(f"Lidar: {self._lidar_location_text(loc, False)}, "
+                                      f"first scan {loc.start:%H:%M:%S} UTC")
+        self._load_lidar_large(loc.instrument)      # its stares follow in the background
+
+    def _show_lidar_location_details(self) -> None:
+        from core import lidar_scans
+        loc = self._lidar_location
+        if loc is None:
+            self.raw_lidar_controls.set_location(None)
+            self._archive_controls.set_coverage([])
+            return
+        self.raw_lidar_controls.set_location(self._lidar_location_text(loc))
+        sources = {id(s.source): s.source for s in loc.scans}.values()
+        fields = {}
+        for rays in sources:
+            for name, field in rays.fields.items():
+                fields.setdefault(name, field.get("units", ""))
+        self.raw_lidar_controls.set_fields(fields)
+        self.raw_lidar_controls.set_orientation_notice(next(
+            (r.provenance for r in sources
+             if r.provenance.get("heading_missing_in_file") or r.provenance.get("north_referenced") is False), None))
+        spans = lidar_scans.periods(loc.scans)
+        self.raw_lidar_controls.set_coverage(
+            f"{lidar_scans.describe_periods(spans)}  ·  {lidar_scans.counts(loc.scans)}",
+            any(s.kind in lidar_scans.VERTICAL_KINDS for s in loc.scans))
+        self._archive_controls.set_coverage(spans, "#00CFFF", self._lidar_location_text(loc, False))
+        self._update_lidar_scan_label()
 
     # ---- showing its scans -------------------------------------------------------
     def _lidar_title(self) -> str:
-        from ui.controls.raw_lidar_controls import instrument_name
-        return f"{instrument_name(self._lidar_instrument)} ({self._lidar_instrument})"
+        loc = self._lidar_location
+        return self._lidar_location_text(loc, False) if loc is not None else ""
 
     def _on_lidar_viewer_requested(self) -> None:
         self._lidar_viewer_dismissed = False
@@ -5397,15 +5397,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._lidar_overlay_field = field
         self._lidar_overlay_generation += 1
         self._render_lidar_overlay()
-
-    def _on_raw_lidar_locate(self):
-        site = self._lidar_start_site
-        current = self._lidar_scan_now()
-        if current is not None:                      # where the scan on screen was taken
-            from ui.map.lidar_overlay import lidar_site_at
-            site = lidar_site_at(current.source, current.end) or site
-        if site:
-            self.map_widget.fly_to(site['lat'], site['lon'], zoom=11)
 
     def _on_time_changed_update_lidar_overlay(self, _t) -> None:
         if not self._lidar_instrument:

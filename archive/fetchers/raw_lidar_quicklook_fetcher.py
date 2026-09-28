@@ -46,6 +46,7 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
     instrument_file_ready = pyqtSignal(str, object)       # instrument, RawLidarRays (with .scans)
     instrument_large_file = pyqtSignal(str, object, int)  # instrument, LidarAsset, bytes -- not loaded unasked
     instrument_loaded = pyqtSignal(str, int)              # instrument, files loaded
+    survey_done = pyqtSignal()                            # survey(): every lidar's files looked at
 
     # A lidar's files load by themselves when it's chosen, except ones this
     # big (a trailer's day of vertical stares can be 355 MB), which wait for
@@ -158,6 +159,41 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
             self.instrument_file_ready.emit(instrument, rays)
         if not self._is_superseded(seq):
             self.instrument_loaded.emit(instrument, loaded)
+
+    def survey(self, assets_by_instrument: dict) -> None:
+        """Load every lidar's files for the session in the background (one
+        lidar after another), so where and when each scanned is known before
+        anything is chosen. Large files that aren't cached are reported with
+        instrument_large_file instead (load_files fetches them later)."""
+        def run():
+            for instrument, assets in assets_by_instrument.items():
+                self._load_files(instrument, assets, force=False)
+            self.survey_done.emit()
+        threading.Thread(target=run, daemon=True).start()
+
+    def load_files(self, instrument: str, assets) -> None:
+        """Load these files of one lidar now, whatever their size."""
+        threading.Thread(target=self._load_files, args=(instrument, list(assets), True), daemon=True).start()
+
+    def _load_files(self, instrument, assets, force) -> None:
+        from core.lidar_scans import classify_scans
+        loaded = 0
+        for asset in sorted(assets, key=lambda a: (self._LOAD_ORDER.get(a.source.product, 9), a.filename)):
+            if not force and not self._cached(asset):
+                size = _remote_size(asset.url)
+                if size is not None and size > self.AUTO_LOAD_MAX_BYTES:
+                    self.instrument_large_file.emit(instrument, asset, size)
+                    continue
+            try:
+                rays = load_raw_lidar(asset, _RAW_LIDAR_CACHE_DIR)
+                rays.scans = classify_scans(rays)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Lidar %s: %s failed to load: %s", instrument, asset.filename, exc)
+                self.error.emit(f"Lidar {asset.filename}: {exc}")
+                continue
+            loaded += 1
+            self.instrument_file_ready.emit(instrument, rays)
+        self.instrument_loaded.emit(instrument, loaded)
 
     @staticmethod
     def _cached(asset) -> bool:

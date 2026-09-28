@@ -147,6 +147,12 @@
       z-index: 200;
     }
 
+    /* Box-draw mode (ASOS / damage-path bounding box): the crosshair holds
+       while the mode is on -- hover handlers elsewhere reset the canvas's
+       inline cursor as the mouse crosses features, which fell back to
+       MapLibre's grab hand. */
+    #map.box-draw-mode .maplibregl-canvas { cursor: crosshair !important; }
+
     #damage-path-tooltip {
       display: none;
       position: absolute;
@@ -3677,6 +3683,7 @@
       }
       window._stormAsosActive = false;
       window._stormAsosStart = null;
+      map.getContainer().classList.remove('box-draw-mode');
       _clearAsosSelectionCanvas();
       _restoreAsosMapInteractions();
     }
@@ -3706,6 +3713,7 @@
         _resizeFC();
         map.dragPan.disable();
         mc.style.cursor = 'crosshair';
+        map.getContainer().classList.add('box-draw-mode');
 
         window.addEventListener('keydown', window._stormAsosKeyDownDOM = function(ev) {
           if (ev.key === 'Escape') _cancelAsosBoxMode();

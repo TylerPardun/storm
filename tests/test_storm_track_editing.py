@@ -106,6 +106,8 @@ def _window(tmp_path, monkeypatch, now=datetime(2024, 4, 27, 20, 0, tzinfo=timez
     monkeypatch.setattr("ui.app.main_window.QSettings", _Settings)
     monkeypatch.setattr(_Settings, "store", {})
     w.track_controls.open_track_requested.connect(lambda path: w._open_track(Path(path)))
+    w.notices = []                                          # stand-in for the save notice dialog
+    w._notify_track_saved = lambda path, what="saved": w.notices.append((Path(path), what))
     return w
 
 
@@ -225,7 +227,8 @@ def test_workspaces_keep_tracks_apart(tmp_path, monkeypatch):
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Tyler / test", True))
     w._new_track_workspace()                              # unsafe characters are dropped
     assert w._track_workspace().name == "Tyler  test" and w._track_points == []
-    assert w.track_controls._saved_combo.isEnabled() is False
+    # the other workspace's track for this date is still offered, tagged with its workspace
+    assert w.track_controls._saved_combo.itemText(0).startswith(f"[My work] {mine.name}")
 
     w._on_track_point_add(36.0, -98.0)
     assert w._track_saved_path.parent == tmp_path / "ws" / "Tyler  test" / "20240427"
@@ -396,3 +399,31 @@ def test_the_table_follows_the_map_and_edits_come_back_as_one_undo_step(tmp_path
 
     table._on_double_clicked(1, 1)                          # go to point 2's time
     assert w._time_ctrl.current_time == w._track_points[1].time and w._track_selected_id == 2
+
+
+def test_the_first_save_tells_the_user_where_the_track_went(tmp_path, monkeypatch):
+    w = _window(tmp_path, monkeypatch)
+    w._on_track_point_add(35.0, -97.0)
+    assert w.notices == [(w._track_saved_path, "saved")]
+    assert w._track_saved_path.parent == tmp_path / "ws" / "My work" / "20240427"
+    w._time_ctrl.current_time += timedelta(minutes=2)
+    w._on_track_point_add(35.1, -97.1)
+    assert len(w.notices) == 1                              # autosaves after the first don't nag
+
+
+def test_shared_tracks_for_the_date_are_listed_and_open_as_a_copy(tmp_path, monkeypatch):
+    shared = tmp_path / "ws" / "MESO-VIEW" / "20240427"
+    shared.mkdir(parents=True)
+    original = shared / "N38_20240427_1815_autosave_edited.csv"
+    original.write_text("point_id,time,lat,lon,case_id\n1,2024-04-27 18:15:00,34.0,-99.0,N38\n"
+                        "2,2024-04-27 18:20:00,34.05,-98.95,N38\n")
+    before = original.read_text()
+    w = _window(tmp_path, monkeypatch)
+    w._refresh_track_workspace_lists()
+    combo = w.track_controls._saved_combo
+    assert combo.itemText(0).startswith("[MESO-VIEW] N38_20240427_1815") and combo.isEnabled()
+    w.track_controls._btn_open_saved.click()
+    w._on_track_point_add(34.1, -98.9)
+    assert original.read_text() == before                   # the shared track is untouched
+    assert w._track_saved_path == tmp_path / "ws" / "My work" / "20240427" / original.name
+    assert pd.read_csv(w._track_saved_path)["case_id"].tolist() == ["N38"] * 3

@@ -1786,6 +1786,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.track_controls.redo_requested.connect(self._redo_track_edit)
             self.track_controls.layers_changed.connect(self.map_widget.set_track_layers_visible)
             self.track_controls.table_requested.connect(self._open_track_table)
+            self.track_controls.open_folder_requested.connect(self._open_track_folder)
             self.track_controls.workspace_selected.connect(self._switch_track_workspace)
             self.track_controls.new_workspace_requested.connect(self._new_track_workspace)
             self.track_controls.open_track_requested.connect(
@@ -5356,7 +5357,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if not self._track_points:
             return
         workspace, day = self._track_workspace(), self._track_session_day()
-        if self._track_saved_path is None:
+        first_save = self._track_saved_path is None
+        if first_save:
             folder = workspace.case_dir(day)
             if self._track_origin:
                 self._track_saved_path = unused_path(folder / f"{Path(self._track_origin).stem}.csv")
@@ -5371,21 +5373,66 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 workspace.record_track(day, self._track_saved_path, len(self._track_points),
                                        origin=self._track_origin)
                 self._refresh_track_workspace_lists()
+            if first_save:
+                self._notify_track_saved(self._track_saved_path)
         except Exception as exc:
             log.error("Track autosave failed: %s", exc)
             self.status_msg_label.setText(f"Track autosave failed: {exc}")
 
     def _refresh_track_workspace_lists(self) -> None:
-        from core.workspace import list_workspaces
+        """The date's tracks from every workspace -- the active one first --
+        so the shared MESO-VIEW tracks show up next to the user's own.
+        Opening one from another workspace edits a copy in the active one."""
+        from core.workspace import list_workspaces, tracks_for_date
         if not hasattr(self, "track_controls"):
             return
         workspace = self._track_workspace()
         self.track_controls.set_workspaces(list_workspaces(), workspace.name)
+        found = tracks_for_date(self._track_session_day())
+        found.sort(key=lambda t: t["workspace"] != workspace.name)          # stable: active first
         tracks = []
-        for t in workspace.tracks(self._track_session_day()):
-            points = f", {t['points']} pts" if t["points"] is not None else ""
-            tracks.append((f"{t['path'].name}  ({t['updated_at'][11:16]}Z{points})", str(t["path"])))
+        for t in found:
+            tags = [t.get("category", "")] + ([f"{t['points']} pts"] if t["points"] is not None else [])
+            where = "" if t["workspace"] == workspace.name else f"[{t['workspace']}] "
+            tracks.append((f"{where}{t['path'].name}  ({', '.join(x for x in tags if x)})".replace("  ()", ""),
+                           str(t["path"])))
         self.track_controls.set_saved_tracks(tracks)
+
+    def _open_track_folder(self) -> None:
+        """The folder of the track being edited, else this date's folder in
+        the active workspace, else the track root."""
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        from core.workspace import workspaces_root
+        folder = (self._track_saved_path.parent if self._track_saved_path is not None
+                  else self._track_workspace().case_dir(self._track_session_day()))
+        if not folder.is_dir():
+            folder = workspaces_root()
+            folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def _notify_track_saved(self, path, what: str = "saved") -> None:
+        """Tell the user exactly where a track went (first save of each file,
+        and exports): a non-blocking notice with a button to open the folder."""
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtWidgets import QMessageBox
+        from core.workspace import workspaces_root
+        path = Path(path)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle(f"Storm track {what}")
+        box.setText(f"Storm track {what}:\n{path.name}")
+        box.setInformativeText(
+            f"Folder: {path.parent}\n\n"
+            f"All storm tracks are kept in STORM's track folder\n{workspaces_root()}\n"
+            "organised as <workspace>/<session date>/. Further edits save to this same file automatically.")
+        open_btn = box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Ok)
+        open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent))))
+        box.setWindowModality(Qt.WindowModality.NonModal)
+        box.show()
+        self._track_saved_notice = box
 
     def _switch_track_workspace(self, name: str) -> None:
         """Every edit is already saved, so switching just starts empty in the
@@ -5724,8 +5771,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if not self._track_points:
             self.status_msg_label.setText("Track: no points to export")
             return
-        from pathlib import Path
-        default_path = str(default_track_dir() / track_filename(self._track_points[0].time))
+        folder = self._track_workspace().case_dir(self._track_session_day())
+        folder.mkdir(parents=True, exist_ok=True)
+        default_path = str(unused_path(folder / track_filename(self._track_points[0].time)))
         path, selected_filter = QFileDialog.getSaveFileName(
             self, "Export Track", default_path, "CSV (*.csv);;Excel (*.xlsx)"
         )
@@ -5739,6 +5787,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         else:
             write_track_csv(self._track_points, p, self._track_case_id)
         self.status_msg_label.setText(f"Track exported to {p}")
+        self._notify_track_saved(p, "exported")
 
     def _on_clear_track_requested(self) -> None:
         if self._track_points:

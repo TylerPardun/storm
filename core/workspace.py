@@ -1,12 +1,15 @@
-"""Named local workspaces for a researcher's own archive work (storm tracks
-for now), kept apart from any shared default case.
+"""Storm tracks, organised by workspace and archive session date, inside
+STORM's own folder (data/storm_tracks) so every track -- the shared
+MESO-VIEW set and anything users create or edit -- lives in one known place:
 
-Layout, one folder per workspace and per archive session date:
-
-    ~/STORM/workspaces/<workspace>/<YYYYMMDD>/
+    data/storm_tracks/<workspace>/<YYYYMMDD>/
         manifest.json                 what's here, for resuming a case
         storm_20240427_2003_track.csv
         ...
+
+"MESO-VIEW" holds the shared tracks imported from MESO-VIEW
+(scripts/import_mesoview_tracks.py); users work in their own workspace
+("My work" by default), where opening a shared track edits a copy.
 
 Track files are ordinary STORM/MESO-VIEW track CSVs (core/storm_track.py) so
 they can be opened anywhere. The manifest is small and rebuildable: a track
@@ -28,8 +31,12 @@ MANIFEST = "manifest.json"
 _BAD_NAME = re.compile(r"[^A-Za-z0-9 ._-]")
 
 
+TRACKS_ROOT = Path(__file__).resolve().parents[1] / "data" / "storm_tracks"
+SHARED_WORKSPACE = "MESO-VIEW"
+
+
 def workspaces_root() -> Path:
-    return Path.home() / "STORM" / "workspaces"
+    return TRACKS_ROOT
 
 
 def clean_name(name: str) -> str:
@@ -40,8 +47,18 @@ def clean_name(name: str) -> str:
 
 def list_workspaces(root: Path | None = None) -> list[str]:
     root = root or workspaces_root()
-    names = sorted(p.name for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
+    names = sorted(p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")) if root.is_dir() else []
     return names if DEFAULT_WORKSPACE in names else [DEFAULT_WORKSPACE] + names
+
+
+def tracks_for_date(session_day: date, root: Path | None = None) -> list[dict]:
+    """Every workspace's tracks for a date, each dict also naming its
+    workspace -- the active one's first, then the rest alphabetically."""
+    found = []
+    for name in list_workspaces(root):
+        for track in Workspace(name, root=root).tracks(session_day):
+            found.append({**track, "workspace": name})
+    return found
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -89,6 +106,8 @@ class Workspace:
         known = {t.get("file"): t for t in self._read_manifest(session_day).get("tracks", [])}
         found = []
         for path in folder.glob("*.csv"):
+            if path.name.startswith("."):    # hidden / AppleDouble "._" files on external drives
+                continue
             entry = known.get(path.name, {})
             found.append({
                 "path": path,
@@ -96,6 +115,8 @@ class Workspace:
                 "updated_at": entry.get("updated_at") or datetime.fromtimestamp(
                     path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                 "origin": entry.get("origin", ""),
+                "category": entry.get("category", ""),
+                "case_id": entry.get("case_id", ""),
             })
         return sorted(found, key=lambda t: t["updated_at"], reverse=True)
 
@@ -107,6 +128,7 @@ class Workspace:
                    if (self.case_dir(session_day) / str(t.get("file"))).exists()}
         previous = entries.get(path.name, {})
         entries[path.name] = {
+            **previous,                     # keeps extra fields, e.g. MESO-VIEW category / case_id
             "file": path.name,
             "points": points,
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),

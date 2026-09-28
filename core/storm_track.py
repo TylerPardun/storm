@@ -45,9 +45,10 @@ def track_filename(first_point_time: datetime, ext: str = "csv") -> str:
 
 
 def default_track_dir() -> Path:
-    """Where new tracks are saved: the Desktop where there is one, else home."""
-    desktop = Path.home() / "Desktop"
-    return desktop if desktop.is_dir() else Path.home()
+    """STORM's track folder (data/storm_tracks, see core/workspace.py): where
+    every track is saved and where the open/export dialogs start."""
+    from core.workspace import workspaces_root
+    return workspaces_root()
 
 
 def unused_path(path: Path) -> Path:

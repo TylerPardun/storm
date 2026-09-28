@@ -25,6 +25,7 @@ class TrackControls(QWidget):
     new_workspace_requested()    user picked "New workspace…"
     open_track_requested(str)    user opened one of this date's workspace tracks
     table_requested()            user clicked "Table…"
+    open_folder_requested()      user clicked "Open Folder"
     """
 
     load_requested = pyqtSignal()
@@ -38,6 +39,7 @@ class TrackControls(QWidget):
     new_workspace_requested = pyqtSignal()
     open_track_requested = pyqtSignal(str)
     table_requested = pyqtSignal()
+    open_folder_requested = pyqtSignal()
 
     _NEW_WORKSPACE = "New workspace…"
 
@@ -64,7 +66,7 @@ class TrackControls(QWidget):
         ws_label.setStyleSheet("color: #8E97AB; font-size: 9px; letter-spacing: 1px;")
         ws_row.addWidget(ws_label)
         self._workspace_combo = QComboBox()
-        self._workspace_combo.setToolTip("Your tracks are saved per workspace, under ~/STORM/workspaces")
+        self._workspace_combo.setToolTip("Tracks are saved per workspace in STORM's data/storm_tracks folder")
         self._workspace_combo.activated.connect(self._on_workspace_activated)
         ws_row.addWidget(self._workspace_combo, 1)
         col.addLayout(ws_row)
@@ -84,10 +86,16 @@ class TrackControls(QWidget):
         self._count_label.setStyleSheet("color: #B5BDCC; font-size: 10px; letter-spacing: 0.5px;")
         col.addWidget(self._count_label)
 
+        file_row = QHBoxLayout()
         self._file_label = QLabel("New track — nothing saved yet")
         self._file_label.setWordWrap(True)
         self._file_label.setStyleSheet("color: #8E97AB; font-size: 10px;")
-        col.addWidget(self._file_label)
+        file_row.addWidget(self._file_label, 1)
+        self._btn_open_folder = QPushButton("OPEN FOLDER")
+        self._btn_open_folder.setToolTip("Show STORM's storm-track folder, where every track is saved")
+        self._btn_open_folder.clicked.connect(self.open_folder_requested.emit)
+        file_row.addWidget(self._btn_open_folder)
+        col.addLayout(file_row)
 
         load_row = QHBoxLayout()
         self._btn_load = QPushButton("LOAD TRACK…")

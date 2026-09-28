@@ -92,7 +92,7 @@ def test_fetch_asos_history_paces_between_batches_not_per_station(monkeypatch):
     assert len(sleeps) == 2  # paced between batches, never after the last one
 
 
-def test_fetch_asos_history_stops_early_when_cancelled(monkeypatch):
+def test_fetch_asos_history_stops_early_when_canceled(monkeypatch):
     calls = []
 
     class _Resp:

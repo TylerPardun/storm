@@ -759,7 +759,7 @@ class LaunchDialog(QDialog):
         self._data_section.setVisible(False)
         root.addWidget(self._data_section)
 
-        # initialise multi-select state from saved settings
+        # initialize multi-select state from saved settings
         self._selected_layers: set[str] = set()
         for key, setting in (("spc", "auto_spc"), ("nws", "auto_nws"), ("radar", "auto_radar")):
             if saved.get(setting, False):
@@ -1419,7 +1419,7 @@ class LaunchDialog(QDialog):
             dialog.accept()
             self._conda_dialog = None
         else:
-            # dialog already dismissed (user cancelled) — just show manual fallback
+            # dialog already dismissed (user canceled) — just show manual fallback
             if not success:
                 _cmd = "conda env update -f envs/storm.yml --prune"
                 self._update_btn.setText(f"⚠   DEPS CHANGED — RUN:\n{_cmd}\nTHEN RESTART")

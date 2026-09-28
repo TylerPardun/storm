@@ -41,7 +41,7 @@ class RawLidarSource:
 # 2026-09-25): DL2 files exist only 2022-05-13..06-16. On those days both
 # streams can have a file for the same scan mode, and they differ (the fp
 # files are 51.6 MB vs 5.6 MB on 2022-05-13), so both are kept and offered,
-# labelled by stream -- nothing is deduplicated.
+# labeled by stream -- nothing is deduplicated.
 KNOWN_RAW_LIDAR_SOURCES = tuple(
     RawLidarSource(f'{platform}-{product.upper()}', instrument, directory, f'{prefix}dl{product}{unit}.b1', product, mobile)
     for platform, instrument, directory, prefix, unit, mobile in (
@@ -149,7 +149,7 @@ def parse_raw_lidar(path, source: RawLidarSource):
         dimension = 'range' if 'range' in ds else 'height'
         axis = _values(ds[dimension])
         units = ds[dimension].attrs.get('units', '').lower().strip()
-        if units in ('km', 'kilometers', 'kilometres', 'km agl', 'km msl'):
+        if units in ('km', 'kilometers', 'kilometres', 'km agl', 'km msl'):   # both spellings occur in files
             axis *= 1000
         elif units not in ('m', 'meters', 'metres', 'm agl', 'm msl'):
             raise ValueError(f'Unknown raw lidar {dimension} units: {units!r}')
@@ -208,7 +208,7 @@ def _truck_azimuth(azimuth, trailer_heading):
     That check also showed radial velocity is positive AWAY from the lidar
     (rain in vertical stares is negative), despite the files' "positive
     values are towards the lidar" comment -- STORM already displays it that
-    way (NWS colours), so only the truck azimuth needs correcting.
+    way (NWS colors), so only the truck azimuth needs correcting.
     A missing heading (-999, NaN, or the 0.0 default of the 2020-21 files)
     leaves the orientation unknown."""
     try:

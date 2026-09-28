@@ -208,7 +208,7 @@ def test_velocity_options_are_part_of_the_velocity_cache_key_only():
     fetcher.shutdown()
 
 
-def test_dealiasing_without_a_nyquist_says_raw_and_storm_relative_is_labelled(monkeypatch):
+def test_dealiasing_without_a_nyquist_says_raw_and_storm_relative_is_labeled(monkeypatch):
     import numpy as np
     fetcher = _fetcher()
     monkeypatch.setattr(fetcher, '_get_parsed', lambda *args: _split_cut_volume())

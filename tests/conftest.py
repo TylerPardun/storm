@@ -41,7 +41,7 @@ LISTED_FAMILY = "Test listing"
 @pytest.fixture
 def listed_platform(monkeypatch):
     """A synthetic source scanned from two flat THREDDS folder listings
-    (processed .nc and raw .txt) -- the generic listing behaviour the
+    (processed .nc and raw .txt) -- the generic listing behavior the
     availability index must keep, now that FOFS itself is scanned from the
     crawled file index instead. Call it with a name for more than one."""
     from archive import catalog as cat

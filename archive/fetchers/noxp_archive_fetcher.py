@@ -412,8 +412,8 @@ class NoxpArchive:
                 for url, links, exc in pool.map(_fetch_one, batch):
                     _check_cancel(cancel)
                     if exc is not None:
-                        from archive.catalog import ScanCancelled
-                        if isinstance(exc, ScanCancelled):
+                        from archive.catalog import ScanCanceled
+                        if isinstance(exc, ScanCanceled):
                             raise exc
                         result.errors.append(f'{url}: {exc}')
                         continue

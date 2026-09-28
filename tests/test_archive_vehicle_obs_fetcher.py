@@ -324,7 +324,7 @@ def test_placeholder_positions_are_dropped():
     assert _times(observations) == [_at(2024, 4, 27, 20, 0, 0)]
 
 
-def test_interleaved_second_track_is_dropped_in_favour_of_the_continuous_one():
+def test_interleaved_second_track_is_dropped_in_favor_of_the_continuous_one():
     # probe1 raw/20100524.txt: from 23:34:05 every second has two rows, one
     # continuing the file's own track (41.13 N) and one ~300 km away that
     # continues the previous day's last fix (38.48 N).
@@ -355,7 +355,7 @@ def test_file_with_no_datable_rows_yields_nothing():
     assert parse_vehicle_csv(text, "probe1", file_date=date(2017, 5, 11)) == []
 
 
-def test_candidate_files_cover_neighbouring_days_and_swapped_names():
+def test_candidate_files_cover_neighboring_days_and_swapped_names():
     assert _candidate_file_dates(date(2024, 4, 27)) == [date(2024, 4, 26), date(2024, 4, 27), date(2024, 4, 28)]
     assert _candidate_file_dates(date(2024, 5, 6)) == [
         date(2024, 5, 5), date(2024, 5, 6), date(2024, 6, 5), date(2024, 5, 7), date(2024, 7, 5),
@@ -585,7 +585,7 @@ def _index(monkeypatch, paths: list[str]):
 
 
 def test_files_are_found_wherever_the_catalog_lists_them(monkeypatch):
-    # The tree gets reorganised; the loader follows the catalog, not a
+    # The tree gets reorganized; the loader follows the catalog, not a
     # hard-coded path.
     _index(monkeypatch, ["FOFS/Mobile-Mesonet/data/probe1/qc_v2/20240427.txt"])
     requested = []

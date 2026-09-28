@@ -1,6 +1,6 @@
 """Index of every FOFS mobile-mesonet daily file THREDDS publishes.
 
-The FOFS/Mobile-Mesonet tree is reorganised often (files are added daily,
+The FOFS/Mobile-Mesonet tree is reorganized often (files are added daily,
 folders move), so nothing here assumes a layout: the whole tree is crawled
 through its THREDDS catalog.xml pages, and every .txt file whose name
 carries a YYYYMMDD date is recorded against the vehicle its folder names.
@@ -197,7 +197,7 @@ def _write_cache(path: Path, index: FofsIndex) -> None:
                        "modified": f.modified} for f in index.files],
         }))
         temporary.replace(path)
-    except Exception as exc:  # noqa: BLE001 - a cache is an optimisation only
+    except Exception as exc:  # noqa: BLE001 - a cache is an optimization only
         log.warning("FOFS index cache not written: %s", exc)
 
 

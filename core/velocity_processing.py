@@ -5,7 +5,7 @@ decoded sweep (m/s, rays sorted by azimuth):
   (mm_review/src/radar_render.py: centered, rays wrap around), using the
   sweep's own Nyquist velocity. It can fail or be unavailable (no Nyquist
   recorded); callers then keep the raw velocity and say so -- a raw field
-  is never labelled as dealiased.
+  is never labeled as dealiased.
 - Storm-relative velocity: subtract the storm motion's component along each
   beam, u*sin(az) + v*cos(az), scaled by cos(elevation) for the beam's tilt.
   Depends on the chosen motion (the storm track's mean motion), which is

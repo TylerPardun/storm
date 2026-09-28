@@ -293,9 +293,9 @@ def test_a_real_click_on_the_year_button_opens_the_grid_in_one_click():
 
 def test_startup_archive_schedules_discovery_and_date_changes_debounce(monkeypatch):
     _, dlg = _dialog()
-    calls, cancelled = [], []
+    calls, canceled = [], []
     monkeypatch.setattr(dlg._availability, "request", lambda *args: calls.append(args))
-    monkeypatch.setattr(dlg._availability, "cancel", lambda: cancelled.append(True))
+    monkeypatch.setattr(dlg._availability, "cancel", lambda: canceled.append(True))
     dlg._select_mode("archive")
     dlg.show()
     assert dlg._availability_timer.isActive()
@@ -304,7 +304,7 @@ def test_startup_archive_schedules_discovery_and_date_changes_debounce(monkeypat
     generation = dlg._availability_generation
     QTest.qWait(350)
     assert calls == [(generation, False)]
-    assert len(cancelled) >= 3
+    assert len(canceled) >= 3
     dlg._select_mode("viewer")
     assert not dlg._availability_timer.isActive()
 

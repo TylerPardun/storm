@@ -131,7 +131,7 @@ def test_cancellation_retains_completed_listing_and_stops_remaining_requests(_fo
         token.set()
         return _page(spec, '20240427.nc')
     index = cat.AvailabilityIndex([_fofs()], fetch, pace=0)
-    with pytest.raises(cat.ScanCancelled):
+    with pytest.raises(cat.ScanCanceled):
         list(index.scan(cancel))
     assert calls == [spec.url]
     assert index.snapshot().dates == {date(2024, 4, 27)}
@@ -158,7 +158,7 @@ def test_cancellation_stops_retry_backoff(monkeypatch):
         cancel.set()
         raise URLError('timeout')
     monkeypatch.setattr(cat, 'urlopen', fetch)
-    with pytest.raises(cat.ScanCancelled):
+    with pytest.raises(cat.ScanCanceled):
         cat._fetch_catalog_html('https://example.test', cancel)
     assert calls == [True]
 

@@ -183,7 +183,7 @@ class DeployLocsControls(QWidget):
         self._btns["rank_abi"].setChecked(True)
         self._updating = False
 
-        # initialise slider config for the default metric (no emit)
+        # initialize slider config for the default metric (no emit)
         self._init_slider("rank_abi")
 
     def _btn(self, label: str) -> QToolButton:

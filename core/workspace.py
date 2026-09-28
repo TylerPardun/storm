@@ -1,4 +1,4 @@
-"""Storm tracks, organised by workspace and archive session date, inside
+"""Storm tracks, organized by workspace and archive session date, inside
 STORM's own folder (data/storm_tracks) so every track -- the shared
 MESO-VIEW set and anything users create or edit -- lives in one known place:
 

@@ -4,7 +4,7 @@ from threading import Event
 
 from PyQt6.QtTest import QTest
 
-from archive.catalog import AvailabilityIndex, ALL_PLATFORMS, ScanCancelled
+from archive.catalog import AvailabilityIndex, ALL_PLATFORMS, ScanCanceled
 from ui.launch.availability import AvailabilityWorker
 
 
@@ -16,16 +16,16 @@ def _wait(predicate):
 
 
 def test_one_worker_cancels_active_request_and_keeps_only_latest_pending(qapp, listed_platform):
-    started, cancelled, release = Event(), Event(), Event()
+    started, canceled, release = Event(), Event(), Event()
     calls = []
     def fetch(url, token):
         calls.append(url)
         if len(calls) == 1:
             started.set()
             assert token.wait(2)
-            cancelled.set()
+            canceled.set()
             assert release.wait(2)
-            raise ScanCancelled()
+            raise ScanCanceled()
         return '<html>THREDDS catalog</html>'
     worker = AvailabilityWorker(AvailabilityIndex([listed_platform()], fetch, pace=0))
     updates = []
@@ -35,14 +35,14 @@ def test_one_worker_cancels_active_request_and_keeps_only_latest_pending(qapp, l
         _wait(started.is_set)
         original_thread = worker._thread
         worker.request(2)
-        _wait(cancelled.is_set)
+        _wait(canceled.is_set)
         worker.request(3)
         release.set()
         _wait(lambda: any(g == 3 and s.checked == s.total for g, s in updates))
         assert worker._thread is original_thread
         assert not any(g == 2 for g, _ in updates)
         assert not any(g == 1 and s.checked for g, s in updates)
-        assert len(calls) == 3  # cancelled first listing, then the two catalogs
+        assert len(calls) == 3  # canceled first listing, then the two catalogs
         worker.request(4)
         _wait(lambda: any(g == 4 and s.checked == s.total for g, s in updates))
         assert len(calls) == 3  # changing dates after completion is metadata-only
@@ -60,7 +60,7 @@ def test_close_interrupts_active_scan_and_joins_without_more_requests(qapp, list
         calls.append(url)
         started.set()
         assert cancel.wait(2)
-        raise ScanCancelled()
+        raise ScanCanceled()
     worker = AvailabilityWorker(AvailabilityIndex([listed_platform()], fetch, pace=0))
     worker.request(1)
     _wait(started.is_set)

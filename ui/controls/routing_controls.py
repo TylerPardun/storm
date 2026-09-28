@@ -31,7 +31,7 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = sin(dp / 2) ** 2 + cos(p1) * cos(p2) * sin(dl / 2) ** 2
     return 2 * R * atan2(sqrt(a), sqrt(1 - a))
 
-# text-colour styles applied inline on the QLineEdit fields
+# text-color styles applied inline on the QLineEdit fields
 _STYLE_GPS    = "color: #39D98A;"   # green  — set via GPS loc button
 _STYLE_MANUAL = "color: #EFF3FF;"   # white  — manually entered / map-picked
 
@@ -120,7 +120,7 @@ class RoutingControls(QWidget):
 
     Signals:
         enter_pick_mode()              — either pick button was activated
-        cancel_pick_mode()             — pick mode was cancelled
+        cancel_pick_mode()             — pick mode was canceled
         route_calculated(RouteResult)  — a route was successfully fetched
         route_cleared()                — user cleared the route
     """

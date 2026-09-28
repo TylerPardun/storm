@@ -13,7 +13,7 @@ Positions between points are linear in time. Nothing is extrapolated: before
 the first point or after the last there is no position or motion. Points
 sharing a time contribute no segment. Distances use a local flat-earth
 approximation (as MESO-VIEW does), accurate to well under 1% over the few
-tens of kilometres between track points.
+tens of kilometers between track points.
 """
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ def motion_at(points: list[TrackPoint], when: datetime) -> StormMotion | None:
 
 
 def position_at(points: list[TrackPoint], when: datetime) -> tuple[float, float] | None:
-    """Storm centre (lat, lon) at `when`, linear between placed points; None
+    """Storm center (lat, lon) at `when`, linear between placed points; None
     outside the track."""
     ordered = _ordered(points)
     for p in ordered:

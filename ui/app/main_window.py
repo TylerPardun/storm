@@ -470,7 +470,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_sounding.sounding_ready.connect(self._on_sounding_ready)
         self._archive_sounding.coptersondes_ready.connect(self._on_archive_coptersondes_ready)
         self._watch_worker_errors(self._archive_sounding, self._archive_sounding.fetch_error, "Sounding")
-        # also initialise the sounding-station layer so the map shows clickable sites.
+        # also initialize the sounding-station layer so the map shows clickable sites.
         self._sounding_stations_geojson = build_stations_geojson()
 
         from archive.fetchers.clamps_surface_playback import ClampsSurfacePlayback
@@ -1754,7 +1754,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         if self._archive and feature_flags.is_enabled("obs_trails"):
             self.btn_trails = self._toolbar_toggle(
-                "TRAILS", "Observation trails coloured by measured and derived quantities", tb
+                "TRAILS", "Observation trails colored by measured and derived quantities", tb
             )
             self.trail_controls = TrailControls(self._map_container)
             self.trail_controls.setObjectName("floatingToolbar")
@@ -5428,7 +5428,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         box.setInformativeText(
             f"Folder: {path.parent}\n\n"
             f"All storm tracks are kept in STORM's track folder\n{workspaces_root()}\n"
-            "organised as <workspace>/<session date>/. Further edits save to this same file automatically.")
+            "organized as <workspace>/<session date>/. Further edits save to this same file automatically.")
         open_btn = box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
         box.addButton(QMessageBox.StandardButton.Ok)
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent))))
@@ -5544,7 +5544,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._refresh_track_controls()
 
     def _on_track_point_add(self, lat: float, lon: float) -> None:
-        """Place the storm centre at the current time. If a point already
+        """Place the storm center at the current time. If a point already
         sits at this time (to the second -- stepping frames lands exactly on
         scan times), that point moves here instead, as in MESO-VIEW: step
         back to a point's frame and click to refine it."""
@@ -5575,7 +5575,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _on_track_point_moved(self, point_id: int, lat: float, lon: float, keep_time: bool) -> None:
         """A dragged point takes the new position and, unless Alt/Option was
-        held, the current archive time -- MESO-VIEW's "the storm centre is
+        held, the current archive time -- MESO-VIEW's "the storm center is
         here, now" (source moved_retimed / moved_position_only)."""
         if not self._track_edit_active:
             return
@@ -5631,7 +5631,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.map_widget.set_track_marker(None)
 
     def _add_track_point_at_marker(self) -> None:
-        """A: put the storm centre on the marker at the current time."""
+        """A: put the storm center on the marker at the current time."""
         if self._shortcut_focus_is_text_entry() or not self._track_edit_active:
             return
         if not self._track_marker:

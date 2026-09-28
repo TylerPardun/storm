@@ -4,11 +4,11 @@ from threading import Event
 
 import pytest
 
-from archive.catalog import ScanCancelled
+from archive.catalog import ScanCanceled
 from archive.fetchers import noxp_archive_fetcher as noxp
 
 
-def test_cancelled_download_never_leaves_reusable_partial_file(monkeypatch, tmp_path):
+def test_canceled_download_never_leaves_reusable_partial_file(monkeypatch, tmp_path):
     cancel = Event()
     class Response(io.BytesIO):
         def read(self, n=-1):
@@ -16,7 +16,7 @@ def test_cancelled_download_never_leaves_reusable_partial_file(monkeypatch, tmp_
             cancel.set()
             return chunk
     monkeypatch.setattr(noxp, 'urlopen', lambda *a, **k: Response(b'partial bytes'))
-    with pytest.raises(ScanCancelled):
+    with pytest.raises(ScanCanceled):
         noxp.download_asset(noxp.DATA_ROOT + 'file.nc', tmp_path, cancel, 'file.nc')
     assert not list(tmp_path.iterdir())
 

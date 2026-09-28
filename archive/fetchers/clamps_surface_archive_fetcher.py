@@ -191,7 +191,7 @@ def parse_clamps_surface_netcdf(data: bytes, platform_id: str, trust_wind_direct
         lon_raw = np.asarray(ds["lon"].values, dtype="float64")
 
     # Some files (e.g. CLAMPS1 MWR, 2023) hold sfc_temp in kelvin while the
-    # variable is labelled degC. A file-wide median above 150 is impossible in
+    # variable is labeled degC. A file-wide median above 150 is impossible in
     # degC (the surface record is ~57 degC), so the whole file is kelvin.
     valid_temp = sfc_temp[np.isfinite(sfc_temp) & (sfc_temp > _FILL_SENTINEL_MAX)]
     if valid_temp.size and float(np.median(valid_temp)) > 150.0:

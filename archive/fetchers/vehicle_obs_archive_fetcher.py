@@ -589,7 +589,7 @@ def _drop_stale_fixes(observations: list[Observation]) -> tuple[list[Observation
 
 def _candidate_file_dates(session_day: date, thredds_vehicle: str | None = None) -> list[date]:
     """Every raw/<date>.txt that can hold rows from session_day: the day's
-    own file and its neighbours (local-day files run past 00 UTC, and 2010
+    own file and its neighbors (local-day files run past 00 UTC, and 2010
     files hold stretches of the adjacent days), the day/month-swapped names
     any of them could have been published under, and any file a known
     correction moves rows out of onto these days."""

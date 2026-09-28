@@ -73,7 +73,7 @@ class SoundingDialog(QDialog):
             + _SLIDER_QSS
         )
 
-        # primary sounding state (original behaviour)
+        # primary sounding state (original behavior)
         self._sset: SoundingSet | None = None
         self._cur_idx       = 0
         self._param_labels: dict[str, QLabel] = {}

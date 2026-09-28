@@ -131,13 +131,13 @@ class KnownPlatform:
     site: str = ""
 
 
-class ScanCancelled(Exception):
+class ScanCanceled(Exception):
     pass
 
 
 def _check_cancel(cancel: Event):
     if cancel.is_set():
-        raise ScanCancelled()
+        raise ScanCanceled()
 
 
 def _fetch_catalog_html(url: str, cancel: Event) -> str:
@@ -180,7 +180,7 @@ def _fetch_catalog_html(url: str, cancel: Event) -> str:
             if attempt:
                 raise
         if cancel.wait(0.75):
-            raise ScanCancelled()
+            raise ScanCanceled()
     raise AssertionError("unreachable")
 
 
@@ -224,7 +224,7 @@ class RecursiveCatalogSpec:
 class FofsIndexSpec:
     """A mobile-mesonet vehicle's dates from the crawled FOFS file index
     (archive/fofs_index.py) instead of one fixed folder, since that tree is
-    reorganised often. `vehicle=None` collects every vehicle folder no
+    reorganized often. `vehicle=None` collects every vehicle folder no
     registered platform covers, so a new vehicle's dates still show."""
     vehicle: str | None
     year: int | None = None
@@ -443,7 +443,7 @@ class AvailabilityIndex:
             if spec in self._results:
                 continue
             if cancel.wait(self._pace):
-                raise ScanCancelled()
+                raise ScanCanceled()
             try:
                 if isinstance(spec, FofsIndexSpec):
                     from archive import fofs_index
@@ -494,7 +494,7 @@ class AvailabilityIndex:
                     self._results[spec] = (dates, "")
                 if dates:
                     self._latest_seen[spec] = max(dates).year
-            except ScanCancelled:
+            except ScanCanceled:
                 raise
             except Exception as exc:
                 self._results[spec] = (frozenset(), f"{spec.url}: {exc}")

@@ -317,7 +317,7 @@ def check_file(report: FileReport, misfiled_twin: str | None) -> list[Finding]:
         add("INFO", "garbled", "gps_date garbled by the THREDDS conversion; recovered")
     if report.positioned and report.datable / report.positioned < _PARTLY_DATED_FRACTION:
         add("WARN", "partly_dated", f"only {report.datable}/{report.positioned} positioned rows "
-            "datable; the rest carry dates that fit neither this file nor its neighbours")
+            "datable; the rest carry dates that fit neither this file nor its neighbors")
     return findings
 
 
@@ -325,7 +325,7 @@ def check_file(report: FileReport, misfiled_twin: str | None) -> list[Finding]:
 
 def _session_days(file_dates: list[date], vehicle: str | None = None) -> set[date]:
     """Every UTC day a vehicle's files can put data on, per STORM's own
-    candidate-file rule (a day reads its neighbours' files, their swapped
+    candidate-file rule (a day reads its neighbors' files, their swapped
     names, and any file a known correction moves rows out of)."""
     days: set[date] = set()
     for file_date in file_dates:

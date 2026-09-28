@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from archive.catalog import ScanCancelled
+from archive.catalog import ScanCanceled
 from archive.fetchers.noxp_archive_fetcher import (
     ROOT, DATA_ROOT, NoxpArchive, asset_from_url, parse_catalog, read_noxp,
     _DISCOVERY_CACHE_TTL_SECONDS,
@@ -42,7 +42,7 @@ def test_inventory_keeps_failures_unknown_and_cancellation_propagates(tmp_path):
     assert not result.complete and 'timed out' in result.errors[0]
     cancel = Event()
     cancel.set()
-    with pytest.raises(ScanCancelled):
+    with pytest.raises(ScanCanceled):
         adapter.discover(cancel=cancel)
 
 

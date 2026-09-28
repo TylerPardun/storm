@@ -292,7 +292,7 @@ class RadarControls(QWidget):
         self._chk_dealias = QCheckBox("Dealias")
         self._chk_dealias.setToolTip(
             "Unfold aliased velocities (Py-ART region-based, as in MESO-VIEW). "
-            "If a sweep can't be dealiased, raw velocity is shown and labelled raw.")
+            "If a sweep can't be dealiased, raw velocity is shown and labeled raw.")
         self._chk_storm_relative = QCheckBox("Storm-relative")
         for chk in (self._chk_dealias, self._chk_storm_relative):
             chk.setFixedHeight(22)

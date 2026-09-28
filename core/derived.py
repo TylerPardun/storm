@@ -10,7 +10,7 @@ direction the wind blows from).
 Storm-relative quantities need the storm track (core/storm_motion.py):
 storm-relative wind subtracts the track's mean motion; radial and
 tangential wind are that storm-relative wind resolved about the storm
-centre at each observation's own time (radial + outward, tangential +
+center at each observation's own time (radial + outward, tangential +
 counterclockwise/cyclonic). Observations outside the track's time span get
 NaN -- the track is never extrapolated.
 """
@@ -95,8 +95,8 @@ def compute(columns: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {k: np.asarray(v, dtype=np.float64) for k, v in out.items()}
 
 
-def track_centre(track_points, times_epoch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Storm centre (lat, lon) at each time, linear between track points;
+def track_center(track_points, times_epoch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Storm center (lat, lon) at each time, linear between track points;
     NaN outside the track's time span."""
     ordered = sorted(track_points, key=lambda p: p.time)
     lat = np.full(times_epoch.shape, np.nan)
@@ -130,11 +130,11 @@ def storm_relative(columns, derived, track_points, motion) -> dict[str, np.ndarr
     if motion is None or len(track_points) < 2:
         return nan
     su, sv = derived["u"] - motion.u_ms, derived["v"] - motion.v_ms
-    clat, clon = track_centre(track_points, columns["time"])
+    clat, clon = track_center(track_points, columns["time"])
     east, north = offsets_km(columns["lat"], columns["lon"], clat, clon)
     distance = np.hypot(east, north)
     with np.errstate(invalid="ignore", divide="ignore"):
-        ex, ny = east / distance, north / distance                 # unit vector out from the centre
+        ex, ny = east / distance, north / distance                 # unit vector out from the center
         radial = su * ex + sv * ny
         tangential = -su * ny + sv * ex                            # counterclockwise positive
     inside = np.isfinite(clat)

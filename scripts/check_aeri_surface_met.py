@@ -60,7 +60,7 @@ def main() -> int:
     from archive.fetchers import clamps_surface_archive_fetcher as c
 
     report = []
-    units_mislabelled = set()
+    units_mislabeled = set()
     for trailer, aeri_stream, ref_stream, ref_kind in PAIRS:
         aeri_files = c._list_catalog_filenames(trailer, aeri_stream)
         ref_files = c._list_catalog_filenames(trailer, ref_stream)
@@ -86,8 +86,8 @@ def main() -> int:
                         epoch = xr.decode_cf(ds[["time"]])["time"].values.astype("datetime64[s]").astype(np.int64)
                     a_t.append(np.asarray(epoch, dtype=float))
                     temp = ds["outsideAirTemp"].values.astype(float)
-                    if np.nanmedian(temp) < 150:                       # labelled Kelvin but holds degC
-                        units_mislabelled.add(day)
+                    if np.nanmedian(temp) < 150:                       # labeled Kelvin but holds degC
+                        units_mislabeled.add(day)
                         temp = temp + 273.15
                     a_T.append(temp - 273.15)
                     a_RH.append(ds["atmosphericRelativeHumidity"].values.astype(float))
@@ -107,7 +107,7 @@ def main() -> int:
                 continue
             row = {"pair": f"{aeri_stream} vs {ref_kind}", "day": day, "aeri_samples": int(a_t.size),
                    "reference_samples": int(r_t.size),
-                   "aeri_temperature_labelled_K_but_degC": day in units_mislabelled,
+                   "aeri_temperature_labeled_K_but_degC": day in units_mislabeled,
                    "aeri_impossible_share": {
                        "T": float(np.mean((a_T < -50) | (a_T > 55))),
                        "RH": float(np.mean((a_RH < 1) | (a_RH > 105))),

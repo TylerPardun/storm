@@ -263,7 +263,7 @@ def test_overlapping_restart_files_are_merged_without_duplicates(monkeypatch):
     assert [o.timestamp for o in obs] == [t, t + timedelta(minutes=1), t + timedelta(minutes=2)]
 
 
-def test_kelvin_temperatures_labelled_celsius_are_converted(tmp_path):
+def test_kelvin_temperatures_labeled_celsius_are_converted(tmp_path):
     """CLAMPS1 MWR files in 2023 store sfc_temp in kelvin under a degC label
     (e.g. 2023-06-09: median 305.3); STORM showed ~300 degC surface temps."""
     path = tmp_path / "mwr_kelvin.cdf"

@@ -1,4 +1,4 @@
-"""The TRACK tab's editing behaviour, run on MainWindow's own track methods
+"""The TRACK tab's editing behavior, run on MainWindow's own track methods
 with the map, clock and radar stubbed out (MainWindow itself needs a live
 map and network)."""
 

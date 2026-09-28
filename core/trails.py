@@ -1,5 +1,5 @@
 """Observation trails: each platform's recent path as short line segments
-coloured by one measured or derived quantity (core/derived.py).
+colored by one measured or derived quantity (core/derived.py).
 
 Trails cover a trailing window ending at the archive clock. A gap in the
 data longer than max(2 min, 5x the platform's usual spacing) breaks the
@@ -7,8 +7,8 @@ line instead of bridging it. Dense (1 s) records are thinned to at most
 `max_points` per platform for drawing; values are not smoothed.
 
 Time-to-space (view-only, as MESO-VIEW's): each observation is drawn at its
-offset from the storm centre *at the observation's own time*, placed around
-the storm centre at the clock time. Values and timestamps are unchanged.
+offset from the storm center *at the observation's own time*, placed around
+the storm center at the clock time. Values and timestamps are unchanged.
 Observations outside the storm track's time span are left out in this mode.
 """
 from __future__ import annotations
@@ -82,11 +82,11 @@ class TrailBuilder:
         quantity = derived.QUANTITIES[quantity_key]
         t0, t1 = start.timestamp(), end.timestamp()
         features, shown = [], []
-        centre_now = None
+        center_now = None
         if time_to_space:
-            clat, clon = derived.track_centre(track_points, np.array([t1]))
-            centre_now = (float(clat[0]), float(clon[0])) if np.isfinite(clat[0]) else None
-            if centre_now is None:
+            clat, clon = derived.track_center(track_points, np.array([t1]))
+            center_now = (float(clat[0]), float(clon[0])) if np.isfinite(clat[0]) else None
+            if center_now is None:
                 return _collection([]), (math.nan, math.nan), 0
 
         for vehicle_id, observations in observations_by_vehicle.items():
@@ -110,9 +110,9 @@ class TrailBuilder:
                 values = values_all[quantity_key][idx]
             lat, lon = sub["lat"], sub["lon"]
             if time_to_space:
-                clat, clon = derived.track_centre(track_points, sub["time"])
+                clat, clon = derived.track_center(track_points, sub["time"])
                 east, north = derived.offsets_km(lat, lon, clat, clon)
-                lat, lon = derived.from_offsets_km(east, north, *centre_now)
+                lat, lon = derived.from_offsets_km(east, north, *center_now)
                 keep = np.isfinite(lat)
                 lat, lon, values, sub_time = lat[keep], lon[keep], values[keep], sub["time"][keep]
             else:
@@ -138,8 +138,8 @@ class TrailBuilder:
                                    "t": datetime.fromtimestamp(sub_time[i + 1], timezone.utc).strftime("%H:%M:%SZ")},
                 })
 
-        if centre_now is not None:
-            features += _rings(*centre_now)
+        if center_now is not None:
+            features += _rings(*center_now)
         vmin, vmax = value_range(quantity_key, np.array(shown))
         return _collection(features), (vmin, vmax), len(shown)
 
@@ -149,9 +149,9 @@ def _collection(features):
 
 
 def _rings(lat0: float, lon0: float) -> list:
-    """Storm-centred range rings (time-to-space mode) and the centre point."""
+    """Storm-centered range rings (time-to-space mode) and the center point."""
     features = [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon0, lat0]},
-                 "properties": {"kind": "centre"}}]
+                 "properties": {"kind": "center"}}]
     angles = np.linspace(0, 2 * np.pi, 73)
     radius = RING_SPACING_KM
     while radius <= RING_MAX_KM + 1e-9:

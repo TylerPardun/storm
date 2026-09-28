@@ -201,7 +201,7 @@ class ArchiveSoundingFetcher(QObject):
 
 
     def _do_fetch_nssl(self, t: datetime) -> None:
-        """Try archived launches, the API, then clearly labelled TROPoe retrievals.
+        """Try archived launches, the API, then clearly labeled TROPoe retrievals.
 
         Provider failures cannot short-circuit another provider. Every result
         is limited to the selected UTC day and archive time, including TROPoe.

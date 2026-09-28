@@ -3,7 +3,7 @@ import threading
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from archive.catalog import AvailabilityIndex, ScanCancelled
+from archive.catalog import AvailabilityIndex, ScanCanceled
 
 
 class AvailabilityWorker(QObject):
@@ -61,5 +61,5 @@ class AvailabilityWorker(QObject):
                     if cancel.is_set():
                         break
                     self.updated.emit(generation, snapshot)
-            except ScanCancelled:
+            except ScanCanceled:
                 pass

@@ -128,8 +128,8 @@ class ArchiveRadarFetcher(QObject):
 
         self._current_archive_time: Optional[datetime] = None
         self._last_emitted_key: Optional[tuple] = None  # suppress re-render of same scan
-        # re-entrant: cancelling a queued Future runs its done-callback
-        # (_forget_work, which takes this lock) in the cancelling thread
+        # re-entrant: canceling a queued Future runs its done-callback
+        # (_forget_work, which takes this lock) in the canceling thread
         self._fetch_lock = threading.RLock()
         self._pending_fetches: set[datetime] = set()
         self._pending_decodes: set[tuple] = set()
@@ -273,7 +273,7 @@ class ArchiveRadarFetcher(QObject):
         else:
             self._ensure_fetched(scan_time)
 
-        # maintain buffer: pre-fetch neighbouring scans.
+        # maintain buffer: pre-fetch neighboring scans.
         self._maintain_buffer(scan_time)
 
 

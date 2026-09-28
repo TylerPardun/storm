@@ -151,7 +151,7 @@ class UpdateWorker(QObject):
             if self._conda_proc.returncode == 0:
                 self.conda_update_done.emit(True, "")
             elif self._conda_proc.returncode < 0:
-                self.conda_update_done.emit(False, "Conda update was cancelled")
+                self.conda_update_done.emit(False, "Conda update was canceled")
             else:
                 error_msg = (stderr.strip() or stdout.strip() or "Unknown error")[:500]
                 self.conda_update_done.emit(False, error_msg)

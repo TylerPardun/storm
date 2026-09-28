@@ -1,5 +1,5 @@
 """Floating drawer for observation trails (core/trails.py): which quantity
-colours the trails, how far back they reach, time-to-space, and the colour
+colors the trails, how far back they reach, time-to-space, and the color
 bar. Same collapsible-drawer shell as TrackControls."""
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ class TrailControls(QWidget):
         """Storm-relative quantities and time-to-space need a storm track."""
         self._time_to_space.setEnabled(available)
         self._time_to_space.setToolTip(
-            "Place each observation at its offset from the storm centre at its own time"
+            "Place each observation at its offset from the storm center at its own time"
             if available else "Needs a storm track: place at least two TRACK points at different times")
         model = self._quantity.model()
         for i in range(self._quantity.count()):

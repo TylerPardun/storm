@@ -1266,8 +1266,8 @@
       // Drawn on top of everything else (no beforeId) since it's an actively
       // edited overlay. 'state' on each point feature is 'normal' / 'selected'
       // / 'current' (nearest the timeline's current time) and drives color.
-      // Observation trails (core/trails.py): recent path segments coloured by
-      // one measured/derived quantity; in time-to-space mode also storm-centred
+      // Observation trails (core/trails.py): recent path segments colored by
+      // one measured/derived quantity; in time-to-space mode also storm-centered
       // range rings. Added before the storm track so the track draws on top.
       map.addSource('obs-trails', {type:'geojson', data:{type:'FeatureCollection', features:[]}});
       map.addLayer({
@@ -1282,8 +1282,8 @@
         paint: {'line-color': '#FFFFFF', 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 2.5, 12, 5]}
       });
       map.addLayer({
-        id: 'obs-trails-centre', type: 'circle', source: 'obs-trails',
-        filter: ['==', ['get', 'kind'], 'centre'],
+        id: 'obs-trails-center', type: 'circle', source: 'obs-trails',
+        filter: ['==', ['get', 'kind'], 'center'],
         paint: {'circle-radius': 4, 'circle-color': '#FFD400', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#0A0A0F'}
       });
       window._trailUnits = '';
@@ -1431,7 +1431,7 @@
         map.getCanvas().style.cursor = window._trackEditActive ? 'crosshair' : '';
         if (!drag.moved) return;
         // The browser may send a click for the drag gesture itself, at the
-        // release point; that one must not add a point. Recognised by place
+        // release point; that one must not add a point. Recognized by place
         // and time rather than a flag, since often no such click comes.
         window._trackDragEnd = {x: e.point.x, y: e.point.y, t: Date.now()};
         var keepTime = !!(e.originalEvent && e.originalEvent.altKey);

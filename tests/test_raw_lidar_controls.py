@@ -206,7 +206,7 @@ def test_fields_come_from_selected_file_and_stale_load_cannot_replace_them():
 
 def test_dl1_and_dl2_are_one_instrument_with_both_streams_offered():
     """DL1 and DL2 are the same lidar; on the 2022 days both streams have an
-    fp file, and they differ, so both are offered, labelled by stream."""
+    fp file, and they differ, so both are offered, labeled by stream."""
     controls = RawLidarControls()
     controls.set_sources(KNOWN_RAW_LIDAR_SOURCES)
     fp = {s.stream: s for s in KNOWN_RAW_LIDAR_SOURCES if s.instrument == "DLTRUCK1" and s.product == "fp"}

@@ -846,13 +846,13 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.hazard_controls.spc_watches_toggled.connect(self._on_archive_watches_toggled)
         self.hazard_controls.spc_mds_toggled.connect(self._on_archive_mds_toggled)
         self.hazard_controls.nws_warnings_toggled.connect(self._on_archive_nws_toggled)
-        # CWA boundaries are a static local shapefile, wired once in
-        # _init_hazards() (called from the mode-agnostic startup sequence
-        # that always runs, live or archive) -- connecting it again here
-        # double-fired _on_cwa_toggled per click, and since
-        # _begin_archive_startup() can run more than once per app lifetime
-        # (each new archive session), it kept adding another duplicate
-        # connection on top.
+        # CWA boundaries are a static local shapefile, the same in live and
+        # archive. _init_hazards() wires the toggle only in live mode (it runs
+        # from the post-startup fetchers), so archive mode wires it here.
+        # UniqueConnection: _begin_archive_startup() can run more than once
+        # per app lifetime, and one click must toggle the layer exactly once.
+        self.hazard_controls.cwa_toggled.connect(
+            self._on_cwa_toggled, type=Qt.ConnectionType.UniqueConnection)
         self.hazard_controls.fetch_requested.connect(self._archive_hazard.refresh_now)
         self.map_widget.feature_clicked.connect(self._on_spc_feature_clicked)
 
@@ -3191,7 +3191,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.hazard_controls.spc_mds_toggled.connect(self._on_spc_mds_toggled)
         self.hazard_controls.nws_warnings_toggled.connect(self._on_nws_warnings_toggled)
         self.hazard_controls.nws_filter_changed.connect(self._on_nws_filter_changed)
-        self.hazard_controls.cwa_toggled.connect(self._on_cwa_toggled)
+        self.hazard_controls.cwa_toggled.connect(
+            self._on_cwa_toggled, type=Qt.ConnectionType.UniqueConnection)
         self.hazard_controls.fetch_requested.connect(self._on_hazard_fetch_requested)
 
         self._hazard_fetcher.spc_received.connect(self._on_spc_received)

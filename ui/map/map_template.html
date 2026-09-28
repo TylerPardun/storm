@@ -1812,6 +1812,7 @@
         id: 'cwa-fill',
         type: 'fill',
         source: 'cwa',
+        filter: ['==', ['geometry-type'], 'Polygon'],
         layout: { 'visibility': 'none' },
         paint: { 'fill-color': '#FFCC00', 'fill-opacity': 0 }
       });
@@ -1819,6 +1820,7 @@
         id: 'cwa-line',
         type: 'line',
         source: 'cwa',
+        filter: ['==', ['geometry-type'], 'Polygon'],
         layout: { 'visibility': 'none' },
         paint: { 'line-color': '#00CFFF', 'line-width': 1.5, 'line-opacity': 0.9 }
       });
@@ -1826,17 +1828,18 @@
         id: 'cwa-label',
         type: 'symbol',
         source: 'cwa',
+        filter: ['==', ['geometry-type'], 'Point'],     // one label point per CWA
         layout: {
           'visibility': 'none',
           'text-field': ['coalesce', ['get', 'WFO'], ['get', 'CWA']],
           'text-font': ['Noto Sans Bold'],
-          'text-size': 12,
+          'text-size': 13,
           'text-anchor': 'center',
           'text-offset': [0, 0],
           'text-allow-overlap': true,
           'text-ignore-placement': true
         },
-        paint: { 'text-color': '#E8EDF5', 'text-halo-color': '#0A0A0F', 'text-halo-width': 2 }
+        paint: { 'text-color': '#00CFFF', 'text-halo-color': '#0A0A0F', 'text-halo-width': 2 }   // matches the CWA lines, apart from city names
       });
 
       // restore any CWA data queued before the map was ready (but do NOT auto-show)

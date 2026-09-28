@@ -1,5 +1,6 @@
 
 import json
+import math
 import logging
 import sys
 import runtime_flags
@@ -23,6 +24,95 @@ if not SAFE_MAP_MODE:
     from PyQt6.QtWebChannel import QWebChannel
 
 log = logging.getLogger(__name__)
+
+
+def _ring_area(ring) -> float:
+    return 0.5 * sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1]))
+
+
+def _inside(ring, x, y) -> bool:
+    hit = False
+    for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1]):
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            hit = not hit
+    return hit
+
+
+def _edge_distance(ring, x, y, kx) -> float:
+    """Distance from (x, y) to the ring's edges, longitude scaled by kx."""
+    best = float("inf")
+    for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1]):
+        ax, ay, bx, by, px = x0 * kx, y0, x1 * kx, y1, x * kx
+        dx, dy = bx - ax, by - ay
+        t = 0.0 if dx == dy == 0 else max(0.0, min(1.0, ((px - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
+        best = min(best, math.hypot(px - (ax + t * dx), y - (ay + t * dy)))
+    return best
+
+
+def _pole_candidates(ring, kx) -> list[tuple[float, float, float]]:
+    """(distance, x, y) for points inside the ring, farthest from its edges
+    first: a coarse grid, then a finer one around the best cell."""
+    xs, ys = [p[0] for p in ring], [p[1] for p in ring]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    found = []
+    for _ in range(2):
+        n = 12
+        for i in range(n + 1):
+            for j in range(n + 1):
+                x, y = x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * j / n
+                if _inside(ring, x, y):
+                    found.append((_edge_distance(ring, x, y, kx), x, y))
+        if not found:
+            return []
+        _, cx, cy = max(found)
+        wx, wy = (x1 - x0) / 6, (y1 - y0) / 6
+        x0, x1, y0, y1 = cx - wx, cx + wx, cy - wy, cy + wy
+    return sorted(found, reverse=True)
+
+
+def cwa_label_point(rings) -> list[float] | None:
+    """[lon, lat] for a CWA's label: the point of its largest ring farthest
+    from any edge, so the label sits well inside even an oddly shaped area.
+    Worked out on the outline thinned to a few hundred points (outlines run
+    to 250k vertices); the best candidate that is also inside the full
+    outline wins, in case the thinning cut a corner."""
+    rings = [[tuple(pt[:2]) for pt in r] for r in rings if len(r) >= 3]
+    if not rings:
+        return None
+    ring = max(rings, key=lambda r: abs(_ring_area(r)))
+    lats = [p[1] for p in ring[::max(1, len(ring) // 1000)]]
+    kx = math.cos(math.radians((min(lats) + max(lats)) / 2))
+    for keep in (300, 3000):
+        thin = ring[::max(1, len(ring) // keep)]
+        if len(thin) < 3:
+            continue
+        for _, x, y in _pole_candidates(thin, kx)[:20]:
+            if _inside(ring, x, y):
+                return [round(x, 4), round(y, 4)]
+    return None
+
+
+def cwa_label_points(features: list[dict], shp_path: str) -> list[list[float] | None]:
+    """Label points for the CWA polygons, read from <shapefile>_labels.json
+    when it matches this shapefile (the outlines never change between
+    releases), else worked out (~10 s) and saved there for next time."""
+    import os
+    cache_path = shp_path[:-4] + "_labels.json"
+    key = {"shapefile": os.path.basename(shp_path), "bytes": os.path.getsize(shp_path), "count": len(features)}
+    try:
+        with open(cache_path) as f:
+            cached = json.load(f)
+        if cached.get("key") == key:
+            return cached["points"]
+    except (OSError, ValueError, KeyError):
+        pass
+    points = [cwa_label_point(f["geometry"]["coordinates"]) for f in features]
+    try:
+        with open(cache_path, "w") as f:
+            json.dump({"key": key, "points": points}, f)
+    except OSError as exc:
+        log.info("CWA labels not cached (%s)", exc)
+    return points
 
 
 class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
@@ -550,6 +640,14 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
                 if geom is None:
                     continue
                 features.append({'type': 'Feature', 'geometry': geom, 'properties': rec})
+            # one label per CWA, well inside it (the map would otherwise
+            # label each polygon once per tile: repeats, and none for a CWA
+            # whose label spot is off screen)
+            for feature, spot in zip(list(features), cwa_label_points(features, shp_path)):
+                if spot is not None:
+                    props = feature['properties']
+                    features.append({'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': spot},
+                                     'properties': {'WFO': props.get('WFO'), 'CWA': props.get('CWA')}})
             geojson = {'type': 'FeatureCollection', 'features': features}
             self._cwa_parsed.emit(geojson)
 

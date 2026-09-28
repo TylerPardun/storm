@@ -130,20 +130,37 @@
       display: block;
     }
 
+    /* Hover readouts -- vehicles, hazards, CWAs, stations (#hazard-tooltip),
+       damage paths and track points (#damage-path-tooltip), trails and wind
+       barbs (.storm-hover-tooltip popups) -- share one compact look: a bold
+       first line, the reading, then muted details, snug around the text. */
+    #hazard-tooltip, #damage-path-tooltip,
+    .maplibregl-popup.storm-hover-tooltip .maplibregl-popup-content {
+      background: rgba(15, 15, 26, 0.94);
+      border: 1px solid #49536F;
+      border-radius: 6px;
+      padding: 5px 9px;
+      font-family: "Helvetica Neue", sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.35;
+      color: #E8EDF5;
+      white-space: nowrap;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    }
+    #hazard-tooltip .title, #damage-path-tooltip .title, .storm-hover-tooltip .title {
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+    #hazard-tooltip .muted, #damage-path-tooltip .muted, .storm-hover-tooltip .muted {
+      color: #8E97AB;
+      font-size: 11px;
+    }
     #hazard-tooltip {
       display: none;
       position: absolute;
       pointer-events: none;
-      background: rgba(15, 15, 26, 0.92);
-      border: 1px solid #49536F;
-      border-radius: 5px;
-      padding: 5px 9px;
-      font-family: "Helvetica Neue", sans-serif;
-      font-size: 11px;
-      font-weight: 600;
-      color: #E8EDF5;
-      letter-spacing: 0.3px;
-      white-space: nowrap;
+      font-weight: 600;       /* hazard/CWA/station labels are one bold line */
       z-index: 200;
     }
 
@@ -157,26 +174,7 @@
       display: none;
       position: absolute;
       pointer-events: none;
-      background: rgba(15, 15, 26, 0.94);
-      border: 1px solid #49536F;
-      border-radius: 6px;
-      padding: 6px 10px;
-      font-family: "Helvetica Neue", sans-serif;
-      font-size: 11px;
-      font-weight: 500;
-      color: #E8EDF5;
-      line-height: 1.5;
-      white-space: nowrap;
       z-index: 200;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.35);
-    }
-    #damage-path-tooltip .title {
-      font-weight: 700;
-      letter-spacing: 0.3px;
-    }
-    #damage-path-tooltip .muted {
-      color: #8E97AB;
-      font-weight: 500;
     }
 
     #track-edit-banner {
@@ -324,23 +322,8 @@
       box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.75);
     }
 
-    .maplibregl-popup.storm-hover-tooltip .maplibregl-popup-content {
-      background: rgba(15, 15, 26, 0.96);
-      color: #E8EAF0;
-      border: 1px solid #49536F;
-      border-radius: 6px;
-      padding: 4px 8px;
-      font-family: "Helvetica Neue", sans-serif;
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.3px;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-    }
-
-    .maplibregl-popup.storm-hover-tooltip .maplibregl-popup-tip {
-      border-top-color: rgba(15, 15, 26, 0.96);
-      border-bottom-color: rgba(15, 15, 26, 0.96);
-    }
+    .maplibregl-popup.storm-hover-tooltip { pointer-events: none; }
+    .maplibregl-popup.storm-hover-tooltip .maplibregl-popup-tip { display: none; }
 
     .maplibregl-ctrl-top-right {
       top: 10px !important;
@@ -1009,7 +992,14 @@
       unit: "imperial"
     }), "bottom-left");
 
-    map.on("load", function() {
+    // STORM's own sources and layers (trails, track, hazards, CWA, ...).
+    // Built as soon as the map's style is ready -- NOT on MapLibre's "load",
+    // which also waits for the first basemap tiles: when a tile request was
+    // slow or never finished, "load" came late or not at all, and a session
+    // ran with none of these layers while Python, told the page was ready,
+    // pushed data into sources that didn't exist. Python is now told the map
+    // is ready only once this has run (_stormNotifyReady).
+    function _stormSetupMap() {
       console.log("STORM map loaded.");
       const glyphCheck = "__STORM_BASE__/static/fonts/Noto%20Sans%20Regular/0-255.pbf";
       fetch(glyphCheck).then(r => console.log("Glyph check:", r.status, glyphCheck))
@@ -1341,20 +1331,24 @@
         }
       });
       window._trailUnits = '';
-      var _trailPopup = new maplibregl.Popup({closeButton: false, closeOnClick: false, offset: 8});
+      var _trailPopup = new maplibregl.Popup({closeButton: false, closeOnClick: false, offset: 12,
+                                              anchor: 'left', maxWidth: 'none', className: 'storm-hover-tooltip'});
       map.on('mousemove', 'obs-trails-barbs', function(e) {
         if (!e.features || !e.features.length) return;
         var p = e.features[0].properties;
         _trailPopup.setLngLat(e.lngLat)
-          .setHTML('<b>' + p.vehicle + '</b> ' + p.t + '<br>Wind ' + Math.round(p.dir) + '° at ' + p.kt + ' kt')
+          .setHTML('<div class="title">' + p.vehicle + ' <span class="muted">' + p.t + '</span></div>'
+                   + '<div>' + (p.sr ? 'Storm-relative wind ' : 'Wind ') + '<b>' + Math.round(p.dir) + '° at ' + p.kt + ' kt</b></div>')
           .addTo(map);
       });
       map.on('mouseleave', 'obs-trails-barbs', function() { _trailPopup.remove(); });
       map.on('mousemove', 'obs-trails-line', function(e) {
         if (!e.features || !e.features.length) return;
+        if (map.getLayer('obs-trails-barbs') && map.queryRenderedFeatures(e.point, {layers: ['obs-trails-barbs']}).length) return;
         var p = e.features[0].properties;
         _trailPopup.setLngLat(e.lngLat)
-          .setHTML('<b>' + p.vehicle + '</b> ' + p.t + '<br>' + Number(p.v).toFixed(1) + ' ' + window._trailUnits)
+          .setHTML('<div class="title">' + p.vehicle + ' <span class="muted">' + p.t + '</span></div>'
+                   + '<div>' + (window._trailLabel ? window._trailLabel + ' ' : '') + '<b>' + Number(p.v).toFixed(1) + ' ' + window._trailUnits + '</b></div>')
           .addTo(map);
       });
       map.on('mouseleave', 'obs-trails-line', function() { _trailPopup.remove(); });
@@ -1946,7 +1940,22 @@
         ['cwa-fill','cwa-line','cwa-label'].forEach(function(lid) { if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', v); });
         if (!visible) { var tip = document.getElementById('hazard-tooltip'); if (tip) tip.style.display = 'none'; }
       };
-    });
+    }
+
+    // "The style is in": what addSource/addLayer need (MapLibre's
+    // Style._checkLoaded). Not map.isStyleLoaded(), which also waits for
+    // every source's tiles, like "load".
+    function _stormStyleReady() { return !!(map.style && map.style._loaded); }
+    var _stormSetupDone = false;
+    function _stormSetupOnce() {
+      if (_stormSetupDone || !_stormStyleReady()) return;
+      _stormSetupDone = true;
+      _stormSetupMap();
+      _stormNotifyReady();
+    }
+    map.on('style.load', _stormSetupOnce);
+    map.on('styledata', _stormSetupOnce);
+    map.on('load', _stormSetupOnce);
 
     map.on("error", function(e) {
       const err = e && e.error ? e.error : null;
@@ -2571,6 +2580,45 @@
       hailcam: function(c) { return '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M21.5,12 L18.1,15.5 L16.8,20.2 L12,19 L7.2,20.2 L5.9,15.5 L2.5,12 L5.9,8.5 L7.2,3.8 L12,5 L16.8,3.8 L18.1,8.5 Z" fill="'+c+'"/></svg>'; },
     };
 
+    // Hover description for a map element (annotation markers, private
+    // pins) in the shared readout style, instead of the browser's own small
+    // title tooltip. The text lives in data-tip so it can be updated.
+    function _attachTip(el, text) {
+      el.dataset.tip = text || '';
+      el.removeAttribute('title');
+      if (el._stormTip) return;
+      el._stormTip = true;
+      var place = function(e) {
+        var tip = document.getElementById('hazard-tooltip');
+        if (!tip) return;
+        tip.style.left = (e.clientX + 14) + 'px';
+        tip.style.top = (e.clientY - 36) + 'px';
+      };
+      el.addEventListener('mouseenter', function(e) {
+        var tip = document.getElementById('hazard-tooltip');
+        if (!tip || !el.dataset.tip) return;
+        window._vehicleHovering = true;          // keep the map's own hover from replacing it
+        _setVehicleTip(tip, el.dataset.tip);
+        tip.style.display = 'block';
+        place(e);
+      });
+      el.addEventListener('mousemove', place);
+      el.addEventListener('mouseleave', function() {
+        window._vehicleHovering = false;
+        var tip = document.getElementById('hazard-tooltip');
+        if (tip) tip.style.display = 'none';
+      });
+    }
+
+    // A vehicle's hover text: first line (its name) as the title, the rest below.
+    function _setVehicleTip(tip, text) {
+      var esc = function(t) { return String(t).replace(/[&<>]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; }); };
+      var lines = String(text || '').split('\n');
+      tip.innerHTML = '<div class="title">' + esc(lines[0]) + '</div>'
+        + lines.slice(1).map(function(l) { return '<div>' + esc(l) + '</div>'; }).join('');
+      tip.style.whiteSpace = 'nowrap';
+    }
+
     window.stormAddVehicle = function(id, lat, lon, color, iconType, hoverText) {
       const existing = document.getElementById("vehicle-" + id);
       var _iconFn = _vIcons[iconType] || _vIcons.car;
@@ -2596,8 +2644,7 @@
         window._vehicleHovering = true;
         var tip = document.getElementById("hazard-tooltip");
         if (tip) {
-          tip.textContent = el.dataset.hoverText || id;
-          tip.style.whiteSpace = "pre-line";
+          _setVehicleTip(tip, el.dataset.hoverText || id);
           tip.style.display = "block";
           tip.style.left = (e.clientX + 14) + "px";
           tip.style.top  = (e.clientY - 36) + "px";
@@ -2656,8 +2703,7 @@
       el.addEventListener("mouseenter", function(e) {
         var tip = document.getElementById("hazard-tooltip");
         if (tip) {
-          tip.textContent = el.dataset.hoverText || id;
-          tip.style.whiteSpace = "pre-line";
+          _setVehicleTip(tip, el.dataset.hoverText || id);
           tip.style.display = "block";
           tip.style.left = (e.clientX + 14) + "px";
           tip.style.top  = (e.clientY - 36) + "px";
@@ -2818,7 +2864,7 @@
         ].join(';');
         el.textContent = cfg.symbol;
       }
-      el.title = label;
+      _attachTip(el, label);
       el.addEventListener('click', function(e) {
         e.stopPropagation();
         // suppress popup when routing pick or measure tool is active
@@ -3055,7 +3101,7 @@
 
       var el = document.createElement('div');
       el.className = 'storm-private-pin';
-      el.title = _privatePinDisplayLabel(label);
+      _attachTip(el, _privatePinDisplayLabel(label));
       el.setAttribute('aria-label', _privatePinDisplayLabel(label));
       el.addEventListener('click', function(ev) {
         ev.preventDefault();
@@ -3092,7 +3138,7 @@
       pin.label = String(label || '').trim();
       var el = pin.marker.getElement();
       if (el) {
-        el.title = _privatePinDisplayLabel(pin.label);
+        _attachTip(el, _privatePinDisplayLabel(pin.label));
         el.setAttribute('aria-label', _privatePinDisplayLabel(pin.label));
       }
       _savePrivatePinRecords();
@@ -4191,10 +4237,11 @@
         map.setLayoutProperty('storm-track-points', 'visibility', pointsVisible ? 'visible' : 'none');
     };
 
-    window.stormSetTrails = function(geojsonStr, stops, units) {
+    window.stormSetTrails = function(geojsonStr, stops, units, label) {
       var src = map.getSource('obs-trails');
       if (!src) return;
       window._trailUnits = units || '';
+      window._trailLabel = label || '';
       if (stops && stops.length >= 4 && map.getLayer('obs-trails-line')) {
         map.setPaintProperty('obs-trails-line', 'line-color',
           ['interpolate', ['linear'], ['get', 'v']].concat(stops));
@@ -5041,9 +5088,17 @@
     };
 
 
-    // notify Python that MapLibre is fully loaded and all storm* functions
-    window._stormMapLoaded = true;
-    if (bridge) bridge.on_map_loaded();
+    // Tell Python the map is ready once both have happened: this script has
+    // defined every storm* function, and _stormSetupMap has built the map's
+    // sources and layers (whichever comes last sends it).
+    window._stormScriptDone = true;
+    function _stormNotifyReady() {
+      if (!window._stormScriptDone || !_stormSetupDone || window._stormMapLoaded) return;
+      window._stormMapLoaded = true;
+      if (bridge) bridge.on_map_loaded();
+    }
+    _stormNotifyReady();
+    if (!_stormSetupDone) _stormSetupOnce();   // the style may already be in
 
     (function() {
       var frontCanvas = document.getElementById('front-canvas');

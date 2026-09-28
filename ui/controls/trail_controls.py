@@ -91,6 +91,12 @@ class TrailControls(QWidget):
         self._wind_barbs.setToolTip("Measured wind along each trail (knots; half barb 5, full 10, flag 50)")
         self._wind_barbs.toggled.connect(self.settings_changed.emit)
         row.addWidget(self._wind_barbs)
+        self._sr_barbs = QCheckBox("Storm-relative")
+        self._sr_barbs.setStyleSheet(small)
+        self._sr_barbs.setEnabled(False)
+        self._sr_barbs.toggled.connect(self.settings_changed.emit)
+        self._wind_barbs.toggled.connect(self._update_sr_barbs)
+        row.addWidget(self._sr_barbs)
         row.addSpacing(8)
 
         self._min_label, self._max_label = QLabel(""), QLabel("")
@@ -111,14 +117,24 @@ class TrailControls(QWidget):
         self.set_track_available(False)
 
     # ---- state -------------------------------------------------------
-    def settings(self) -> tuple[str, int, bool, bool]:
-        """(quantity key, window minutes, time-to-space, wind barbs)"""
+    def settings(self) -> tuple[str, int, bool, bool, bool]:
+        """(quantity key, window minutes, time-to-space, wind barbs, storm-relative barbs)"""
         return (self._quantity.currentData(), self._window.currentData(),
                 self._time_to_space.isChecked() and self._time_to_space.isEnabled(),
-                self._wind_barbs.isChecked())
+                self._wind_barbs.isChecked(),
+                self._sr_barbs.isChecked() and self._sr_barbs.isEnabled())
+
+    def _update_sr_barbs(self, *_args) -> None:
+        """Storm-relative barbs need barbs on and a storm track."""
+        self._sr_barbs.setEnabled(self._wind_barbs.isChecked() and self._track_available)
+        self._sr_barbs.setToolTip(
+            "Barbs show the wind minus the storm motion (the track's mean), where the track covers the time"
+            if self._track_available else "Needs a storm track: place at least two TRACK points at different times")
 
     def set_track_available(self, available: bool) -> None:
         """Storm-relative quantities and time-to-space need a storm track."""
+        self._track_available = available
+        self._update_sr_barbs()
         self._time_to_space.setEnabled(available)
         self._time_to_space.setToolTip(
             "Place each observation at its offset from the storm center at its own time"

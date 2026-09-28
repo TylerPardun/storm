@@ -275,6 +275,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         # global dark theme applied once here — all children inherit via QSS cascade
         self.setStyleSheet(DARK_THEME)
+        # long button descriptions wrap instead of running across the screen
+        from ui.tooltips import ReadableToolTips
+        if QApplication.instance() is not None and not hasattr(QApplication.instance(), "_storm_tooltips"):
+            QApplication.instance()._storm_tooltips = ReadableToolTips(QApplication.instance())
+            QApplication.instance().installEventFilter(QApplication.instance()._storm_tooltips)
         # build UI in dependency order
         self._runtime_safe = runtime_flags.FLAGS.runtime_safe
 
@@ -2273,7 +2278,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if not self.btn_trails.isChecked():
             self.map_widget.set_trails(None)
             return
-        quantity, minutes, time_to_space, wind_barbs = self.trail_controls.settings()
+        quantity, minutes, time_to_space, wind_barbs, sr_barbs = self.trail_controls.settings()
         end = self._time_ctrl.current_time
         motion = self.track_storm_motion() if hasattr(self, "_track_points") else None
         track = list(getattr(self, "_track_points", []))
@@ -2290,10 +2295,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             observations, quantity, end - timedelta(minutes=minutes), end,
             track_points=track, motion=motion, time_to_space=time_to_space and motion is not None,
             no_station_pressure=asos_ids, wind_barbs=wind_barbs,
+            storm_relative_barbs=sr_barbs and motion is not None,
         )
         units = QUANTITIES[quantity].units
         stops = color_stops(quantity, vmin, vmax) if n else []
-        self.map_widget.set_trails(fc, stops, units)
+        self.map_widget.set_trails(fc, stops, units, QUANTITIES[quantity].label)
         self.trail_controls.set_scale(stops, vmin, vmax, units)
         if n:
             mode = " · time-to-space" if time_to_space and motion is not None else ""

@@ -954,13 +954,15 @@ QWidget#satPlaybackRow QToolButton:pressed {
 }
 
 /* ── Tooltips ─────────────────────────────────────────── */
+/* Button descriptions: the same look as the map's hover readouts
+   (ui/map/map_template.html); long ones wrap (ui/tooltips.py). */
 QToolTip {
-    background-color: #1A1A2E;
-    border: 1px solid #2E2E4E;
-    border-radius: 4px;
-    color: #E8EAF0;
-    font-size: 10px;
-    padding: 4px 8px;
+    background-color: #0F0F1A;
+    border: 1px solid #49536F;
+    border-radius: 6px;
+    color: #E8EDF5;
+    font-size: 12px;
+    padding: 5px 9px;
 }
 
 /* ── Toolbar checkboxes ──────────────────────────────── */

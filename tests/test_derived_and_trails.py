@@ -106,3 +106,18 @@ def test_barbs_skip_missing_wind():
     obs = [_obs("p1", s, 35, -98 + s * 1e-4, spd=None) for s in range(0, 600, 2)]
     fc, _, _ = TrailBuilder().build({"p1": obs}, "temperature", T0, T0 + timedelta(minutes=10), wind_barbs=True)
     assert not [f for f in fc["features"] if f["properties"]["kind"] == "barb"]
+
+
+def test_storm_relative_barbs_subtract_the_storm_motion():
+    # platform in a 10 m/s southerly; storm moving north at 10 m/s -> calm storm-relative
+    track = [TrackPoint(1, T0, 35.0, -98.0), TrackPoint(2, T0 + timedelta(minutes=30), 35.0 + 18.0 / 111.2, -98.0)]
+    from core.storm_motion import mean_motion
+    motion = mean_motion(track)
+    obs = [_obs("p1", s, 35.1, -98 + s * 1e-5, spd=10.0, wdir=180.0) for s in range(0, 1800, 2)]
+    args = ({"p1": obs}, "temperature", T0, T0 + timedelta(minutes=30))
+    fc, _, _ = TrailBuilder().build(*args, track_points=track, motion=motion, wind_barbs=True)
+    ground = [f["properties"] for f in fc["features"] if f["properties"]["kind"] == "barb"]
+    fc, _, _ = TrailBuilder().build(*args, track_points=track, motion=motion, wind_barbs=True, storm_relative_barbs=True)
+    relative = [f["properties"] for f in fc["features"] if f["properties"]["kind"] == "barb"]
+    assert {b["img"] for b in ground} == {"barb-20"} and not any(b["sr"] for b in ground)
+    assert {b["img"] for b in relative} == {"barb-0"} and all(b["sr"] for b in relative)

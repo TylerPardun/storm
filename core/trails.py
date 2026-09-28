@@ -75,13 +75,17 @@ class TrailBuilder:
 
     def build(self, observations_by_vehicle: dict, quantity_key: str, start: datetime, end: datetime, *,
               track_points=(), motion=None, time_to_space: bool = False,
-              no_station_pressure: frozenset = frozenset(), wind_barbs: bool = False):
+              no_station_pressure: frozenset = frozenset(), wind_barbs: bool = False,
+              storm_relative_barbs: bool = False):
         """Returns (FeatureCollection dict, (vmin, vmax), n_values).
         `no_station_pressure`: platforms whose pressure isn't measured at the
         station (sea-level/altimeter), so pressure-based values stay blank.
         `wind_barbs` adds the measured wind as barb points along each trail
         (about BARBS_PER_TRAIL each, evenly spaced in time), drawn where the
-        trail is drawn -- in time-to-space mode, at the relocated positions."""
+        trail is drawn -- in time-to-space mode, at the relocated positions.
+        `storm_relative_barbs` draws them storm-relative instead: the wind
+        minus the track's mean storm motion, as sr_wind uses (core/derived.py),
+        and only where the track covers the observation's time."""
         quantity = derived.QUANTITIES[quantity_key]
         t0, t1 = start.timestamp(), end.timestamp()
         features, shown = [], []
@@ -124,8 +128,12 @@ class TrailBuilder:
             if sub_time.size < 2:
                 continue
             if wind_barbs:
-                features += _barbs(lat, lon, sub_time, sub["wind_speed"][keep], sub["wind_dir"][keep],
-                                   vehicle_id, (t1 - t0) / BARBS_PER_TRAIL)
+                speed, direction = sub["wind_speed"], sub["wind_dir"]
+                if storm_relative_barbs:
+                    speed, direction = _storm_relative_wind(values_all["u"][idx], values_all["v"][idx],
+                                                            sub["time"], track_points, motion)
+                features += _barbs(lat, lon, sub_time, speed[keep], direction[keep],
+                                   vehicle_id, (t1 - t0) / BARBS_PER_TRAIL, storm_relative_barbs)
             spacing = np.diff(sub_time)
             gap = max(120.0, 5.0 * float(np.median(spacing)))
             for i in range(sub_time.size - 1):
@@ -161,7 +169,20 @@ def barb_image(speed_kt: float) -> str:
     return f"barb-{int(5 * round(speed_kt / 5)) if speed_kt >= 2.5 else 0}"
 
 
-def _barbs(lat, lon, times, speed_ms, direction, vehicle_id, spacing_s) -> list:
+def _storm_relative_wind(u, v, times, track_points, motion):
+    """(speed m/s, direction the storm-relative wind comes from), NaN where
+    there's no storm motion or the track doesn't cover the time."""
+    if motion is None or len(track_points) < 2:
+        nan = np.full(np.shape(times), np.nan)
+        return nan, nan
+    su, sv = u - motion.u_ms, v - motion.v_ms
+    covered = np.isfinite(derived.track_center(list(track_points), times)[0])
+    speed = np.where(covered, np.hypot(su, sv), np.nan)
+    direction = np.where(covered, np.degrees(np.arctan2(-su, -sv)) % 360, np.nan)
+    return speed, direction
+
+
+def _barbs(lat, lon, times, speed_ms, direction, vehicle_id, spacing_s, storm_relative=False) -> list:
     """Barb points along one trail: the first observation with a wind at or
     after each multiple of spacing_s, so barbs stay put as the clock runs."""
     features, last_slot = [], None
@@ -176,7 +197,7 @@ def _barbs(lat, lon, times, speed_ms, direction, vehicle_id, spacing_s) -> list:
         features.append({"type": "Feature",
                          "geometry": {"type": "Point", "coordinates": [round(float(lon[i]), 6), round(float(lat[i]), 6)]},
                          "properties": {"kind": "barb", "img": barb_image(kt), "dir": round(float(direction[i]) % 360, 1),
-                                        "kt": round(kt), "vehicle": vehicle_id,
+                                        "kt": round(kt), "vehicle": vehicle_id, "sr": storm_relative,
                                         "t": datetime.fromtimestamp(times[i], timezone.utc).strftime("%H:%M:%SZ")}})
     return features
 

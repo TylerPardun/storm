@@ -92,6 +92,6 @@ def format_vehicle_speed(speed: VehicleSpeed) -> str:
     short = "--" if speed.short_mph is None else f"{speed.short_mph:.0f}"
     average = "--" if speed.average_mph is None else f"{speed.average_mph:.0f}"
     return (
-        f"Vehicle speed (GPS): {short} mph over {speed.short_seconds} s | "
-        f"{average} mph {speed.average_seconds} s avg"
+        f"Vehicle speed {short} mph ({speed.short_seconds} s) · "
+        f"{average} mph ({speed.average_seconds}-s avg)"
     )

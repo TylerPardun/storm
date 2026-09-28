@@ -1084,6 +1084,8 @@ These update as each fetcher resolves data for the current archive timestamp.
 
 Each layer updates automatically as the archive clock advances. Data fetches are triggered when the clock crosses boundaries (e.g., every radar scan interval).
 
+**Hover readouts.** Everything you can hover over — vehicles, trails, wind barbs, hazards, CWAs, stations, damage paths, track points, annotation markers — shows the same compact dark readout: a bold first line, the reading, then details. Button descriptions use the same look, and long ones wrap.
+
 **Hovering over a vehicle** shows its name and how fast the vehicle itself was driving, worked out from its GPS track: over the last second and averaged over 15 s (10 s and 30 s in live mode). This is the vehicle's ground speed, not wind; the wind is in the vehicle's station plot.
 
 The map opens centered on the case: the radar chosen for the session (the one nearest the vehicles at the start time), zoomed to its coverage.
@@ -1492,7 +1494,7 @@ The reference marker (one at a time, like MESO-VIEW's review marker) is a precis
 
 **Time-to-space.** With a storm track, *Time-to-space* draws every trail observation at its offset from the storm center at the time it was taken, around the storm's position now, with 5-km range rings. Values and times are unchanged; observations outside the track's time span are hidden in this mode. ASOS stations drawn with the ASOS box join the trails here (a fixed station only makes a path relative to the storm); ASOS reports sea-level pressure, not station pressure, so pressure and θ-type quantities are left blank for them.
 
-**Wind barbs.** *Wind barbs* (next to Time-to-space) draws each platform's measured wind along its trail: about 15 barbs per trail, evenly spaced in time, in knots (half barb 5, full 10, flag 50), pointing toward where the wind comes from. They follow the trail in time-to-space mode too. Hover over a barb for its time, direction and speed. TRACK sits before TRAILS in the header because time-to-space and the storm-relative quantities use the storm track.
+**Wind barbs.** *Wind barbs* (next to Time-to-space) draws each platform's measured wind along its trail: about 15 barbs per trail, evenly spaced in time, in knots (half barb 5, full 10, flag 50), pointing toward where the wind comes from. They follow the trail in time-to-space mode too. With a storm track, *Storm-relative* (next to Wind barbs) draws them storm-relative instead: the wind minus the track's mean storm motion, the same definition as the storm-relative wind quantity, shown only where the track covers the time. Hover over a barb for its time, direction and speed (marked storm-relative when it is). TRACK sits before TRAILS in the header because time-to-space and the storm-relative quantities use the storm track.
 
 **LiDAR Truck scan orientation.** The truck's lidar files store scan directions relative to the truck, so STORM turns them to true north using the truck heading recorded in each file. When a file has no heading (all 2026 files so far), STORM estimates it from the truck's own compass in the mesonet data and the RAW LIDAR panel says so in amber; if no compass reading covers the scan either, it isn't drawn on the map and the panel says why in red. `scripts/report_missing_truck_heading.py` lists every affected file with the estimate, for the data to be fixed at the source.
 

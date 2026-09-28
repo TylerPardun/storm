@@ -96,7 +96,7 @@ class RawLidarControls(QWidget):
             b.setToolTip(tip)
             b.setFixedHeight(22)
             if width:
-                b.setFixedWidth(width)
+                b.setMinimumWidth(width)        # at least this; wider if the label needs it
             b.setCheckable(checkable)
             return b
 

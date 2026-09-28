@@ -1024,50 +1024,31 @@ The window title and status pill display the current archive timestamp while in 
 
 ### Archive Controls Bar
 
-A controls bar appears at the top of the map window in archive mode (it is not visible in live modes).
+A time bar sits at the bottom of the map in archive mode (it is not shown in live modes): the date and time, the radar image's time, data status (radar, satellite, observations), the timeline slider, and the playback buttons.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  ⏮  ⏪  ▶  ⏩  ⏭   ──────── scrubber ────────   1×▾   Radar: OK  Sat: OK │
+│ ARCHIVE  2026-05-17  20:00:00 UTC   15:00 CDT     Radar  Sat  OBS    │
+│ ─────────────────────────────●────────────────────────────────────── │
+│      -10     ⏮      ▶      ⏭      +10                        CASE    │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-#### Playback Buttons
+#### Moving through time
 
-| Button | Action |
-|--------|--------|
-| ⏮ | Jump to the session start time |
-| ⏪ | Step back 30 seconds of archive time |
-| ▶ / ⏸ | Start / pause automatic playback |
-| ⏩ | Step forward 30 seconds of archive time |
-| ⏭ | Jump to the current real-world time (end of archive) |
+Drag the slider to any time in the session and fine-tune with the buttons or keys:
 
-#### Timeline Scrubber
+| Button | Keys | Action |
+|--------|------|--------|
+| -10 / +10 | Home / End | Step 10 seconds (1 minute when the session has no one-second observations; the buttons then read -1m / +1m) |
+| ⏮ / ⏭ | Left / Right, `,` / `.` (also `<` / `>`), A / D when TRACK is off | Previous / next radar scan |
+| ▶ / ⏸ | Space | Play / pause |
 
-Drag the slider to jump to any time within the archive session. The scrubber position represents seconds elapsed since midnight UTC of the session date.
+When the session has no one-second observations, a **SPEED** dropdown (1× to 300×) sets how fast playback runs; with one-second observations, playback steps through them and the dropdown is hidden.
 
-#### Speed Selector
+**CASE** exports the case (a case package) or opens one.
 
-A dropdown next to the scrubber controls the playback speed multiplier:
-
-| Setting | Meaning |
-|---------|---------|
-| 1× | Real-time (1 second of wall clock = 1 second of archive time) |
-| 5× | 5 seconds of archive time per wall-clock second |
-| 10× | — |
-| 30× | — |
-| 60× | — |
-| 120× | — |
-| 300× | 5 minutes of archive time per wall-clock second |
-
-#### Layer Status Indicators
-
-| Indicator | What It Shows |
-|-----------|---------------|
-| **Radar:** | Current radar fetch status ("OK", "waiting", "no data") |
-| **Sat:** | Current satellite fetch status |
-
-These update as each fetcher resolves data for the current archive timestamp.
+**EXIT** sits on its own at the top right of the map. It asks first, then closes the session and returns to the launch screen to pick another day.
 
 ---
 

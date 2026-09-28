@@ -451,6 +451,20 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_controls.set_satellite_status("Sat: waiting")
         self._archive_controls.set_obs_status("OBS: probing")
         self._archive_controls.change_day_requested.connect(self._on_change_day_requested)
+        # EXIT floats on its own at the map's top right, apart from the header
+        # and the time bar (positioned in _layout_overlays)
+        self._exit_button = QToolButton(self._map_container)
+        self._exit_button.setObjectName("archiveExitButton")
+        self._exit_button.setText("EXIT")
+        self._exit_button.setToolTip("Exit this session and pick a different day")
+        self._exit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._exit_button.setStyleSheet(
+            "QToolButton#archiveExitButton { color: #F87171; background-color: rgba(15, 15, 26, 0.92); "
+            "border: 1px solid rgba(248, 113, 113, 0.55); border-radius: 8px; padding: 0 14px; "
+            "font-size: 11px; font-weight: 700; letter-spacing: 1px; } "
+            "QToolButton#archiveExitButton:hover { background-color: rgba(248, 113, 113, 0.16); }")
+        self._exit_button.clicked.connect(self._archive_controls.request_exit)
+        self._exit_button.show()
         self._archive_controls.export_case_requested.connect(self._export_case_package)
         self._archive_controls.open_case_requested.connect(self._open_case_package)
         if self._case_package_at_start:
@@ -2635,6 +2649,16 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             tb_x = max(0, (r.width() - tb_w) // 2)
             self._floating_toolbar.setGeometry(tb_x, MARGIN, tb_w, tb_h)
             self._floating_toolbar.raise_()
+
+            # archive EXIT: top right, the header's height, clear of it; on
+            # a window too narrow for both it drops below the header's row
+            if hasattr(self, "_exit_button"):
+                ex = self._exit_button
+                ex_w = max(64, ex.sizeHint().width())
+                ex_x = r.width() - ex_w - MARGIN
+                ex_y = MARGIN if ex_x >= tb_x + tb_w + MARGIN else MARGIN + tb_h + 4
+                ex.setGeometry(ex_x, ex_y, ex_w, min(tb_h, 34))
+                ex.raise_()
 
             # stack open pills below the toolbar to avoid overlap
             _drop_y = MARGIN + tb_h + 4

@@ -6,9 +6,8 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QToolButton, QComboBox, QFrame, QSlider, QMessageBox,
-    QDialog, QPushButton, QTimeEdit,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTime
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 
 try:
@@ -176,15 +175,8 @@ class ArchiveControls(QWidget):
         self._speed_combo.setFixedWidth(54)
         row2.addWidget(self._speed_combo)
 
-        row2.addWidget(self._vdiv())
-
-        jump_btn = self._ctrl_btn("JUMP", "Jump to a specific time (this day only)")
-        jump_btn.setFixedWidth(44)
-        jump_btn.setStyleSheet(jump_btn.styleSheet() or "")
-        jump_btn.clicked.connect(self._show_jump_dialog)
-        row2.addWidget(jump_btn)
-
-        row2.addWidget(self._vdiv())
+        self._speed_div = self._vdiv()          # hidden with the speed control
+        row2.addWidget(self._speed_div)
 
         from PyQt6.QtWidgets import QMenu
         case_btn = self._ctrl_btn("CASE", "Export this case's saved work and provenance, or open a case package")
@@ -196,16 +188,6 @@ class ArchiveControls(QWidget):
         case_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         case_btn.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0px; }")   # arrow overlapped the text
         row2.addWidget(case_btn)
-
-        change_day_btn = self._ctrl_btn("EXIT", "Exit this session and pick a different day")
-        change_day_btn.setFixedWidth(40)
-        change_day_btn.setStyleSheet(
-            "QToolButton { color: #F87171; border: 1px solid rgba(248, 113, 113, 0.4); "
-            "border-radius: 4px; } "
-            "QToolButton:hover { background-color: rgba(248, 113, 113, 0.12); }"
-        )
-        change_day_btn.clicked.connect(self._on_change_day_clicked)
-        row2.addWidget(change_day_btn)
 
         root.addLayout(row2)
         self._precision_mode = False
@@ -279,6 +261,7 @@ class ArchiveControls(QWidget):
         self._btn_end.setToolTip("Step forward 10 seconds")
         self._speed_label.setVisible(not enabled)
         self._speed_combo.setVisible(not enabled)
+        self._speed_div.setVisible(not enabled)
         self._tc.set_precision_playback(enabled)
 
     def _connect_controller(self):
@@ -349,6 +332,11 @@ class ArchiveControls(QWidget):
         self._tc.pause()
         self._tc.set_seconds_since_start(value)
 
+    def request_exit(self) -> None:
+        """Ask, then leave this session to pick another day (the EXIT button
+        at the map's top right, MainWindow)."""
+        self._on_change_day_clicked()
+
     def _on_change_day_clicked(self) -> None:
         reply = QMessageBox.question(
             self, "Change Day",
@@ -406,13 +394,6 @@ class ArchiveControls(QWidget):
 
     def _on_skip_end(self) -> None:
         self._tc.step(10 if self._precision_mode else 60)
-
-    def _show_jump_dialog(self) -> None:
-        dlg = _JumpToTimeDialog(self._tc.current_time, self._tc.window, self._scan_times, self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._tc.pause()
-            self._tc.set_time(dlg.chosen_time())
-
 
     def _update_time_display(self, t: datetime) -> None:
         self._date_label.setText(t.strftime("%Y-%m-%d"))
@@ -491,119 +472,3 @@ class ArchiveControls(QWidget):
             self._tilt_combo.addItem(f"{deg:.1f}°")
         self._tilt_combo.setCurrentIndex(min(current, self._tilt_combo.count() - 1))
         self._tilt_combo.blockSignals(False)
-
-
-
-class _JumpToTimeDialog(QDialog):
-    """Jump within the current session only -- every fetcher was indexed for
-    the session's span at construction, so there's nowhere else this dialog
-    could go without leaving them pointed at stale data (use the DAY button
-    to change days). When the session runs past 00Z a date choice appears,
-    since a time like 01:30 could fall on either day."""
-
-    def __init__(
-        self,
-        current_time: datetime,
-        window: "tuple[datetime, datetime]",
-        scan_times: "list[datetime] | None" = None,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self._window = window
-        start, end = window
-        self._days = sorted({(start + timedelta(days=k)).date()
-                             for k in range((end - start).days + 1)
-                             if start + timedelta(days=k) < end})
-        self.setWindowTitle("Jump to Time")
-        self.setWindowFlags(
-            Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint
-        )
-        self.setFixedWidth(280)
-        self.setStyleSheet("""
-            QDialog { background-color: #0A0A0F; }
-            QLabel  { color: #8E97AB; font-size: 11px; background: transparent; }
-            QTimeEdit, QComboBox {
-                background-color: #1A1A2E;
-                border: 1px solid #1E1E2E;
-                border-radius: 6px;
-                color: #E8EAF0;
-                font-size: 13px;
-                padding: 6px 10px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1A1A2E;
-                color: #E8EAF0;
-                selection-background-color: #00CFFF;
-                selection-color: #0A0A0F;
-                outline: none;
-            }
-            QPushButton {
-                background-color: #00CFFF;
-                border: none;
-                border-radius: 6px;
-                color: #0A0A0F;
-                font-size: 12px;
-                font-weight: 700;
-                padding: 7px 20px;
-            }
-            QPushButton:hover { background-color: #33D9FF; }
-        """)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 16)
-        layout.setSpacing(10)
-
-        # scroll through actual radar scan times when we have them -- faster
-        # and less error-prone than typing a time that may fall in a gap
-        # between scans. Manual entry below still works for times that
-        # aren't tied to a scan (e.g. a specific vehicle/report time).
-        session_scans = sorted(t for t in (scan_times or []) if start <= t < end)
-        multi_day = len(self._days) > 1
-        self._scan_combo = None
-        if session_scans:
-            layout.addWidget(QLabel("Scroll to a radar scan:"))
-            self._scan_combo = QComboBox()
-            for t in session_scans:
-                self._scan_combo.addItem(t.strftime("%m-%d %H:%M:%S" if multi_day else "%H:%M:%S"), userData=t)
-            nearest = min(session_scans, key=lambda t: abs(t - current_time))
-            self._scan_combo.setCurrentIndex(session_scans.index(nearest))
-            self._scan_combo.currentIndexChanged.connect(self._on_scan_picked)
-            layout.addWidget(self._scan_combo)
-
-        self._day_combo = None
-        if multi_day:
-            layout.addWidget(QLabel("Or enter a UTC date and time:"))
-            self._day_combo = QComboBox()
-            for day in self._days:
-                self._day_combo.addItem(day.isoformat(), userData=day)
-            self._day_combo.setCurrentIndex(self._days.index(current_time.date())
-                                            if current_time.date() in self._days else 0)
-            layout.addWidget(self._day_combo)
-        else:
-            layout.addWidget(QLabel(f"Or enter a UTC time ({self._days[0].isoformat()}):"))
-
-        self._t_edit = QTimeEdit()
-        self._t_edit.setDisplayFormat("HH:mm:ss")
-        self._t_edit.setTime(QTime(current_time.hour, current_time.minute, current_time.second))
-        layout.addWidget(self._t_edit)
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        ok_btn = QPushButton("JUMP")
-        ok_btn.clicked.connect(self.accept)
-        btn_row.addWidget(ok_btn)
-        layout.addLayout(btn_row)
-
-    def _on_scan_picked(self, idx: int) -> None:
-        t = self._scan_combo.itemData(idx)
-        if t is not None:
-            self._t_edit.setTime(QTime(t.hour, t.minute, t.second))
-            if self._day_combo is not None and t.date() in self._days:
-                self._day_combo.setCurrentIndex(self._days.index(t.date()))
-
-    def chosen_time(self) -> datetime:
-        """The chosen UTC time; the time controller keeps it inside the session."""
-        day = self._day_combo.currentData() if self._day_combo is not None else self._days[0]
-        qt_t = self._t_edit.time()
-        return datetime(day.year, day.month, day.day, qt_t.hour(), qt_t.minute(), qt_t.second(),
-                        tzinfo=timezone.utc)

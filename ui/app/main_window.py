@@ -283,6 +283,13 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._init_statusbar()
         self._init_vehicle_panel()
         self._radar_station_sites = self._load_radar_station_sites()
+        # NOXP (archive mobile radar) state, defined in every mode: the shared
+        # radar-site code (_push_radar_station_sites, radar rendering) reads
+        # it in live mode too, where it simply stays off. Archive startup
+        # resets it per session.
+        self._noxp_active = False
+        self._archive_noxp = None
+        self._noxp_station_site: dict | None = None
         self._radar_station_picker_visible = False
         self._radar_auto_site_pending = not monitor and not self._archive
         self._startup_sequence_started = False

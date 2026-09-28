@@ -460,7 +460,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._exit_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._exit_button.setStyleSheet(
             "QToolButton#archiveExitButton { color: #F87171; background-color: rgba(15, 15, 26, 0.92); "
-            "border: 1px solid rgba(248, 113, 113, 0.55); border-radius: 8px; padding: 0 14px; "
+            "border: 1px solid rgba(248, 113, 113, 0.55); border-radius: 6px; padding: 0 10px; "
             "font-size: 11px; font-weight: 700; letter-spacing: 1px; } "
             "QToolButton#archiveExitButton:hover { background-color: rgba(248, 113, 113, 0.16); }")
         self._exit_button.clicked.connect(self._archive_controls.request_exit)
@@ -2650,14 +2650,16 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._floating_toolbar.setGeometry(tb_x, MARGIN, tb_w, tb_h)
             self._floating_toolbar.raise_()
 
-            # archive EXIT: top right, the header's height, clear of it; on
-            # a window too narrow for both it drops below the header's row
+            # archive EXIT: top right, a snug pill centered on the header's
+            # row and clear of it; on a window too narrow for both it drops
+            # below the header's row
             if hasattr(self, "_exit_button"):
                 ex = self._exit_button
-                ex_w = max(64, ex.sizeHint().width())
+                ex_w, ex_h = ex.sizeHint().width(), 24
                 ex_x = r.width() - ex_w - MARGIN
-                ex_y = MARGIN if ex_x >= tb_x + tb_w + MARGIN else MARGIN + tb_h + 4
-                ex.setGeometry(ex_x, ex_y, ex_w, min(tb_h, 34))
+                beside = ex_x >= tb_x + tb_w + MARGIN
+                ex_y = MARGIN + (tb_h - ex_h) // 2 if beside else MARGIN + tb_h + 4
+                ex.setGeometry(ex_x, ex_y, ex_w, ex_h)
                 ex.raise_()
 
             # stack open pills below the toolbar to avoid overlap

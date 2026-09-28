@@ -47,3 +47,9 @@ locs/merge_locs.py
 locs/all_rounds052615.txt
 locs/sites.info
 locs/deployment_locations.json
+
+# storm tracks: the shared MESO-VIEW set ships with STORM; users' own
+# workspaces (tracks they create or edit) stay on their machine
+data/storm_tracks/*
+!data/storm_tracks/README.md
+!data/storm_tracks/MESO-VIEW/

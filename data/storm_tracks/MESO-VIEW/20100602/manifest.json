@@ -1,0 +1,14 @@
+{
+  "workspace": "MESO-VIEW",
+  "session_date": "2010-06-02",
+  "tracks": [
+    {
+      "file": "N27_20100602_2235_autosave_edited.csv",
+      "points": 30,
+      "updated_at": "2026-09-28 14:17:43",
+      "origin": "MESO-VIEW nontornadic/N27_20100602_2235_autosave_edited.csv",
+      "case_id": "N27",
+      "category": "nontornadic"
+    }
+  ]
+}

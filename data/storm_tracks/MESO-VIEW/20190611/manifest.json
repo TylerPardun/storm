@@ -1,0 +1,14 @@
+{
+  "workspace": "MESO-VIEW",
+  "session_date": "2019-06-11",
+  "tracks": [
+    {
+      "file": "N32_20190611_2354_autosave_edited.csv",
+      "points": 36,
+      "updated_at": "2026-09-28 14:17:44",
+      "origin": "MESO-VIEW nontornadic/N32_20190611_2354_autosave_edited.csv",
+      "case_id": "N32",
+      "category": "nontornadic"
+    }
+  ]
+}

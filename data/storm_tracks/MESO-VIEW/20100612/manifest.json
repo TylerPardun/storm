@@ -1,0 +1,14 @@
+{
+  "workspace": "MESO-VIEW",
+  "session_date": "2010-06-12",
+  "tracks": [
+    {
+      "file": "T30_20100612_2000_autosave_edited.csv",
+      "points": 14,
+      "updated_at": "2026-09-28 14:17:46",
+      "origin": "MESO-VIEW tornadic/T30_20100612_2000_autosave_edited.csv",
+      "case_id": "T30",
+      "category": "tornadic"
+    }
+  ]
+}

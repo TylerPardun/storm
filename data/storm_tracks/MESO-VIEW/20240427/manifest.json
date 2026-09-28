@@ -1,0 +1,38 @@
+{
+  "workspace": "MESO-VIEW",
+  "session_date": "2024-04-27",
+  "tracks": [
+    {
+      "file": "N38_20240427_1815_autosave_edited.csv",
+      "points": 38,
+      "updated_at": "2026-09-28 14:17:44",
+      "origin": "MESO-VIEW nontornadic/N38_20240427_1815_autosave_edited.csv",
+      "case_id": "N38",
+      "category": "nontornadic"
+    },
+    {
+      "file": "N39_20240427_2027_autosave_edited.csv",
+      "points": 41,
+      "updated_at": "2026-09-28 14:17:44",
+      "origin": "MESO-VIEW nontornadic/N39_20240427_2027_autosave_edited.csv",
+      "case_id": "N39",
+      "category": "nontornadic"
+    },
+    {
+      "file": "N40_20240427_2140_autosave_edited.csv",
+      "points": 44,
+      "updated_at": "2026-09-28 14:17:44",
+      "origin": "MESO-VIEW nontornadic/N40_20240427_2140_autosave_edited.csv",
+      "case_id": "N40",
+      "category": "nontornadic"
+    },
+    {
+      "file": "T37_20240427_2240_autosave_edited.csv",
+      "points": 35,
+      "updated_at": "2026-09-28 14:17:46",
+      "origin": "MESO-VIEW tornadic/T37_20240427_2240_autosave_edited.csv",
+      "case_id": "T37",
+      "category": "tornadic"
+    }
+  ]
+}

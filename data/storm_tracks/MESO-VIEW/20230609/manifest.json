@@ -1,0 +1,22 @@
+{
+  "workspace": "MESO-VIEW",
+  "session_date": "2023-06-09",
+  "tracks": [
+    {
+      "file": "N18_20230609_2200_autosave_edited.csv",
+      "points": 16,
+      "updated_at": "2026-09-28 14:17:43",
+      "origin": "MESO-VIEW nontornadic/N18_20230609_2200_autosave_edited.csv",
+      "case_id": "N18",
+      "category": "nontornadic"
+    },
+    {
+      "file": "N19_20230609_2259_autosave_edited.csv",
+      "points": 19,
+      "updated_at": "2026-09-28 14:17:43",
+      "origin": "MESO-VIEW nontornadic/N19_20230609_2259_autosave_edited.csv",
+      "case_id": "N19",
+      "category": "nontornadic"
+    }
+  ]
+}

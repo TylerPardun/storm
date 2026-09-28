@@ -115,6 +115,20 @@ def _parse_timestamp(obj: dict) -> Optional[datetime]:
     return None
 
 
+def _expired(obj: dict, t: datetime) -> bool:
+    """Whether a record's expires_at is at or before t (no expiry: never)."""
+    text = obj.get("expires_at")
+    if not text:
+        return False
+    try:
+        expires = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return expires <= t
+
+
 def _parse_jsonl(text: str) -> list[tuple[datetime, dict]]:
     """Parse JSONL into a sorted list of (timestamp, obj) tuples, skipping unparseable lines."""
     results = []
@@ -184,10 +198,8 @@ class ArchiveMQTTReader(QObject):
         self._vehicle_observations: dict[str, list] = {}
         self._pending_time: Optional[datetime] = None
         self._last_emit_time: Optional[datetime] = None
-        # track which annotation/cone/drawing ids have been emitted so we can
-        self._emitted_ids: dict[str, set[str]] = {
-            "annotations": set(), "cones": set(), "drawings": set()
-        }
+        # what's on the map now, per topic: id -> the record it was drawn from
+        self._shown: dict[str, dict[str, dict]] = {"annotations": {}, "cones": {}, "drawings": {}}
         # _load_complete is queued automatically by Qt (bg thread → main thread)
         self._load_complete.connect(self._on_load_complete)
 
@@ -201,24 +213,17 @@ class ArchiveMQTTReader(QObject):
             self._pending_time = archive_time
             return
 
-        # backward jump — remove anything placed after the new time, then re-emit from scratch.
+        # backward jump -- vehicles and scan sectors are re-sent from scratch
+        # (annotations, cones and drawings are brought to the new time below)
         if self._last_emit_time is not None and archive_time < self._last_emit_time:
             self.vehicles_cleared.emit()
             self.scan_sectors_cleared.emit()
-            # explicitly delete annotations/cones/drawings that are now in the future.
-            for ann_id in list(self._emitted_ids["annotations"]):
-                self.annotation_deleted.emit(ann_id, "")
-            for cone_id in list(self._emitted_ids["cones"]):
-                self.cone_deleted.emit(cone_id)
-            for drawing_id in list(self._emitted_ids["drawings"]):
-                self.drawing_deleted.emit(drawing_id)
-            self._emitted_ids = {"annotations": set(), "cones": set(), "drawings": set()}
 
         self._last_emit_time = archive_time
         self._emit_vehicles(archive_time)
-        self._emit_annotations(archive_time)
-        self._emit_cones(archive_time)
-        self._emit_drawings(archive_time)
+        self._sync_items("annotations", archive_time)
+        self._sync_items("cones", archive_time)
+        self._sync_items("drawings", archive_time)
         self._emit_scan_sectors(archive_time)
 
     def vehicle_positions_near(self, target_time: datetime) -> list[tuple[str, float, float]]:
@@ -353,65 +358,47 @@ class ArchiveMQTTReader(QObject):
             except Exception as exc:
                 log.debug("ArchiveMQTTReader: vehicle parse error: %s", exc)
 
-    def _emit_annotations(self, t: datetime) -> None:
-        """Apply annotation creates/deletes up to time t."""
-        for ts, obj in self._data["annotations"]:
+    def items_at(self, topic: str, t: datetime) -> dict[str, dict]:
+        """The annotations, cones or drawings that existed at time t, as
+        id -> record: each one from when it was issued (created_at), in its
+        latest version as of t (the crew edits by republishing the same id),
+        until it was deleted or expired (expires_at -- cones last an hour)."""
+        state: dict[str, dict] = {}
+        for ts, obj in self._data[topic]:
             if ts > t:
                 break
-            ann_id = obj.get("id", "")
-            if not ann_id:
+            item_id = obj.get("id", "")
+            if not item_id:
                 continue
             if obj.get("deleted"):
-                if ann_id in self._emitted_ids["annotations"]:
-                    self._emitted_ids["annotations"].discard(ann_id)
-                    self.annotation_deleted.emit(ann_id, obj.get("deleted_at", ""))
-            elif ann_id not in self._emitted_ids["annotations"]:
-                try:
-                    ann = Annotation.from_dict(obj)
-                    self._emitted_ids["annotations"].add(ann_id)
-                    self.annotation_received.emit(ann)
-                except Exception as exc:
-                    log.debug("ArchiveMQTTReader: annotation parse error: %s", exc)
+                state.pop(item_id, None)
+            else:
+                state[item_id] = obj
+        return {item_id: obj for item_id, obj in state.items() if not _expired(obj, t)}
 
-    def _emit_cones(self, t: datetime) -> None:
-        """Apply cone creates/deletes up to time t."""
-        for ts, obj in self._data["cones"]:
-            if ts > t:
-                break
-            cone_id = obj.get("id", "")
-            if not cone_id:
+    def _sync_items(self, topic: str, t: datetime) -> None:
+        """Bring the map's annotations, cones or drawings to time t: remove
+        what no longer exists, add or update the rest."""
+        make, received, deleted = {
+            "annotations": (Annotation.from_dict, self.annotation_received,
+                            lambda item_id: self.annotation_deleted.emit(item_id, "")),
+            "cones": (StormCone.from_dict, self.cone_received, self.cone_deleted.emit),
+            "drawings": (DrawingAnnotation.from_dict, self.drawing_received, self.drawing_deleted.emit),
+        }[topic]
+        wanted, shown = self.items_at(topic, t), self._shown[topic]
+        for item_id in [i for i in shown if i not in wanted]:
+            del shown[item_id]
+            deleted(item_id)
+        for item_id, obj in wanted.items():
+            if shown.get(item_id) is obj:
                 continue
-            if obj.get("deleted"):
-                if cone_id in self._emitted_ids["cones"]:
-                    self._emitted_ids["cones"].discard(cone_id)
-                    self.cone_deleted.emit(cone_id)
-            elif cone_id not in self._emitted_ids["cones"]:
-                try:
-                    cone = StormCone.from_dict(obj)
-                    self._emitted_ids["cones"].add(cone_id)
-                    self.cone_received.emit(cone)
-                except Exception as exc:
-                    log.debug("ArchiveMQTTReader: cone parse error: %s", exc)
-
-    def _emit_drawings(self, t: datetime) -> None:
-        """Apply drawing creates/deletes up to time t."""
-        for ts, obj in self._data["drawings"]:
-            if ts > t:
-                break
-            drawing_id = obj.get("id", "")
-            if not drawing_id:
+            try:
+                item = make(obj)
+            except Exception as exc:
+                log.debug("ArchiveMQTTReader: %s parse error: %s", topic, exc)
                 continue
-            if obj.get("deleted"):
-                if drawing_id in self._emitted_ids["drawings"]:
-                    self._emitted_ids["drawings"].discard(drawing_id)
-                    self.drawing_deleted.emit(drawing_id)
-            elif drawing_id not in self._emitted_ids["drawings"]:
-                try:
-                    drawing = DrawingAnnotation.from_dict(obj)
-                    self._emitted_ids["drawings"].add(drawing_id)
-                    self.drawing_received.emit(drawing)
-                except Exception as exc:
-                    log.debug("ArchiveMQTTReader: drawing parse error: %s", exc)
+            shown[item_id] = obj
+            received.emit(item)
 
     def _emit_scan_sectors(self, t: datetime) -> None:
         """Emit the most recent scan-sector state for each vehicle at or before t."""

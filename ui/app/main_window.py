@@ -1044,7 +1044,24 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             )
             return
         self._archive_session.radar_station = site
+        self._center_map_on_case(site)
         self._start_archive_radar(site)
+
+    # Regional view around the case's radar: its ~230 km coverage plus
+    # some surroundings.
+    _CASE_VIEW_ZOOM = 7.5
+
+    def _center_map_on_case(self, site: str) -> None:
+        """Once per session, start the map on the case -- centered on the
+        radar chosen for it (the one nearest the vehicles at the session's
+        start time) -- instead of the default view over central Oklahoma."""
+        if getattr(self, "_archive_map_centered", False):
+            return
+        info = next((i for i in (self._radar_station_sites or []) if i.get("site_id") == site), None)
+        if info is None or info.get("lat") is None or info.get("lon") is None:
+            return
+        self._archive_map_centered = True
+        self.map_widget.fly_to(info["lat"], info["lon"], zoom=self._CASE_VIEW_ZOOM)
 
     def _nearest_nexrad(self, lat: float, lon: float, archive: bool = False) -> "str | None":
         """Return the 4-letter NEXRAD ID closest to lat/lon.

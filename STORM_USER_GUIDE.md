@@ -1080,8 +1080,11 @@ These update as each fetcher resolves data for the current archive timestamp.
 | SPC/NWS Hazards | Archived GeoJSON products | Fetched once at session start for the session date |
 | Soundings | open-meteo HRRR archive | Fetched on demand (map click), using archive time as valid time |
 | Vehicle Positions | MQTT message log | Historical vehicle obs replayed in time order |
+| Annotations, fronts/boundaries, storm cones | MQTT message log | Each appears when it was issued, in its latest edit as of the current time, and disappears when it was deleted or expired (storm cones last one hour) |
 
 Each layer updates automatically as the archive clock advances. Data fetches are triggered when the clock crosses boundaries (e.g., every radar scan interval).
+
+The map opens centered on the case: the radar chosen for the session (the one nearest the vehicles at the start time), zoomed to its coverage.
 
 ---
 

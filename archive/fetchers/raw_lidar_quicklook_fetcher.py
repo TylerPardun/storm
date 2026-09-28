@@ -15,7 +15,7 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from archive.fetchers.raw_lidar_archive_fetcher import (
-    KNOWN_RAW_LIDAR_SOURCES, discover_raw_lidar, load_raw_lidar,
+    KNOWN_RAW_LIDAR_SOURCES, discover_raw_lidar, load_raw_lidar, read_site,
 )
 
 log = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
     date, and loads one selected asset's rays for the quicklook dialog."""
 
     assets_ready = pyqtSignal(dict)   # platform_id -> list[LidarAsset]
+    sites_ready = pyqtSignal(dict)    # instrument -> {lat, lon, altitude_m, description} (trailers)
     rays_ready = pyqtSignal(str, object)  # platform_id, RawLidarRays
     error = pyqtSignal(str)
 
@@ -84,6 +85,18 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
         if errors:
             self.error.emit("; ".join(errors))
         self.assets_ready.emit(results)
+        # Where each trailer was, from one of its files' header, so it can be
+        # shown on the map before any file is loaded. (The truck moves; its
+        # position comes from its GPS track instead.)
+        sites = {}
+        for source in KNOWN_RAW_LIDAR_SOURCES:
+            if source.mobile or source.instrument in sites or not results.get(source.platform_id):
+                continue
+            site = read_site(results[source.platform_id][0])
+            if site is not None:
+                sites[source.instrument] = site
+        if sites:
+            self.sites_ready.emit(sites)
 
     def load(self, platform_id: str, asset) -> bool:
         """Load an asset's rays. While another load runs, this becomes the
@@ -125,4 +138,14 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
         if self._is_superseded(seq):
             log.debug("ArchiveRawLidarQuicklookFetcher: dropping superseded load of %s", asset.filename)
             return
+        from core.lidar_scans import classify_scans
+        try:
+            scans = classify_scans(rays)            # the scans the file holds, by geometry
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Lidar scans could not be classified for %s: %s", asset.filename, exc)
+            scans = []
+        try:
+            rays.scans = scans
+        except AttributeError:
+            pass
         self.rays_ready.emit(platform_id, rays)

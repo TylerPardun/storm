@@ -26,7 +26,7 @@ def _rays(mobile=False):
 def test_field_selector_populates_from_preloaded_rays():
     dlg = RawLidarQuicklookDialog('CLAMPS1-PPI', preloaded_rays=_rays())
     fields = [dlg._field_combo.itemText(i) for i in range(dlg._field_combo.count())]
-    assert fields == ['intensity', 'velocity']
+    assert sorted(fields) == ['intensity', 'velocity'] and dlg._field_combo.currentText() == 'velocity'
 
 
 def test_switching_field_updates_the_plotted_mesh():
@@ -54,3 +54,12 @@ def test_empty_dialog_with_no_preloaded_rays_does_not_crash():
     assert dlg._field_combo.count() == 0
     dlg.set_rays(_rays())
     assert dlg._field_combo.count() == 2
+
+
+def test_a_pause_between_stares_is_left_blank():
+    from ui.dialogs.raw_lidar_quicklook_dialog import _with_gaps
+    epochs = np.array([0.0, 3, 6, 9, 2000, 2003, 2006])
+    values = np.ones((7, 2))
+    t, v = _with_gaps(epochs, values)
+    assert list(t) == [0, 3, 6, 9, 12, 1997, 2000, 2003, 2006]
+    assert np.isnan(v[4]).all() and np.isnan(v[5]).all() and not np.isnan(v[6]).any()

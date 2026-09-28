@@ -116,6 +116,7 @@ QMainWindow, QWidget {
 
 #floatingToolbar QComboBox#radarSiteCombo,
 #floatingToolbar QComboBox#radarProductCombo,
+#floatingToolbar QComboBox#lidarCombo,
 #floatingToolbar QToolButton#radarStationsButton {
     background-color: rgba(32, 37, 58, 0.62);
     border: 1px solid rgba(74, 83, 108, 0.48);
@@ -123,6 +124,7 @@ QMainWindow, QWidget {
 
 #floatingToolbar QComboBox#radarSiteCombo:hover,
 #floatingToolbar QComboBox#radarProductCombo:hover,
+#floatingToolbar QComboBox#lidarCombo:hover,
 #floatingToolbar QToolButton#radarStationsButton:hover {
     border-color: rgba(120, 138, 178, 0.72);
 }

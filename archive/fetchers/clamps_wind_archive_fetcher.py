@@ -65,6 +65,17 @@ KNOWN_CLAMPS_WIND_SOURCES: tuple[ClampsWindSource, ...] = (
 )
 
 
+def wind_source_name(platform_id: str) -> str:
+    """What to call a wind-profile source: the lidar truck's are not CLAMPS
+    trailer data, though they come through the same CLAMPS processing."""
+    instrument, _, rest = platform_id.partition("-")
+    kind = {"VAD": "VAD", "CSMWINDS": "CSM winds"}.get(rest.split("-")[-1], rest)
+    if instrument == "DLTRUCK1":
+        stream = rest.split("-")[0]
+        return f"Lidar truck {kind} ({stream})"
+    return f"{instrument} trailer {kind}"
+
+
 def _ssl_context() -> ssl.SSLContext:
     context = ssl.create_default_context()
     context.check_hostname = False

@@ -315,6 +315,27 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
             f"{json.dumps('#00CFFF')}, {json.dumps('lidar')}, {json.dumps(site['instrument'])});"
         )
 
+    def set_platform_marker(self, marker_id: str, lat: float, lon: float, color: str,
+                            icon: str, hover_text: str) -> None:
+        """A clickable instrument marker (e.g. a CLAMPS trailer's lidar site);
+        clicking it emits platform_marker_clicked(marker_id)."""
+        self.run_js(
+            "stormAddPlatformMarker("
+            f"{json.dumps(marker_id)}, {lat}, {lon}, {json.dumps(color)}, "
+            f"{json.dumps(icon)}, {json.dumps(hover_text)});"
+        )
+
+    def set_radar_visible(self, visible: bool) -> None:
+        """Show or hide the radar layer (e.g. under a lidar scan). Holds for
+        a layer created later, too (RadarOverlay.inject honors it)."""
+        flag = "false" if visible else "true"
+        self.run_js(
+            "window._stormLayerHidden = window._stormLayerHidden || {};"
+            f"window._stormLayerHidden['radar-overlay'] = {flag};"
+            "if (typeof map !== 'undefined' && map.getLayer('radar-overlay'))"
+            f" map.setLayoutProperty('radar-overlay', 'visibility', {flag} ? 'none' : 'visible');"
+        )
+
     def set_noxp_site(self, site: dict | None):
         """Selected NOXP volume's origin -- separate marker id from
         set_lidar_site so both can be shown at once without clobbering

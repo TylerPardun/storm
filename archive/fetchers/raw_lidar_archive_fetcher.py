@@ -59,20 +59,135 @@ class LidarAsset:
     source: RawLidarSource
     filename: str
     catalog_url: str
+    path: str = ''       # THREDDS folder it is actually in, when not the source's own
 
     @property
     def url(self):
-        return f'https://data.nssl.noaa.gov/thredds/fileServer/{self.source.path}/{self.filename}'
+        return f'https://data.nssl.noaa.gov/thredds/fileServer/{self.path or self.source.path}/{self.filename}'
+
+
+# CLAMPS files are sometimes filed under the other trailer's folder -- e.g.
+# six 2017 CLAMPS1 fixed-point files (clampsdlfpC1.*) sit in clamps2's
+# clampsdlfpC2.b1 folder (found 2026-09-28). Each trailer's files are also
+# looked for there, by their own name, so they are found and still labeled
+# with the trailer that recorded them.
+_OTHER_TRAILER = {'clamps/clamps1': 'clamps/clamps2', 'clamps/clamps2': 'clamps/clamps1'}
+
+
+def _other_trailer_path(source: RawLidarSource) -> str | None:
+    other = _OTHER_TRAILER.get(source.platform_dir)
+    if other is None:
+        return None
+    unit = 'C2' if other.endswith('2') else 'C1'
+    return f'FRDD/CLAMPS/{other}/ingested/clampsdl{source.product}{unit}.b1'
 
 
 def discover_raw_lidar(source: RawLidarSource, day: date, *, cancel=None, fetch_catalog=None):
     from archive.catalog import CatalogSpec, _CatalogLinks, _fetch_catalog_html
-    spec = CatalogSpec(source.path, '.cdf')
-    html = (fetch_catalog or _fetch_catalog_html)(spec.url, cancel or Event())
-    parser = _CatalogLinks(spec)
-    parser.feed(html)
     prefix = f'{source.datastream}.{day:%Y%m%d}.'
-    return [LidarAsset(source, name, spec.url) for name in sorted(parser.filenames) if name.startswith(prefix)]
+    found = []
+    for path in (source.path, _other_trailer_path(source)):
+        if path is None:
+            continue
+        spec = CatalogSpec(path, '.cdf')
+        try:
+            html = (fetch_catalog or _fetch_catalog_html)(spec.url, cancel or Event())
+        except Exception:
+            if path == source.path:
+                raise
+            continue          # the other trailer's folder is only a second look
+        parser = _CatalogLinks(spec)
+        parser.feed(html)
+        found += [LidarAsset(source, name, spec.url, '' if path == source.path else path)
+                  for name in sorted(parser.filenames) if name.startswith(prefix)]
+    return found
+
+
+class _RangeFile:
+    """Read-only file over HTTP range requests, 64 KB at a time, so h5py can
+    read a netCDF4 file's header without downloading the file."""
+
+    BLOCK = 64 * 1024
+
+    def __init__(self, url: str, timeout: float = 20):
+        self.url, self.timeout, self.pos, self.size, self._blocks = url, timeout, 0, None, {}
+
+    def _block(self, i: int) -> bytes:
+        if i not in self._blocks:
+            from urllib.request import Request, urlopen
+            import config
+            request = Request(self.url, headers={'User-Agent': 'Mozilla/5.0 STORM/1.0',
+                                                 'Range': f'bytes={i * self.BLOCK}-{(i + 1) * self.BLOCK - 1}'})
+            with urlopen(request, timeout=self.timeout, context=config.NSSL_SSL_CONTEXT) as response:
+                content_range = response.headers.get('Content-Range', '')
+                data = response.read()
+            if response.status != 206 or '/' not in content_range:
+                raise OSError('server does not support range requests')
+            self.size = int(content_range.rsplit('/', 1)[1])
+            self._blocks[i] = data
+        return self._blocks[i]
+
+    def readable(self): return True
+    def seekable(self): return True
+    def tell(self): return self.pos
+
+    def seek(self, offset, whence=0):
+        if self.size is None:
+            self._block(0)
+        self.pos = offset if whence == 0 else self.pos + offset if whence == 1 else self.size + offset
+        return self.pos
+
+    def read(self, n=-1):
+        if self.size is None:
+            self._block(0)
+        if n is None or n < 0:
+            n = self.size - self.pos
+        out = bytearray()
+        while len(out) < n and self.pos < self.size:
+            i, offset = divmod(self.pos, self.BLOCK)
+            chunk = self._block(i)[offset:offset + n - len(out)]
+            if not chunk:
+                break
+            out += chunk
+            self.pos += len(chunk)
+        return bytes(out)
+
+    def readinto(self, buffer):
+        data = self.read(len(buffer))
+        buffer[:len(data)] = data
+        return len(data)
+
+
+def read_site(asset: LidarAsset) -> dict | None:
+    """A trailer's recorded site -- {lat, lon, altitude_m, description} --
+    from the file's header only (one 64 KB range request; a day's
+    fixed-point file can be 355 MB). None when the header has no usable
+    site or can't be read this way (the full file then shows it when
+    loaded)."""
+    try:
+        import h5py
+        with h5py.File(_RangeFile(asset.url), 'r') as h5:
+            attrs = dict(h5.attrs)
+    except Exception:
+        return None
+
+    def number(name):
+        value = attrs.get(name)
+        try:
+            value = float(np.ravel(value)[0]) if value is not None else float('nan')
+        except (TypeError, ValueError, IndexError):
+            return float('nan')
+        return value if value > -900 else float('nan')
+
+    lat, lon = number('Site_latitude'), number('Site_longitude')
+    if not (np.isfinite(lat) and np.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180 and (lat, lon) != (0, 0)):
+        return None
+    description = attrs.get('Site_description', '')
+    if isinstance(description, bytes):
+        description = description.decode('utf-8', 'replace')
+    description = str(description).strip()
+    return {'lat': lat, 'lon': lon, 'altitude_m': number('Site_altitude'),
+            'description': '' if description in ('None', '-999') else description}
 
 
 @dataclass
@@ -95,6 +210,8 @@ class RawLidarRays:
     provenance: dict
     warnings: list[str]
     azimuth_known: np.ndarray | None = None   # per ray; None = all rays alike (provenance flag)
+    instrument_azimuth_deg: np.ndarray | None = None   # as stored (the truck's: relative to the truck),
+                                                       # for telling scan types apart (core/lidar_scans.py)
 
     @property
     def ground_geometry_valid(self):
@@ -180,6 +297,7 @@ def parse_raw_lidar(path, source: RawLidarSource):
         if source.product == 'csm':
             warnings.append('Continuous scan mode: provider cautions that these rays require careful interpretation.')
         azimuth = rays('azimuth')
+        stored_azimuth = azimuth.copy()
         reference = {'north_referenced': True, 'azimuth_reference': 'as stored in the file'}
         if source.mobile:
             azimuth, reference = _truck_azimuth(azimuth, ds.attrs.get('Trailer_heading'))
@@ -191,7 +309,8 @@ def parse_raw_lidar(path, source: RawLidarSource):
                             {'format': 'CLAMPS b1 raw lidar', 'metadata': {k: str(v) for k, v in ds.attrs.items()},
                              'distance_units_in_file': units,
                              'azimuth_metadata': dict(ds['azimuth'].attrs), **reference,
-                             'altitude_reference': ds['alt'].attrs.get('units', 'unknown') if 'alt' in ds else 'unknown'}, warnings)
+                             'altitude_reference': ds['alt'].attrs.get('units', 'unknown') if 'alt' in ds else 'unknown'}, warnings,
+                            instrument_azimuth_deg=stored_azimuth)
 
 
 def _truck_azimuth(azimuth, trailer_heading):

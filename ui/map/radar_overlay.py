@@ -797,6 +797,10 @@ class RadarOverlay(QObject):
                       }}
                   }}
               }}
+              // a layer the user hid (e.g. the radar under a lidar scan) stays hidden
+              if (map.getLayer("{self.LAYER_ID}") && window._stormLayerHidden && window._stormLayerHidden["{self.LAYER_ID}"]) {{
+                  map.setLayoutProperty("{self.LAYER_ID}", "visibility", "none");
+              }}
           }} catch(e) {{ console.error("STORM Inject error:", e); }}
         }})();
         """

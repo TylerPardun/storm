@@ -157,6 +157,6 @@ def fetch_clamps_sonde_soundings(archive_date: datetime) -> "SoundingSet | None"
         fetch_time=archive_date,
         soundings=soundings,
         station_id="CLAMPS",
-        station_name="NSSL CLAMPS DL Truck (THREDDS)",
+        station_name="NSSL lidar truck (DLTRUCK1) sonde, THREDDS",
         source="nssl",
     )

@@ -98,3 +98,10 @@ def test_known_clamps_wind_sources_cover_dltruck_and_both_clamps_trailers():
 
 def approx(value, rel=1e-4):
     return pytest.approx(value, rel=rel)
+
+
+def test_the_lidar_trucks_winds_are_not_called_clamps():
+    from archive.fetchers.clamps_wind_archive_fetcher import wind_source_name
+    assert wind_source_name("DLTRUCK1-DL1-VAD") == "Lidar truck VAD (DL1)"
+    assert wind_source_name("DLTRUCK1-DL2-CSMWINDS") == "Lidar truck CSM winds (DL2)"
+    assert wind_source_name("CLAMPS1-VAD") == "CLAMPS1 trailer VAD"

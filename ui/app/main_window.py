@@ -597,6 +597,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._lidar_overlay_field = None
         self._lidar_selected_rays = None
         self._lidar_site = None
+        self._lidar_sites = {}               # trailer -> recorded site (header of its files)
+        self._lidar_pending_view = None      # asset URL to open in the viewer once loaded
         self._lidar_overlay_render_in_flight = False
         self._lidar_overlay_pending = False
         if feature_flags.is_enabled("raw_lidar_quicklook"):
@@ -604,6 +606,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._archive_raw_lidar = ArchiveRawLidarQuicklookFetcher(parent=self)
             self._archive_raw_lidar.assets_ready.connect(self._on_archive_raw_lidar_assets_ready)
             self._archive_raw_lidar.rays_ready.connect(self._on_archive_raw_lidar_rays_ready)
+            self._archive_raw_lidar.sites_ready.connect(self._on_raw_lidar_sites_ready)
             self._watch_worker_errors(self._archive_raw_lidar, self._archive_raw_lidar.error, "Raw lidar")
             self._archive_raw_lidar.fetch(self._archive_time)
             self._time_ctrl.time_changed.connect(self._on_time_changed_update_lidar_overlay)
@@ -1702,6 +1705,31 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         # pulse layout updates for the duration of the open/close animation
         self.btn_radar.toggled.connect(self._start_layout_pulse)
 
+        # RAW LIDAR next to RADAR: both remote sensors with scans to look at.
+        # It opens only once the date is known to have lidar data.
+        if self._archive and feature_flags.is_enabled("raw_lidar_quicklook"):
+            self.btn_raw_lidar = self._toolbar_toggle(
+                "RAW LIDAR", "Doppler lidar scans: the lidar truck and the CLAMPS trailers", tb
+            )
+            self.btn_raw_lidar.setEnabled(False)
+            self.btn_raw_lidar.setToolTip("Looking for lidar data for this date…")
+            self.raw_lidar_controls = RawLidarControls(self._map_container)
+            self.raw_lidar_controls.setObjectName("floatingToolbar")
+            from archive.fetchers.raw_lidar_archive_fetcher import KNOWN_RAW_LIDAR_SOURCES
+            self.raw_lidar_controls.set_sources(KNOWN_RAW_LIDAR_SOURCES)
+            self.btn_raw_lidar.toggled.connect(self.raw_lidar_controls.toggle_drawer)
+            self.btn_raw_lidar.toggled.connect(self._start_layout_pulse)
+            self.raw_lidar_controls.availability_changed.connect(self._on_raw_lidar_availability)
+            self.raw_lidar_controls.view_requested.connect(self._on_raw_lidar_view_requested)
+            self.raw_lidar_controls.map_overlay_requested.connect(self._on_raw_lidar_map_overlay_requested)
+            self.raw_lidar_controls.field_selected.connect(self._on_raw_lidar_field_selected)
+            self.raw_lidar_controls.locate_requested.connect(self._on_raw_lidar_locate)
+            self.raw_lidar_controls.source_selected.connect(self._on_raw_lidar_source_selected)
+            self.raw_lidar_controls.scan_step_requested.connect(self._on_raw_lidar_scan_step)
+            self.raw_lidar_controls.radar_visible_toggled.connect(self.map_widget.set_radar_visible)
+            if not feature_flags.is_enabled("noxp_radar"):       # else connected with NOXP below
+                self.map_widget.platform_marker_clicked.connect(self._on_platform_marker_clicked)
+
         self._add_separator(tb)
 
         self.btn_vehicles = self._toolbar_toggle("VEHICLES", "Vehicle panel", tb)
@@ -1781,22 +1809,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # volumes load) is still a second way in, clicked the same as
             # any other platform marker.
             self.map_widget.platform_marker_clicked.connect(self._on_platform_marker_clicked)
-
-        if self._archive and feature_flags.is_enabled("raw_lidar_quicklook"):
-            self.btn_raw_lidar = self._toolbar_toggle(
-                "RAW LIDAR", "Raw lidar quicklooks", tb
-            )
-            self.raw_lidar_controls = RawLidarControls(self._map_container)
-            self.raw_lidar_controls.setObjectName("floatingToolbar")
-            from archive.fetchers.raw_lidar_archive_fetcher import KNOWN_RAW_LIDAR_SOURCES
-            self.raw_lidar_controls.set_sources(KNOWN_RAW_LIDAR_SOURCES)
-            self.btn_raw_lidar.toggled.connect(self.raw_lidar_controls.toggle_drawer)
-            self.btn_raw_lidar.toggled.connect(self._start_layout_pulse)
-            self.raw_lidar_controls.quicklook_requested.connect(self._on_raw_lidar_quicklook_requested)
-            self.raw_lidar_controls.map_overlay_requested.connect(self._on_raw_lidar_map_overlay_requested)
-            self.raw_lidar_controls.field_selected.connect(self._on_raw_lidar_field_selected)
-            self.raw_lidar_controls.locate_requested.connect(self._on_raw_lidar_locate)
-            self.raw_lidar_controls.source_selected.connect(self._on_raw_lidar_source_selected)
 
         if self._archive and feature_flags.is_enabled("archive_asos"):
             # No drawer -- nothing to pick from a list, just "draw a box,
@@ -4864,9 +4876,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         date/known platforms in archive mode (fetched on the archive
         clock, not "now" -- live NEXRAD semantics don't apply here)."""
         if self._archive:
-            self.status_msg_label.setText("Fetching CLAMPS wind profiles…")
+            self.status_msg_label.setText("Fetching lidar wind profiles (lidar truck and CLAMPS trailers)…")
             if not self._archive_clamps_wind.fetch(self._archive_time):  # covers the whole session span
-                self.status_msg_label.setText("CLAMPS wind: fetch already in progress")
+                self.status_msg_label.setText("Lidar wind profiles: fetch already in progress")
             return
 
         site = self.radar_controls.current_site()
@@ -4876,17 +4888,20 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _on_archive_clamps_wind_ready(self, sets: dict) -> None:
         if not sets:
-            self.status_msg_label.setText("CLAMPS wind: no data for this date")
+            self.status_msg_label.setText("Lidar wind profiles: no data for this date")
             return
+        from archive.fetchers.clamps_wind_archive_fetcher import wind_source_name
         platform_id = sorted(sets)[0]
         if len(sets) > 1:
             from PyQt6.QtWidgets import QInputDialog
-            platform_id, accepted = QInputDialog.getItem(self, "CLAMPS wind profiles", "Instrument", sorted(sets), 0, False)
+            names = {wind_source_name(pid): pid for pid in sorted(sets)}
+            name, accepted = QInputDialog.getItem(self, "Lidar wind profiles", "Instrument", list(names), 0, False)
             if not accepted:
                 return
-        self.status_msg_label.setText(f"CLAMPS wind: {platform_id}")
+            platform_id = names[name]
+        self.status_msg_label.setText(f"Lidar wind profiles: {wind_source_name(platform_id)}")
         from ui.dialogs.vad_dialog import VADDialog
-        dlg = VADDialog(platform_id, parent=self, preloaded_set=sets[platform_id])
+        dlg = VADDialog(wind_source_name(platform_id), parent=self, preloaded_set=sets[platform_id])
         dlg.exec()
 
     # -- NOXP mobile radar (archive) ------------------------------------
@@ -5024,6 +5039,14 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _on_platform_marker_clicked(self, platform_id: str) -> None:
         if platform_id == "noxp":
             self._activate_noxp_radar()
+        elif platform_id.startswith("lidar-") and hasattr(self, "btn_raw_lidar"):
+            # a lidar site marker: open RAW LIDAR on that lidar
+            combo = self.raw_lidar_controls._source_combo
+            index = combo.findData(platform_id[len("lidar-"):])
+            if index >= 0:
+                combo.setCurrentIndex(index)
+            if self.btn_raw_lidar.isEnabled() and not self.btn_raw_lidar.isChecked():
+                self.btn_raw_lidar.setChecked(True)
 
     def _on_time_changed_update_noxp_overlay(self, when) -> None:
         """Auto-advance NOXP's loaded volume as the archive clock moves,
@@ -5087,43 +5110,179 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 f"NOXP: {scan.native_field} · {meta['vmin']:g} … {meta['vmax']:g} {meta['units']} · {scan.scan_time:%H:%M:%S}Z"
             )
 
-    # -- CLAMPS raw lidar quicklook (archive) ---------------------------
+    # -- Doppler lidar: the lidar truck and the CLAMPS trailers (archive) --
+    # RawLidarControls picks a lidar and one of its files; the file is split
+    # into scans (core/lidar_scans.py). PPI/VAD scans go on the map (MAP),
+    # RHIs and stares to the viewer (VIEW). The truck is placed from its GPS;
+    # a trailer at the site its files record, shown as soon as discovery runs.
+
+    def _on_raw_lidar_availability(self, available: bool) -> None:
+        self.btn_raw_lidar.setEnabled(available)
+        self.btn_raw_lidar.setToolTip(
+            "Doppler lidar scans: the lidar truck and the CLAMPS trailers" if available
+            else "No lidar data for this date")
+        if not available and self.btn_raw_lidar.isChecked():
+            self.btn_raw_lidar.setChecked(False)
+        if available and "DLTRUCK1" in {self.raw_lidar_controls._source_combo.itemData(i)
+                                        for i in range(self.raw_lidar_controls._source_combo.count())}:
+            self.raw_lidar_controls.set_site_text(
+                "DLTRUCK1", "is placed from the truck's GPS track (it moves)")
 
     def _on_archive_raw_lidar_assets_ready(self, assets_by_source: dict) -> None:
         self.raw_lidar_controls.set_assets_for_all_sources(assets_by_source)
 
-    def _on_raw_lidar_quicklook_requested(self, platform_id: str, asset) -> None:
-        self._raw_lidar_quicklook_requested_platform_id = platform_id
-        self._raw_lidar_quicklook_requested_url = asset.url
-        self.status_msg_label.setText(f"Raw lidar: loading {asset.source.product.upper()}…")
-        self._archive_raw_lidar.load(platform_id, asset)   # the latest request wins
+    def _case_radar_site(self):
+        station = getattr(getattr(self, "_archive_radar", None), "station", None)
+        return next((i for i in (self._radar_station_sites or []) if i.get("site_id") == station), None)
 
-    def _on_archive_raw_lidar_rays_ready(self, platform_id: str, rays) -> None:
-        self.status_msg_label.setText(f"Raw lidar: {platform_id} loaded")
-        if self.raw_lidar_controls.set_loaded_fields(rays):
-            self._lidar_selected_rays = rays
-            self._update_raw_lidar_site()
-            self._layout_overlays()
+    def _on_raw_lidar_sites_ready(self, sites: dict) -> None:
+        """Mark each trailer's recorded site on the map and say where it is
+        relative to the case (a trailer is often parked at home in Norman
+        while the truck is deployed)."""
+        import math
+        from ui.controls.raw_lidar_controls import instrument_name
+        self._lidar_sites = dict(sites)
+        radar = self._case_radar_site()
+        for instrument, site in sites.items():
+            place = site.get("description") or "its recorded site"
+            text = f"at {place} ({site['lat']:.3f}, {site['lon']:.3f})"
+            if radar is not None:
+                dlat = math.radians(site["lat"] - radar["lat"])
+                dlon = math.radians(site["lon"] - radar["lon"]) * math.cos(math.radians(radar["lat"]))
+                km = 6371.0 * math.hypot(dlat, dlon)
+                text += f", {km:.0f} km from {radar['site_id']}"
+            self.raw_lidar_controls.set_site_text(instrument, text)
+            self.map_widget.set_platform_marker(
+                f"lidar-{instrument}", site["lat"], site["lon"], "#00CFFF", "lidar",
+                f"{instrument_name(instrument)} lidar\n{place}")
+        self._update_raw_lidar_locate()
 
-        if platform_id == self._lidar_overlay_platform_id and rays.provenance.get("url") == self._lidar_overlay_asset_url:
-            self._lidar_overlay_rays = rays
-            self._render_lidar_overlay()
-
-        if self._raw_lidar_dialog is not None and self._raw_lidar_dialog.platform_id == platform_id:
-            self._raw_lidar_dialog.set_rays(rays)
-            self._raw_lidar_dialog.raise_()
-            self._raw_lidar_dialog.activateWindow()
-        elif (self._raw_lidar_quicklook_requested_platform_id == platform_id
-              and getattr(self, "_raw_lidar_quicklook_requested_url", None) == rays.provenance.get("url")):
-            self._raw_lidar_dialog = RawLidarQuicklookDialog(platform_id, parent=self, preloaded_rays=rays)
-            self._raw_lidar_dialog.show()
-
-    # -- CLAMPS raw-lidar map overlay (positioned PPI/CSM rays) ----------
+    def _update_raw_lidar_locate(self) -> None:
+        instrument = self.raw_lidar_controls.current_instrument()
+        self.raw_lidar_controls.set_locate_available(
+            instrument in self._lidar_sites or self._lidar_site is not None)
 
     def _on_raw_lidar_source_selected(self, _platform_id):
         self._lidar_selected_rays = None
         self._lidar_site = None
         self.map_widget.set_lidar_site(None)
+        self._update_raw_lidar_locate()
+        self._update_lidar_scan_label()
+
+    def _selected_lidar_title(self, rays) -> str:
+        from ui.controls.raw_lidar_controls import FILE_NAMES, instrument_name
+        source = rays.source
+        return (f"{instrument_name(source.instrument)} ({source.instrument}) · "
+                f"{FILE_NAMES.get(source.product, source.product)} · {rays.provenance.get('url', '').rsplit('/', 1)[-1]}")
+
+    def _on_raw_lidar_view_requested(self, platform_id: str, asset) -> None:
+        rays = self._lidar_selected_rays
+        if rays is not None and rays.provenance.get("url") == asset.url:
+            self._open_lidar_viewer(platform_id, rays)
+            return
+        self._lidar_pending_view = asset.url
+        self.status_msg_label.setText(f"Lidar: loading {asset.filename}…")
+        self._archive_raw_lidar.load(platform_id, asset)   # the latest request wins
+
+    def _open_lidar_viewer(self, platform_id: str, rays) -> None:
+        title = self._selected_lidar_title(rays)
+        if self._raw_lidar_dialog is None:
+            self._raw_lidar_dialog = RawLidarQuicklookDialog(platform_id, parent=self, when=self._time_ctrl.current_time)
+            self._raw_lidar_dialog.step_requested.connect(self._on_lidar_viewer_step)
+        self._raw_lidar_dialog.platform_id = platform_id
+        self._raw_lidar_dialog.set_time(self._time_ctrl.current_time)
+        self._raw_lidar_dialog.set_rays(rays, title)
+        self._raw_lidar_dialog.show()
+        self._raw_lidar_dialog.raise_()
+        self._raw_lidar_dialog.activateWindow()
+
+    def _on_archive_raw_lidar_rays_ready(self, platform_id: str, rays) -> None:
+        from core.lidar_scans import classify_scans
+        if getattr(rays, "scans", None) is None:
+            rays.scans = classify_scans(rays)
+        url = rays.provenance.get("url")
+        self.status_msg_label.setText(f"Lidar: {platform_id} loaded")
+        if self.raw_lidar_controls.set_loaded_fields(rays, rays.scans):
+            self._lidar_selected_rays = rays
+            self._update_raw_lidar_site()
+            self._update_lidar_scan_label()
+            self._layout_overlays()
+        if platform_id == self._lidar_overlay_platform_id and url == self._lidar_overlay_asset_url:
+            self._lidar_overlay_rays = rays
+            self._bring_clock_to_lidar_scan()
+            self._render_lidar_overlay()
+        if self._lidar_pending_view == url:
+            self._lidar_pending_view = None
+            self._open_lidar_viewer(platform_id, rays)
+        elif (self._raw_lidar_dialog is not None and self._raw_lidar_dialog.isVisible()
+              and self._raw_lidar_dialog.platform_id == platform_id):
+            self._raw_lidar_dialog.set_rays(rays, self._selected_lidar_title(rays))
+
+    def _bring_clock_to_lidar_scan(self) -> None:
+        """MAP on: if no PPI/VAD scan is on screen at the current time, move
+        the clock to the first one ahead (else the last one), so the scan
+        shows instead of a blank map."""
+        from core.lidar_scans import nearest_scan_time, scan_at
+        rays = self._lidar_overlay_rays
+        scans = getattr(rays, "scans", None) or []
+        now = self._time_ctrl.current_time
+        if scan_at(scans, now) is not None:
+            return
+        target = nearest_scan_time(scans, now)
+        if target is None:
+            self.status_msg_label.setText("Lidar map: this file has no PPI or VAD scans -- use VIEW")
+            return
+        start, end = self._time_ctrl.window
+        if not (start <= target <= end):
+            self.status_msg_label.setText(
+                f"Lidar map: the nearest scan ({target:%H:%M:%S} UTC) is outside this session")
+            return
+        self._time_ctrl.pause()
+        self._time_ctrl.set_time(target)
+        self.status_msg_label.setText(f"Lidar map: moved to the nearest scan, {target:%H:%M:%S} UTC")
+
+    def _lidar_step_kinds(self):
+        from core.lidar_scans import MAP_KINDS
+        return MAP_KINDS if self.raw_lidar_controls.map_is_on() else None
+
+    def _on_raw_lidar_scan_step(self, direction: int) -> None:
+        from core import lidar_scans
+        rays = self._lidar_selected_rays
+        scans = getattr(rays, "scans", None) or []
+        scan = lidar_scans.step(scans, self._time_ctrl.current_time, direction, self._lidar_step_kinds())
+        if scan is None:
+            return
+        self._time_ctrl.pause()
+        self._time_ctrl.set_time(scan.end)
+
+    def _on_lidar_viewer_step(self, direction: int) -> None:
+        from core import lidar_scans
+        dialog = self._raw_lidar_dialog
+        scans = getattr(getattr(dialog, "_rays", None), "scans", None) or []
+        scan = lidar_scans.step(scans, self._time_ctrl.current_time, direction, ("RHI",))
+        if scan is not None:
+            self._time_ctrl.pause()
+            self._time_ctrl.set_time(scan.end)
+
+    def _update_lidar_scan_label(self) -> None:
+        from core.lidar_scans import scan_at
+        rays = self._lidar_selected_rays
+        scans = getattr(rays, "scans", None) or []
+        if not scans:
+            self.raw_lidar_controls.set_scan_label("", False, False)
+            return
+        kinds = self._lidar_step_kinds()
+        chosen = [s for s in scans if kinds is None or s.kind in kinds]
+        now = self._time_ctrl.current_time
+        current = scan_at(chosen, now, kinds=tuple({s.kind for s in chosen}), hold_s=600)
+        if current is not None:
+            text = f"{current.describe()}  ({chosen.index(current) + 1} of {len(chosen)})"
+        elif chosen and now < chosen[0].start:
+            text = f"First scan at {chosen[0].start:%H:%M:%S} UTC -- ⏭ to go there"
+        else:
+            text = "No scan in the last 10 minutes"
+        self.raw_lidar_controls.set_scan_label(
+            text, any(s.end < now for s in chosen), any(s.start > now for s in chosen))
 
     def _on_raw_lidar_field_selected(self, field):
         self._lidar_overlay_field = field
@@ -5139,13 +5298,15 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if site != self._lidar_site:
             self._lidar_site = site
             self.map_widget.set_lidar_site(site)
-            self.raw_lidar_controls._btn_locate.setVisible(site is not None)
+            self._update_raw_lidar_locate()
             self._layout_overlays()
 
     def _on_raw_lidar_locate(self):
         from ui.map.lidar_overlay import lidar_site_at
         rays = self._lidar_selected_rays
         site = lidar_site_at(rays, self._time_ctrl.current_time) if rays is not None else None
+        if site is None:
+            site = self._lidar_sites.get(self.raw_lidar_controls.current_instrument())
         if site:
             self.map_widget.fly_to(site['lat'], site['lon'], zoom=11)
 
@@ -5155,21 +5316,27 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._lidar_overlay_rays = None
         if self._lidar_overlay is not None:
             self._lidar_overlay.clear()
+        self._update_lidar_scan_label()
         if not enabled:
             self._lidar_overlay_platform_id = None
+            self.map_widget.set_radar_visible(True)
             return
         self._lidar_overlay_platform_id = platform_id
-        self._lidar_overlay_field = self.raw_lidar_controls._field_combo.currentData()
+        self._lidar_overlay_field = self.raw_lidar_controls.current_field()
         cached = self._lidar_selected_rays
         if cached is not None and cached.provenance.get("url") == asset.url:
             self._lidar_overlay_rays = cached
+            self._bring_clock_to_lidar_scan()
             self._render_lidar_overlay()
             return
-        self.status_msg_label.setText(f"Raw lidar: loading {asset.source.product.upper()} for map overlay…")
+        self.status_msg_label.setText(f"Lidar: loading {asset.filename} for the map…")
         self._archive_raw_lidar.load(platform_id, asset)   # the latest request wins
 
     def _on_time_changed_update_lidar_overlay(self, _t) -> None:
         self._update_raw_lidar_site()
+        self._update_lidar_scan_label()
+        if self._raw_lidar_dialog is not None and self._raw_lidar_dialog.isVisible():
+            self._raw_lidar_dialog.set_time(self._time_ctrl.current_time)
         self._lidar_overlay_generation += 1
         if self._lidar_overlay_platform_id is not None and self._lidar_overlay_rays is not None:
             self._render_lidar_overlay()
@@ -5195,11 +5362,19 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         ).start()
 
     def _bg_render_lidar_overlay(self, rays, when, field: str, generation: int) -> None:
-        """Runs in a background thread — NOT on the main thread."""
+        """Runs in a background thread — NOT on the main thread. Draws the
+        PPI/VAD scan on screen at `when` (core/lidar_scans.scan_at)."""
+        from core.lidar_scans import scan_at
         from ui.map.lidar_overlay import render_lidar_to_png
         from ui.map.radar_overlay import RENDER_GRID_SIZE
+        scan = scan_at(getattr(rays, "scans", None) or [], when)
+        if scan is None:
+            self._lidar_overlay_render_ready.emit({
+                "error": "no PPI/VAD scan in the 10 minutes before this time (⏮/⏭ in RAW LIDAR step between scans)",
+                "generation": generation, "quiet": True})
+            return
         try:
-            png, bounds, metadata = render_lidar_to_png(rays, when, field, RENDER_GRID_SIZE)
+            png, bounds, metadata = render_lidar_to_png(rays, when, field, RENDER_GRID_SIZE, ray_indices=scan.indices)
         except ValueError as exc:
             self._lidar_overlay_render_ready.emit({"error": str(exc), "generation": generation})
             return
@@ -5207,6 +5382,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             log.error("Raw lidar overlay render failed: %s", exc)
             self._lidar_overlay_render_ready.emit({"error": str(exc), "generation": generation})
             return
+        metadata["scan"] = scan.describe()
         self._lidar_overlay_render_ready.emit({"png": png, "bounds": bounds, "generation": generation, "metadata": metadata})
 
     def _on_lidar_overlay_render_ready(self, result: dict) -> None:
@@ -5214,7 +5390,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if self._lidar_overlay_platform_id is None or result["generation"] != self._lidar_overlay_generation:
             pass  # superseded source/time, or toggled off while rendering
         elif "error" in result:
-            self.status_msg_label.setText(f"Raw lidar map: {result['error']}")
+            if not result.get("quiet"):
+                self.status_msg_label.setText(f"Lidar map: {result['error']}")
             if self._lidar_overlay is not None:
                 self._lidar_overlay.hide()
         else:

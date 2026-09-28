@@ -5,764 +5,655 @@
       "file": "storm_20090527_0048_track.csv",
       "session_date": "2009-05-26",
       "points": 13,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N1_20090527_0045_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20090604_2238_track.csv",
       "session_date": "2009-06-04",
       "points": 15,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N2_20090604_2245_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20090605_2126_track.csv",
       "session_date": "2009-06-05",
       "points": 21,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T1_20090605_2120_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20090605_2320_track.csv",
       "session_date": "2009-06-05",
       "points": 16,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N4_20090605_2120_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20090606_0042_track.csv",
       "session_date": "2009-06-05",
       "points": 22,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N3_20090606_0026_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20090608_0039_track.csv",
       "session_date": "2009-06-07",
       "points": 18,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T2_20090607_2245_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20090609_2325_track.csv",
       "session_date": "2009-06-09",
       "points": 13,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T3_20090609_2305_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20090611_2338_track.csv",
       "session_date": "2009-06-11",
       "points": 15,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T4_20090611_2353_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20100510_2236_track.csv",
       "session_date": "2010-05-10",
       "points": 23,
-      "updated_at": "2026-09-28 14:17:47",
-      "origin": "MESO-VIEW tornadic/T5_20100510_2300_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:47"
     },
     {
       "file": "storm_20100512_0058_track.csv",
       "session_date": "2010-05-11",
       "points": 15,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T21_20100512_0113_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20100512_2253_track.csv",
       "session_date": "2010-05-12",
       "points": 17,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T22_20100512_2310_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20100514_2020_track.csv",
       "session_date": "2010-05-14",
       "points": 13,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N24_20100514_1920_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20100519_2205_track.csv",
       "session_date": "2010-05-19",
       "points": 19,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T23_20100519_2016_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20100522_0011_track.csv",
       "session_date": "2010-05-21",
       "points": 21,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N25_20100522_0020_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20100524_2235_track.csv",
       "session_date": "2010-05-24",
       "points": 12,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N26_20100524_2220_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20100525_2248_track.csv",
       "session_date": "2010-05-25",
       "points": 16,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T25_20100525_2238_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20100525_2320_track.csv",
       "session_date": "2010-05-25",
       "points": 15,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T24_20100525_2320_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20100602_2212_track.csv",
       "session_date": "2010-06-02",
       "points": 30,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N27_20100602_2235_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20100604_0017_track.csv",
       "session_date": "2010-06-03",
       "points": 13,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N28_20100603_2348_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20100606_2208_track.csv",
       "session_date": "2010-06-06",
       "points": 24,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N29_20100606_2156_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20100607_2352_track.csv",
       "session_date": "2010-06-07",
       "points": 13,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T26_20100607_2326_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20100608_0056_track.csv",
       "session_date": "2010-06-07",
       "points": 15,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T27_20100608_0050_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20100610_0103_track.csv",
       "session_date": "2010-06-09",
       "points": 19,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N30_20100610_0023_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20100610_2300_track.csv",
       "session_date": "2010-06-10",
       "points": 27,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N31_20100610_2325_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20100611_0119_track.csv",
       "session_date": "2010-06-10",
       "points": 20,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T28_20100611_0104_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20100611_2305_track.csv",
       "session_date": "2010-06-11",
       "points": 13,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T29_20100611_2305_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20100612_1948_track.csv",
       "session_date": "2010-06-12",
       "points": 14,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T30_20100612_2000_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20100613_2024_track.csv",
       "session_date": "2010-06-13",
       "points": 21,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T31_20100613_1955_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20100614_1914_track.csv",
       "session_date": "2010-06-14",
       "points": 12,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T32_20100614_1900_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20170522_2147_track.csv",
       "session_date": "2017-05-22",
       "points": 60,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N33_20170522_2120_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20170528_0014_track.csv",
       "session_date": "2017-05-27",
       "points": 35,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N34_20170527_2325_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20170528_0250_track.csv",
       "session_date": "2017-05-27",
       "points": 43,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T33_20170528_0250_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20170601_0000_track.csv",
       "session_date": "2017-05-31",
       "points": 21,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N35_20170601_0005_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20170609_2343_track.csv",
       "session_date": "2017-06-09",
       "points": 29,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N36_20170609_2230_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20170612_2209_track.csv",
       "session_date": "2017-06-12",
       "points": 15,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T34_20170612_2120_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20170612_2334_track.csv",
       "session_date": "2017-06-12",
       "points": 16,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T35_20170612_2314_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20170612_2353_track.csv",
       "session_date": "2017-06-12",
       "points": 39,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T36_20170612_2314_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20170613_2258_track.csv",
       "session_date": "2017-06-13",
       "points": 24,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N37_20170613_2228_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20190517_2227_track.csv",
       "session_date": "2019-05-17",
       "points": 60,
-      "updated_at": "2026-09-28 14:17:47",
-      "origin": "MESO-VIEW tornadic/T6_20190517_2251_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:47"
     },
     {
       "file": "storm_20190520_2047_track.csv",
       "session_date": "2019-05-20",
       "points": 75,
-      "updated_at": "2026-09-28 14:17:47",
-      "origin": "MESO-VIEW tornadic/T7_20190520_2030_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:47"
     },
     {
       "file": "storm_20190524_2010_track.csv",
       "session_date": "2019-05-24",
       "points": 47,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N5_20190524_2007_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20190526_2129_track.csv",
       "session_date": "2019-05-26",
       "points": 55,
-      "updated_at": "2026-09-28 14:17:47",
-      "origin": "MESO-VIEW tornadic/T8_20190526_2114_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:47"
     },
     {
       "file": "storm_20190527_2254_track.csv",
       "session_date": "2019-05-27",
       "points": 30,
-      "updated_at": "2026-09-28 14:17:47",
-      "origin": "MESO-VIEW tornadic/T9_20190527_2254_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:47"
     },
     {
       "file": "storm_20190528_2200_track.csv",
       "session_date": "2019-05-28",
       "points": 36,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T10_20190528_2200_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20190528_2204_track.csv",
       "session_date": "2019-05-28",
       "points": 26,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N6_20190528_2222_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20190609_0139_track.csv",
       "session_date": "2019-06-08",
       "points": 28,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T11_20190608_2340_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20190612_0021_track.csv",
       "session_date": "2019-06-11",
       "points": 36,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N32_20190611_2354_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20190615_2314_track.csv",
       "session_date": "2019-06-15",
       "points": 21,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N7_20190615_2333_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20220523_2333_track.csv",
       "session_date": "2022-05-23",
       "points": 23,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T12_20220523_2319_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20220531_2320_track.csv",
       "session_date": "2022-05-31",
       "points": 24,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T13_20220531_2128_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20220606_2132_track.csv",
       "session_date": "2022-06-06",
       "points": 28,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N8_20220606_2142_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20220606_2245_track.csv",
       "session_date": "2022-06-06",
       "points": 35,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N9_20220606_2255_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20220607_2237_track.csv",
       "session_date": "2022-06-07",
       "points": 36,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T14_20220607_2232_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20220607_2343_track.csv",
       "session_date": "2022-06-07",
       "points": 30,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T15_20220607_2349_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20220609_2255_track.csv",
       "session_date": "2022-06-09",
       "points": 37,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N10_20220609_2320_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20220610_0051_track.csv",
       "session_date": "2022-06-09",
       "points": 38,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N11_20220610_0114_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20220612_0216_track.csv",
       "session_date": "2022-06-11",
       "points": 29,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N12_20220612_0119_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20220612_2222_track.csv",
       "session_date": "2022-06-12",
       "points": 36,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N13_20220612_2149_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20220613_0024_track.csv",
       "session_date": "2022-06-12",
       "points": 33,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N14_20220613_0000_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20230523_2200_track.csv",
       "session_date": "2023-05-23",
       "points": 18,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N15_20230523_2209_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20230523_2229_track.csv",
       "session_date": "2023-05-23",
       "points": 25,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T16_20230523_2244_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20230525_0029_track.csv",
       "session_date": "2023-05-24",
       "points": 28,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T17_20230525_0015_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20230527_0025_track.csv",
       "session_date": "2023-05-26",
       "points": 25,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N16_20230527_0031_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20230528_0010_track.csv",
       "session_date": "2023-05-27",
       "points": 15,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T18_20230528_0015_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20230601_2217_track.csv",
       "session_date": "2023-06-01",
       "points": 20,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N17_20230601_2238_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20230602_1802_track.csv",
       "session_date": "2023-06-02",
       "points": 13,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T19_20230602_1825_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20230609_2210_track.csv",
       "session_date": "2023-06-09",
       "points": 16,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N18_20230609_2200_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20230609_2242_track.csv",
       "session_date": "2023-06-09",
       "points": 19,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N19_20230609_2259_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20230611_2214_track.csv",
       "session_date": "2023-06-11",
       "points": 24,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N20_20230611_2200_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20230612_2121_track.csv",
       "session_date": "2023-06-12",
       "points": 22,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N21_20230612_2148_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20230612_2245_track.csv",
       "session_date": "2023-06-12",
       "points": 25,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N22_20230612_2313_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20230612_2355_track.csv",
       "session_date": "2023-06-12",
       "points": 23,
-      "updated_at": "2026-09-28 14:17:43",
-      "origin": "MESO-VIEW nontornadic/N23_20230613_0015_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:43"
     },
     {
       "file": "storm_20230615_2259_track.csv",
       "session_date": "2023-06-15",
       "points": 20,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW tornadic/T20_20230615_2315_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20240427_1844_track.csv",
       "session_date": "2024-04-27",
       "points": 38,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N38_20240427_1815_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20240427_2011_track.csv",
       "session_date": "2024-04-27",
       "points": 41,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N39_20240427_2027_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20240427_2156_track.csv",
       "session_date": "2024-04-27",
       "points": 44,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N40_20240427_2140_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20240427_2317_track.csv",
       "session_date": "2024-04-27",
       "points": 35,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T37_20240427_2240_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20240430_2317_track.csv",
       "session_date": "2024-04-30",
       "points": 42,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N41_20240430_2330_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20240506_2313_track.csv",
       "session_date": "2024-05-06",
       "points": 46,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T38_20240506_2233_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20240506_2318_track.csv",
       "session_date": "2024-05-06",
       "points": 41,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N42_20240506_2347_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20240507_0138_track.csv",
       "session_date": "2024-05-06",
       "points": 33,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N43_20240507_0203_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20240519_2358_track.csv",
       "session_date": "2024-05-19",
       "points": 30,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T40_20240519_2305_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20240523_2337_track.csv",
       "session_date": "2024-05-23",
       "points": 45,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T39_20240523_2147_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20240525_2248_track.csv",
       "session_date": "2024-05-25",
       "points": 34,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T41_20240525_2237_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20240526_0036_track.csv",
       "session_date": "2024-05-25",
       "points": 37,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N44_20240526_0039_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20240530_2251_track.csv",
       "session_date": "2024-05-30",
       "points": 32,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N45_20240530_2244_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20240531_0033_track.csv",
       "session_date": "2024-05-30",
       "points": 42,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N46_20240531_0053_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20240531_0146_track.csv",
       "session_date": "2024-05-30",
       "points": 18,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N47_20240531_0205_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20240617_0016_track.csv",
       "session_date": "2024-06-16",
       "points": 27,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N48_20240616_2332_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20250404_1946_track.csv",
       "session_date": "2025-04-04",
       "points": 37,
-      "updated_at": "2026-09-28 14:17:44",
-      "origin": "MESO-VIEW nontornadic/N49_20250404_1953_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:44"
     },
     {
       "file": "storm_20250404_2115_track.csv",
       "session_date": "2025-04-04",
       "points": 64,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T42_20250404_2121_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20250424_2223_track.csv",
       "session_date": "2025-04-24",
       "points": 28,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T43_20250424_2233_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20250424_2241_track.csv",
       "session_date": "2025-04-24",
       "points": 60,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T44_20250424_2346_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20250424_2339_track.csv",
       "session_date": "2025-04-24",
       "points": 35,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T45_20250425_0041_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20250425_2029_track.csv",
       "session_date": "2025-04-25",
       "points": 81,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T46_20250425_1954_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20250428_2324_track.csv",
       "session_date": "2025-04-28",
       "points": 26,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N50_20250428_2330_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20250429_0111_track.csv",
       "session_date": "2025-04-28",
       "points": 43,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N51_20250429_0119_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20250429_2254_track.csv",
       "session_date": "2025-04-29",
       "points": 39,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T47_20250429_2103_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20250505_2158_track.csv",
       "session_date": "2025-05-05",
       "points": 49,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N52_20250505_2158_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20250518_2223_track.csv",
       "session_date": "2025-05-18",
       "points": 31,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T48_20250518_2221_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20250519_1914_track.csv",
       "session_date": "2025-05-19",
       "points": 29,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N53_20250519_1921_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20250519_2035_track.csv",
       "session_date": "2025-05-19",
       "points": 24,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N54_20250519_2045_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20250519_2208_track.csv",
       "session_date": "2025-05-19",
       "points": 28,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N55_20250519_2215_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20250605_2206_track.csv",
       "session_date": "2025-06-05",
       "points": 27,
-      "updated_at": "2026-09-28 14:17:46",
-      "origin": "MESO-VIEW tornadic/T49_20250605_2050_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:46"
     },
     {
       "file": "storm_20250608_2031_track.csv",
       "session_date": "2025-06-08",
       "points": 59,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N56_20250608_2015_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20260427_0127_track.csv",
       "session_date": "2026-04-26",
       "points": 28,
-      "updated_at": "2026-09-28 14:17:47",
-      "origin": "MESO-VIEW tornadic/T51_20260427_0156_new.csv"
+      "updated_at": "2026-09-28 14:17:47"
     },
     {
       "file": "storm_20260517_2135_track.csv",
       "session_date": "2026-05-17",
       "points": 30,
-      "updated_at": "2026-09-28 14:17:47",
-      "origin": "MESO-VIEW tornadic/T50_20260517_2140_autosave_edited.csv"
+      "updated_at": "2026-09-28 14:17:47"
     },
     {
       "file": "storm_20260608_2323_track.csv",
       "session_date": "2026-06-08",
       "points": 25,
-      "updated_at": "2026-09-28 14:17:45",
-      "origin": "MESO-VIEW nontornadic/N57_20260608_2323_new.csv"
+      "updated_at": "2026-09-28 14:17:45"
     },
     {
       "file": "storm_20260611_0056_track.csv",
       "session_date": "2026-06-10",
       "points": 24,
-      "updated_at": "2026-09-28 14:17:47",
-      "origin": "MESO-VIEW tornadic/T52_20260611_0215_new.csv"
+      "updated_at": "2026-09-28 14:17:47"
     }
   ]
 }

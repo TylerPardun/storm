@@ -77,7 +77,7 @@ from core.drawing import DrawingAnnotation, DRAWING_TYPE_MAP, FRONT_TYPE_KEYS
 from core.observation import Observation
 from core.vehicle import Vehicle
 from core.storm_track import (
-    TrackPoint, case_id_for, default_track_dir, new_track_path, read_track_file, unused_path,
+    TrackPoint, default_track_dir, new_track_path, read_track_file, unused_path,
     track_filename, write_track_csv, write_track_excel,
 )
 from network.mqtt_client import MQTTClient
@@ -2412,7 +2412,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 target = same or unused_path(folder / name)
                 if same is None:
                     target.write_bytes(data)
-                    workspace.record_track(day, target, data.count(b"\n") - 1, origin=f"package {path.name}")
+                    workspace.record_track(day, target, data.count(b"\n") - 1)
                 imported.append(target)
             self._refresh_track_workspace_lists()
             self._open_track(imported[0], confirmed=True)
@@ -5359,7 +5359,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._track_edit_active = False
         self._track_loaded_path = None     # file the track was loaded from, if any
         self._track_original: list[TrackPoint] = []  # as loaded, for Reset to Original
-        self._track_case_id = ""           # MESO-VIEW case ID carried by the file
         self._track_origin = ""            # file an imported track was copied from
         self._track_undo: list[list[TrackPoint]] = []
         self._track_redo: list[list[TrackPoint]] = []
@@ -5457,7 +5456,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         current_id = self._nearest_track_point_id(self._time_ctrl.current_time)
         coords = []
         features = []
-        for p in self._track_points:
+        total = len(self._track_points)
+        for n, p in enumerate(self._track_points, start=1):
             coords.append([p.lon, p.lat])
             if p.point_id == self._track_selected_id:
                 state = "selected"
@@ -5465,10 +5465,17 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 state = "current"
             else:
                 state = "normal"
+            radar = " ".join(x for x in (
+                p.radar_site, p.product_label or p.product,
+                f"{p.tilt_deg:.1f}°" if p.tilt_deg is not None else "") if x)
             features.append({
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [p.lon, p.lat]},
-                "properties": {"point_id": p.point_id, "state": state},
+                "properties": {    # the hover label shows these
+                    "point_id": p.point_id, "state": state,
+                    "time": p.time.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    "order": f"Point {n} of {total}", "radar": radar,
+                },
             })
         if len(coords) >= 2:
             features.append({
@@ -5479,9 +5486,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.map_widget.set_track_geojson(json.dumps({"type": "FeatureCollection", "features": features}))
 
     def _track_workspace(self):
-        from core.workspace import DEFAULT_WORKSPACE, Workspace
+        """Where this user's tracks and edits go. Never the shared
+        Pardun_Tracks: it stays exactly as it came with STORM."""
+        from core.workspace import DEFAULT_WORKSPACE, SHARED_WORKSPACE, Workspace
         name = QSettings("NSSL", "STORM").value("track/workspace", DEFAULT_WORKSPACE, type=str)
-        return Workspace(name or DEFAULT_WORKSPACE)
+        workspace = Workspace(name or DEFAULT_WORKSPACE)
+        return Workspace(DEFAULT_WORKSPACE) if workspace.name == SHARED_WORKSPACE else workspace
 
     def _track_session_day(self):
         return self._archive_time.astimezone(timezone.utc).date()
@@ -5503,12 +5513,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 self._track_saved_path = new_track_path(min(p.time for p in self._track_points), folder)
         try:
             if self._track_saved_path.suffix.lower() == ".xlsx":
-                write_track_excel(self._track_points, self._track_saved_path, self._track_case_id)
+                write_track_excel(self._track_points, self._track_saved_path)
             else:
-                write_track_csv(self._track_points, self._track_saved_path, self._track_case_id)
+                write_track_csv(self._track_points, self._track_saved_path)
             if workspace.contains(self._track_saved_path):
-                workspace.record_track(day, self._track_saved_path, len(self._track_points),
-                                       origin=self._track_origin)
+                workspace.record_track(day, self._track_saved_path, len(self._track_points))
                 self._refresh_track_workspace_lists()
             if first_save:
                 self._notify_track_saved(self._track_saved_path)
@@ -5520,11 +5529,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         """The date's tracks from every workspace -- the active one first --
         so the shared Pardun_Tracks show up next to the user's own.
         Opening one from another workspace edits a copy in the active one."""
-        from core.workspace import list_workspaces
+        from core.workspace import editable_workspaces
         if not hasattr(self, "track_controls"):
             return
         workspace = self._track_workspace()
-        self.track_controls.set_workspaces(list_workspaces(), workspace.name)
+        self.track_controls.set_workspaces(editable_workspaces(), workspace.name)
         tracks = []
         for t in self._session_tracks():
             where = "" if t["workspace"] == workspace.name else f"[{t['workspace']}] "
@@ -5593,7 +5602,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         from PyQt6.QtWidgets import QInputDialog
         from core.workspace import clean_name
         text, ok = QInputDialog.getText(self, "New Workspace", "Name for the new workspace:")
+        from core.workspace import SHARED_WORKSPACE
         name = clean_name(text) if ok else ""
+        if name == SHARED_WORKSPACE or name == "MESO-VIEW":
+            self.status_msg_label.setText(f"{SHARED_WORKSPACE} holds the shared tracks; pick another name")
+            name = ""
         if not name:
             self._refresh_track_workspace_lists()   # put the combo back
             return
@@ -5844,7 +5857,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._track_loaded_path = Path(path)
         self._track_saved_path = Path(path) if in_workspace else None
         self._track_origin = "" if in_workspace else str(path)
-        self._track_case_id = case_id_for(path)
         self._track_original = list(points)
         self._track_undo.clear()
         self._track_redo.clear()
@@ -5929,9 +5941,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if p.suffix.lower() not in (".csv", ".xlsx"):
             p = p.with_suffix(".xlsx" if "xlsx" in selected_filter else ".csv")
         if p.suffix.lower() == ".xlsx":
-            write_track_excel(self._track_points, p, self._track_case_id)
+            write_track_excel(self._track_points, p)
         else:
-            write_track_csv(self._track_points, p, self._track_case_id)
+            write_track_csv(self._track_points, p)
         self.status_msg_label.setText(f"Track exported to {p}")
         self._notify_track_saved(p, "exported")
 

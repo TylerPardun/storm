@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from core.storm_track import read_track_file
 from ui.app.main_window import MainWindow
 from ui.controls.track_controls import TrackControls
 
@@ -196,10 +197,10 @@ def test_an_imported_track_is_edited_as_a_workspace_copy(tmp_path, monkeypatch):
     copy = tmp_path / "ws" / "My work" / track.name
     assert w._track_saved_path == copy
     df = pd.read_csv(copy)
-    assert len(df) == 3 and set(df["case_id"]) == {"T10"}   # still a MESO-VIEW T10 track
+    assert len(df) == 3 and "case_id" not in df.columns      # the whole track, as a STORM track
     assert track.read_text() == _MESO_VIEW_CSV              # original untouched
     manifest = json.loads((copy.parent / "manifest.json").read_text())
-    assert manifest["tracks"][0]["origin"] == str(track)
+    assert manifest["tracks"][0]["file"] == track.name
 
     _yes(monkeypatch)
     w._reset_track_to_original()
@@ -477,3 +478,32 @@ def test_a_point_can_be_placed_before_any_radar_is_chosen(tmp_path, monkeypatch)
     w.radar_controls = type("R", (), {"current_product": lambda self: "reflectivity"})()
     context = MainWindow.__dict__["_current_track_radar_context"](w)
     assert context[0] == "" and context[1] == "reflectivity"      # no radar yet: no crash, blank site
+
+
+@pytest.mark.parametrize("saved", ["Pardun_Tracks", "MESO-VIEW"])
+def test_the_shared_tracks_are_never_edited_in_place(tmp_path, monkeypatch, saved):
+    original = _shared_track(tmp_path)
+    before = original.read_bytes()
+    w = _window(tmp_path, monkeypatch)
+    _Settings.store["track/workspace"] = saved             # even if chosen as the workspace
+    assert w._track_workspace().name == "My work"
+    w._refresh_track_workspace_lists()
+    combo = w.track_controls._workspace_combo
+    assert "Pardun_Tracks" not in [combo.itemText(i) for i in range(combo.count())]
+    w._on_track_edit_toggled(True)                          # opens the shared track
+    assert w._track_loaded_path == original
+    w._on_track_point_moved(w._track_points[0].point_id, 34.02, -99.01, True)   # change one point
+    assert original.read_bytes() == before
+    copy = read_track_file(tmp_path / "ws" / "My work" / original.name)
+    assert len(copy) == 2 and (round(copy[0].lat, 2), round(copy[1].lat, 2)) == (34.02, 34.05)  # the whole track
+
+
+def test_track_points_carry_their_time_for_the_hover_label(tmp_path, monkeypatch):
+    w = _window(tmp_path, monkeypatch)
+    w._on_track_point_add(35.0, -97.0)
+    w._time_ctrl.current_time += timedelta(minutes=2)
+    w._on_track_point_add(35.1, -97.1)
+    props = [f["properties"] for f in _points(w)]
+    assert [p["time"] for p in props] == ["2024-04-27 20:00:00 UTC", "2024-04-27 20:02:00 UTC"]
+    assert [p["order"] for p in props] == ["Point 1 of 2", "Point 2 of 2"]
+    assert props[0]["radar"] == "KTLX Reflectivity 0.5°"

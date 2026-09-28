@@ -34,10 +34,10 @@ def test_tracks_listed_even_without_a_manifest_and_missing_files_dropped(tmp_pat
     (folder / "gone.csv").write_text("x")
     w.record_track(DAY, folder / "gone.csv", 3)
     (folder / "gone.csv").unlink()
-    w.record_track(DAY, folder / "kept.csv", 5, origin="/elsewhere/kept.csv")
+    w.record_track(DAY, folder / "kept.csv", 5)
     manifest = json.loads((folder / "manifest.json").read_text())
     assert [t["file"] for t in manifest["tracks"]] == ["kept.csv"]
-    assert manifest["tracks"][0]["origin"] == "/elsewhere/kept.csv"
+    assert set(manifest["tracks"][0]) == {"file", "session_date", "points", "updated_at"}
     assert manifest["tracks"][0]["session_date"] == "2024-04-27"
     assert w.tracks(DAY)[0]["path"].name == "kept.csv"          # most recent first
 

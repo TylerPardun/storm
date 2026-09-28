@@ -8,9 +8,10 @@ create or edit -- lives in one known place:
         ...
 
 "Pardun_Tracks" holds the shared tracks that come with STORM
-(scripts/import_mesoview_tracks.py); users work in their own workspace
-("My work" by default), where opening a shared track edits a copy of the
-same name.
+(scripts/import_mesoview_tracks.py). STORM never changes them: users work in
+their own workspace ("My work" by default), where editing a shared track
+saves the whole track as a copy of the same name -- and from then on that
+copy is the one STORM opens.
 
 A track belongs to the archive session it was drawn in, recorded in the
 manifest. A file the manifest doesn't know goes by its first point: before
@@ -55,6 +56,11 @@ def list_workspaces(root: Path | None = None) -> list[str]:
     root = root or workspaces_root()
     names = sorted(p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")) if root.is_dir() else []
     return names if DEFAULT_WORKSPACE in names else [DEFAULT_WORKSPACE] + names
+
+
+def editable_workspaces(root: Path | None = None) -> list[str]:
+    """The workspaces a user can save into: all but the shared one."""
+    return [name for name in list_workspaces(root) if name != SHARED_WORKSPACE]
 
 
 def tracks_for_date(session_day: date, root: Path | None = None) -> list[dict]:
@@ -124,7 +130,7 @@ class Workspace:
 
     def tracks(self, session_day: date) -> list[dict]:
         """This date's tracks, most recently edited first: dicts with
-        path, points, updated_at and origin (file it was copied from, or "")."""
+        path, points and updated_at."""
         if not self.root.is_dir():
             return []
         known = {t.get("file"): t for t in self._read_manifest().get("tracks", [])}
@@ -145,24 +151,20 @@ class Workspace:
                 "points": entry.get("points"),
                 "updated_at": entry.get("updated_at") or datetime.fromtimestamp(
                     path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                "origin": entry.get("origin", ""),
             })
         return sorted(found, key=lambda t: t["updated_at"], reverse=True)
 
-    def record_track(self, session_day: date, path: Path, points: int, origin: str = "") -> None:
+    def record_track(self, session_day: date, path: Path, points: int) -> None:
         """Note a saved track, and the session it belongs to, in the manifest."""
         path = Path(path)
         manifest = self._read_manifest()
         entries = {t.get("file"): t for t in manifest.get("tracks", [])
                    if (self.root / str(t.get("file"))).exists()}
-        previous = entries.get(path.name, {})
         entries[path.name] = {
-            **previous,                     # keeps any extra fields
             "file": path.name,
             "session_date": session_day.isoformat(),
             "points": points,
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            "origin": origin or previous.get("origin", ""),
         }
         manifest.update({
             "workspace": self.name,

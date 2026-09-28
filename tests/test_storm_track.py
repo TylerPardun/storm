@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from core.storm_track import (
-    TrackPoint, case_id_for, new_track_path, read_track_file, track_filename,
+    TrackPoint, new_track_path, read_track_file, track_filename,
     write_track_csv, write_track_excel,
 )
 
@@ -40,12 +40,11 @@ def test_write_track_csv_round_trips_every_field(tmp_path):
     write_track_csv(_points(), path)
 
     df = pd.read_csv(path)
-    # MESO-VIEW's own columns first (its reader needs them), then STORM's
+    # only what STORM uses -- no case IDs or other MESO-VIEW bookkeeping
     assert list(df.columns) == [
-        "point_id", "time", "lat", "lon", "source", "case_id", "track_file_kind", "edited_at",
+        "point_id", "time", "lat", "lon", "source",
         "radar_site", "product", "product_label", "tilt_deg",
     ]
-    assert set(df["track_file_kind"]) == {"complete"}
     assert df["point_id"].tolist() == [1, 2]
     assert df["time"].tolist() == ["2024-04-27 20:00:00", "2024-04-27 20:05:00"]
     assert df["lat"].tolist() == [35.123456, 35.2]
@@ -109,7 +108,10 @@ def test_meso_view_track_files_load(tmp_path):
     assert round(points[2].lat, 6) == 39.049055
     assert points[2].source == "moved_retimed"
     assert points[0].radar_site == "" and points[0].tilt_deg is None
-    assert case_id_for(path) == "T10"
+    write_track_csv(points, path)                            # saved back as a STORM track
+    assert "case_id" not in pd.read_csv(path).columns
+    assert [(p.time, round(p.lat, 6), p.source) for p in read_track_file(path)] == \
+        [(p.time, round(p.lat, 6), p.source) for p in points]
 
 
 def test_hand_made_tables_with_other_column_names_load_in_time_order(tmp_path):
@@ -120,17 +122,15 @@ def test_hand_made_tables_with_other_column_names_load_in_time_order(tmp_path):
 
     assert [(p.lat, p.time.minute) for p in points] == [(35.1, 0), (35.2, 5)]
     assert [p.point_id for p in points] == [1, 2]
-    assert case_id_for(path) == ""
 
 
 def test_saved_tracks_load_back_unchanged(tmp_path):
     for name, writer in (("t.csv", write_track_csv), ("t.xlsx", write_track_excel)):
         path = tmp_path / name
-        writer(_points(), path, case_id="T37")
+        writer(_points(), path)
         assert read_track_file(path) == [
             TrackPoint(**{**p.__dict__, "source": "manual"}) for p in _points()
         ]
-        assert set(pd.read_csv(path)["case_id"]) == {"T37"} if name.endswith(".csv") else True
 
 
 def test_a_file_without_times_or_positions_is_refused(tmp_path):

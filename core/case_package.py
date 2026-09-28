@@ -8,7 +8,7 @@ Layout:
                    velocity options), provenance for every loaded file (URL,
                    SHA-256, whether it's included) and the included files
     README.txt     the same, readable
-    tracks/*.csv   the workspace's storm tracks for the date (MESO-VIEW format)
+    tracks/*.csv   the date's storm tracks (STORM track CSVs)
     data/<type>/*  included source files, byte for byte as downloaded
 
 Opening a package imports its tracks, restores the case, and serves the

@@ -1326,6 +1326,13 @@
       });
       map.on('mouseleave', 'storm-track-points', function() {
         if (window._trackEditActive && !window._trackDrag) map.getCanvas().style.cursor = 'crosshair';
+        _hideTrackPointHover();
+      });
+      // Hover label: the point's time, like the damage-path points (and
+      // MESO-VIEW's track readout). Hidden while a point is being dragged.
+      map.on('mousemove', 'storm-track-points', function(e) {
+        if (window._trackDrag || !e.features || !e.features.length) { _hideTrackPointHover(); return; }
+        _showTrackPointHover(e.features[0], e);
       });
 
       // The track's reference marker (MESO-VIEW's review marker): one per
@@ -2097,6 +2104,24 @@
       tip.style.top  = (e.originalEvent.clientY - mc.top  - 10) + 'px';
       tip.style.display = 'block';
     }
+
+    function _showTrackPointHover(feature, e) {
+      var tip = document.getElementById('damage-path-tooltip');
+      if (!tip) return;
+      var p = feature.properties || {};
+      var c = feature.geometry.coordinates;
+      tip.innerHTML =
+        '<div class="title">' + (p.time || '—') + '</div>' +
+        '<div>Storm track · ' + (p.order || '') + '</div>' +
+        (p.radar ? '<div class="muted">' + p.radar + '</div>' : '') +
+        '<div class="muted">Lat ' + Number(c[1]).toFixed(4) + '  Lon ' + Number(c[0]).toFixed(4) + '</div>';
+      var mc = map.getContainer().getBoundingClientRect();
+      tip.style.left = (e.originalEvent.clientX - mc.left + 14) + 'px';
+      tip.style.top  = (e.originalEvent.clientY - mc.top  - 10) + 'px';
+      tip.style.display = 'block';
+    }
+
+    function _hideTrackPointHover() { _hideDamagePathHover(); }
 
     function _hideDamagePathHover() {
       var tip = document.getElementById('damage-path-tooltip');

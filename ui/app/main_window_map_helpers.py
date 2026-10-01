@@ -1,5 +1,4 @@
 
-import sqlite3
 from datetime import datetime, timezone
 
 from ui.widgets.layer_order_pill import MAPLIBRE_LAYERS
@@ -44,18 +43,8 @@ class MainWindowMapHelpersMixin:
         return nearest["site_id"]
 
     def _load_mbtiles_bounds(self) -> tuple[float, float, float, float] | None:
-        try:
-            conn = sqlite3.connect(TILES_PATH)
-            row = conn.execute(
-                "SELECT value FROM metadata WHERE name='bounds'"
-            ).fetchone()
-            conn.close()
-            if not row or not row[0]:
-                return None
-            west, south, east, north = (float(value) for value in row[0].split(","))
-            return west, south, east, north
-        except Exception:
-            return None
+        from core import mbtiles      # read-only: never creates a missing file
+        return mbtiles.bounds(TILES_PATH)
 
     @staticmethod
     def _point_in_bounds(

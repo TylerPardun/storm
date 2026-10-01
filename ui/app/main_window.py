@@ -2124,6 +2124,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             "color: #9BA3B2; font-size: 10px; font-weight: 500; letter-spacing: 0.5px;"
         )
         row0.addWidget(self.status_msg_label)
+        from ui.map.html import basemap_source
+        if basemap_source() == "online":
+            self.status_msg_label.setText("Map: online tiles (no tiles/storm.mbtiles)")
+            self.status_msg_label.setToolTip("The base map loads from OpenFreeMap while connected. "
+                                             "Put storm.mbtiles in the tiles folder to use it offline.")
         row0.addStretch()
 
         row1 = QHBoxLayout()
@@ -3364,23 +3369,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._hazard_error_clear_timer.timeout.connect(self._clear_hazard_error)
 
         # seed NWS bbox from MBTiles domain extent so warnings are filtered
-        try:
-            import sqlite3 as _sqlite3
-            from ui.map.widget import TILES_PATH as _TILES_PATH
-            _conn = _sqlite3.connect(_TILES_PATH)
-            _row = _conn.execute(
-                "SELECT value FROM metadata WHERE name='bounds'"
-            ).fetchone()
-            _conn.close()
-            if _row:
-                _lon_min, _lat_min, _lon_max, _lat_max = (
-                    float(x) for x in _row[0].split(",")
-                )
-                self._hazard_fetcher.set_nws_bbox(
-                    _lon_min, _lat_min, _lon_max, _lat_max
-                )
-        except Exception:
-            pass
+        from core import mbtiles
+        from ui.map.widget import TILES_PATH as _TILES_PATH
+        _bounds = mbtiles.bounds(_TILES_PATH)     # None with online map tiles
+        if _bounds:
+            self._hazard_fetcher.set_nws_bbox(*_bounds)
 
         # load persisted NWS filter selections from QSettings and apply.
         try:

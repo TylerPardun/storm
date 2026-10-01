@@ -8,6 +8,8 @@ import base64
 from urllib.parse import unquote
 
 from PyQt6.QtCore import QBuffer, QByteArray, QIODevice
+
+from core import mbtiles
 from PyQt6.QtWebEngineCore import QWebEngineUrlRequestJob, QWebEngineUrlSchemeHandler
 
 log = logging.getLogger(__name__)
@@ -148,7 +150,7 @@ class StormSchemeHandler(QWebEngineUrlSchemeHandler):
 
         try:
             # open a new connection per request — safe across WebEngine IO threads
-            conn = sqlite3.connect(self._mbtiles_path)
+            conn = mbtiles.connect(self._mbtiles_path)
             try:
                 cursor = conn.cursor()
                 cursor.execute(
@@ -195,7 +197,7 @@ class StormSchemeHandler(QWebEngineUrlSchemeHandler):
 
         y_tms = (1 << z) - 1 - y
         try:
-            conn = sqlite3.connect(self._nlcd_mbtiles_path)
+            conn = mbtiles.connect(self._nlcd_mbtiles_path)
             try:
                 cursor = conn.cursor()
                 cursor.execute(
@@ -235,7 +237,7 @@ class StormSchemeHandler(QWebEngineUrlSchemeHandler):
 
         y_tms = (1 << z) - 1 - y
         try:
-            conn = sqlite3.connect(self._satellite_mbtiles_path)
+            conn = mbtiles.connect(self._satellite_mbtiles_path)
             try:
                 cursor = conn.cursor()
                 cursor.execute(

@@ -274,17 +274,12 @@ def _warn_missing_files() -> None:
     dialogs render correctly.  Warnings are non-fatal — the app continues in a
     degraded state so the user can at least see what is wrong.
     """
-    tiles_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "tiles", "storm.mbtiles")
-    )
-    if not os.path.exists(tiles_path):
-        QMessageBox.warning(
-            None,
-            "Missing Map Tiles",
-            f"Map tiles file not found:\n\n  {tiles_path}\n\n"
-            "The map will not render correctly.\n"
-            "Ensure 'tiles/storm.mbtiles' is present in the application directory.",
-        )
+    # no tiles/storm.mbtiles: the base map comes over the network instead
+    # (ui/map/html.py), so it's a note in the log and the status bar, not a warning
+    from ui.map.html import TILES_PATH, basemap_source  # noqa: PLC0415
+    if basemap_source() == "online":
+        logging.getLogger(__name__).info(
+            "Map tiles: %s not found; using online tiles (OpenFreeMap) while connected", TILES_PATH)
 
     if runtime_flags.FLAGS.disable_mqtt:
         return

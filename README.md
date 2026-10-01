@@ -125,7 +125,7 @@ Typical steps:
 
 ### 3. Download the map tiles
 
-The MBTiles file is too large for git and is hosted separately.
+The MBTiles file is too large for git and is hosted separately. It is needed only to use the map with no internet connection: without `tiles/storm.mbtiles`, STORM loads the same base map from [OpenFreeMap](https://openfreemap.org) (OpenStreetMap data, no account or key) whenever the computer is online.
 
 **[Download tiles/ folder (Google Drive)](https://drive.google.com/drive/folders/1q4DJ-mg94tpDWHLEkQ_50oQ3uauQ77it?usp=sharing)**
 

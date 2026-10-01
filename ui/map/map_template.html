@@ -977,6 +977,36 @@
       keyboard: true
     });
 
+    // Base map tiles from the network (no tiles/storm.mbtiles, ui/map/html.py)
+    // that can't be reached: say so on the map instead of leaving it blank,
+    // and keep retrying (Wi-Fi may come up after STORM starts). The notice
+    // clears once the source loads.
+    let basemapNotice = null;
+    let basemapRetry = null;
+    map.on("error", (e) => {
+      if (!e || e.sourceId !== "storm-tiles") return;
+      const source = map.getSource("storm-tiles");
+      if (!basemapNotice) {
+        basemapNotice = document.createElement("div");
+        basemapNotice.textContent = "Base map unavailable: no local map tiles (tiles/storm.mbtiles) " +
+          "and the online map can't be reached. Data layers still work.";
+        basemapNotice.style.cssText = "position:absolute;top:96px;left:50%;transform:translateX(-50%);" +
+          "z-index:5;max-width:460px;padding:5px 9px;border-radius:6px;border:1px solid #49536F;" +
+          "background:#0F0F1A;color:#E8EDF5;font:12px 'Helvetica Neue',sans-serif;text-align:center;" +
+          "pointer-events:none";
+        document.getElementById("map").appendChild(basemapNotice);
+      }
+      if (source && !source.loaded() && !basemapRetry && typeof source.load === "function") {
+        basemapRetry = setTimeout(() => { basemapRetry = null; source.load(); }, 20000);
+      }
+    });
+    map.on("sourcedata", (e) => {
+      if (basemapNotice && e.sourceId === "storm-tiles" && (e.tile || e.sourceDataType === "metadata")) {
+        basemapNotice.remove();
+        basemapNotice = null;
+      }
+    });
+
     map.addControl(new maplibregl.NavigationControl({
       showCompass: false,
       showZoom: true,

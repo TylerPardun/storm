@@ -54,7 +54,7 @@ STORM is a standalone desktop application purpose-built for severe weather storm
 |-----------|-----------|
 | UI Framework | PyQt6 (QMainWindow + QWebEngineView) |
 | Map Renderer | MapLibre GL JS (embedded in browser engine) |
-| Vector Tiles | Offline MBTiles served via custom `storm://` URL scheme |
+| Vector Tiles | Offline MBTiles served via custom `storm://` URL scheme; online OpenFreeMap tiles when `tiles/storm.mbtiles` is absent |
 | Optional Base Layers | Offline NLCD and USGS satellite MBTiles |
 | Radar Decoding | MetPy + matplotlib (Level 3, Unidata THREDDS) |
 | Satellite Imagery | IEM WMS (GOES-East, GOES-West) |
@@ -81,7 +81,7 @@ python main.py
 ### Prerequisites
 - Python 3.11 via conda (Miniforge, Miniconda, or Anaconda)
 - conda environment: `storm` (created via `python setup.py` or `conda env create -f envs/storm.yml`)
-- The offline MBTiles vector tile database (`storm.mbtiles`, ~500 MB–1 GB, distributed separately)
+- The offline MBTiles vector tile database (`storm.mbtiles`, ~500 MB–1 GB, distributed separately). Optional when online: without it the base map loads from OpenFreeMap over the network
 - Optional offline base-layer MBTiles files: `storm_nlcd.mbtiles` for NLCD land cover and `satellite.mbtiles` for USGS imagery
 
 **Quick Setup:**
@@ -1578,7 +1578,7 @@ STORM uses an internal TCP port (19876) as a process lock. If a second instance 
 | "MQTT disconnected" in status bar | Certificate missing or endpoint unreachable | Verify `/aws/` certificate files exist |
 | Station plots missing | `--disable-annotations` passed | Relaunch without that flag |
 | MESO-1/2 buttons grayed out | Sectors not currently available | Wait — buttons enable automatically when sectors are active |
-| Map tiles blank/gray | `storm.mbtiles` missing or corrupted | Verify the MBTiles file is present and not zero-byte |
+| Map tiles blank/gray | No `storm.mbtiles` and no internet connection (the map says so), or a corrupted file | Connect to the internet (the map retries every 20 s), or put a valid `storm.mbtiles` in `tiles/` |
 | Slow/choppy radar rendering | Grid size too large for hardware | Use `--render-grid-size 256` |
 | Hatch patterns not visible | WebGL limitation | Known quirk; patterns are built as pixel data, not canvas — should render in all supported modes |
 
@@ -1593,7 +1593,7 @@ MapLibre GL running inside QWebEngineView cannot reliably read back canvas pixel
 The `bridge` object that connects Python and JavaScript is initialized asynchronously after the map loads. All JavaScript API functions are stubbed as no-ops (`_stormNoop`) until the bridge is ready. In practice this is transparent to the user, but very rapid actions in the first second after launch may be silently dropped.
 
 **MBTiles Files Not Included in Repository**
-The offline vector tile database (`storm.mbtiles`) is large (500 MB–1 GB) and is not included in the git repository. Optional NLCD and satellite-basemap caches are also distributed outside git. Place MBTiles files in the `tiles/` folder.
+The offline vector tile database (`storm.mbtiles`) is large (500 MB–1 GB) and is not included in the git repository. Optional NLCD and satellite-basemap caches are also distributed outside git. Place MBTiles files in the `tiles/` folder. Without `storm.mbtiles` the base map is loaded online from OpenFreeMap (same map style, OpenStreetMap data; the credit appears at the map's top right and the status line notes it), in every mode, archive included. With no connection either, the map shows a notice and keeps retrying; radar, observations and other data layers still draw.
 
 **SPC Text Product Latency**
 IEM AFOS sometimes responds slowly (up to 20 seconds per request). STORM waits patiently rather than timing out aggressively. This is normal behavior during high-traffic SPC issuance periods.
@@ -1613,7 +1613,7 @@ SPC GeoJSON products (tor, wind, hail) are typically updated once or twice daily
 
 | Feature | Default | Disabled By |
 |---------|---------|-------------|
-| Offline vector base map | ✅ Always | n/a (requires storm.mbtiles) |
+| Vector base map | ✅ Always | Offline from `tiles/storm.mbtiles`; otherwise online (OpenFreeMap) |
 | Offline NLCD land cover | ✅ Enabled when installed | Requires `tiles/storm_nlcd.mbtiles` |
 | Offline USGS satellite basemap | ✅ Enabled when installed | Requires `tiles/satellite.mbtiles` |
 | NEXRAD Radar overlay | ✅ Enabled | `--disable-radar` |

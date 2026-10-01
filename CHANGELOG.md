@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 ### Added
+- **Archive tools for every user.** Archive mode and its tools no longer require admin mode.
+- **Choosing a case.** A calendar button and year grid next to the archive date; a *Browse available cases* panel that finds dates with data in the background (newest first) and shades the calendar; *Surprise me* picks a random date with data; *Open case…* opens a case package straight from the launch window.
+- **Sessions past 00Z.** An archive session runs from the chosen day until activity ends (at most 06Z the next day), so evening cases play through midnight.
+- **Mobile mesonet (FOFS)** one-second observations from the THREDDS catalog, rebuilt around the published files' defects (including corrupted `gps_date` values).
+- **CLAMPS**: wind profiles (in the VAD viewer), TROPoe thermodynamic profiles and mobile sondes (in the sounding viewer), and trailer surface observations (met tower first, then the MWR's surface fields).
+- **NOXP mobile radar** in the radar picker, and **PERiLS CopterSonde** profiles in the sounding viewer.
+- **LIDAR**: the lidar truck and CLAMPS trailers' Doppler lidars. Pick a location on the map like a radar station; PPI/VAD scans and fixed beams drawn on the map as the clock reaches them, RHI cross-sections and vertical stares in their own viewer, scanning periods marked under the time slider. Truck scans are rotated by the recorded truck heading (estimated from the truck compass, and flagged, when missing).
+- **ASOS** observations replaying on the archive clock (draw a box to choose stations), and **damage paths** (DAT/NCEI surveys, from MESO-VIEW) with hover details.
+- **Storm tracks (TRACK)**: place, drag and delete points one per radar frame, undo/redo, a reference marker, a table of exact times and positions, storm motion from the track, and MESO-VIEW-compatible CSV/Excel files. Tracks are kept in named local workspaces under `data/storm_tracks/`; MESO-VIEW's 109 tracks ship in *Pardun_Tracks*, and TRACK opens the date's saved track automatically.
+- **Radar velocity options**: optional dealiasing and storm-relative velocity from the track's motion.
+- **Observation trails (TRAILS)**: each platform's recent path colored by a measured or derived quantity (θ, θv, θe, θw, mixing ratio, u/v, storm-relative, radial and tangential wind), wind barbs (optionally storm-relative) and time-to-space display. The sounding viewer shows the observed storm motion from the track.
+- **Case packages** (*File > Export / Open Case Package*): tracks, case settings, the provenance (URL and SHA-256) of every source file and, optionally, the data itself, limited to a chosen UTC time frame and including scans the catalogs list for it, so a case opens offline. Saved in `data/case_packages/<date>/`.
+- **Menu bar**: File (cases, map screenshot, change day), Edit (undo/redo), View (error log, debug panel) and Help (user guide, About STORM).
+- **Online base map**: without `tiles/storm.mbtiles`, the map loads from OpenFreeMap whenever the computer is online, and says so on the map (retrying) when it isn't.
+- **Replay of annotations, storm cones and drawings** as they stood at the playback time; *MAP > ANNOTATIONS* shows or hides them.
 - Colorado Mesonet surface observations are now available from the SURFACE drawer and launch dialog alongside OK Mesonet, WTM, KS Mesonet, and ASOS.
 - CO Mesonet station plots use the NSSL API-hosted `co_mesonet.json` feed with station positions and names from `co_metadata.json`.
 - Nebraska Mesonet surface observations are now available to all users from the SURFACE drawer and launch dialog.
@@ -14,6 +29,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 - Surface observation diagnostics and layer ordering now include CO and NE Mesonet as independent 5-minute mesonet sources.
+- The blocking archive-loading window is replaced by a non-blocking indicator; after a seek, the wanted radar scan loads first.
+- Archive time bar: ±10 s steps (±1 min without one-second observations), previous/next radar scan, play; EXIT sits at the map's top right; case packages moved to the File menu.
+- Hover readouts share one compact look, and self-explanatory controls no longer show one.
+- Trail colors avoid the road colors (violet scale; blue–gray–magenta for signed winds).
+- Every archive download goes through one step that uses an opened case package's copy first and records provenance.
+- Network requests try IPv4 before IPv6 (an unreachable IPv6 route had added ~6 s to each request); transient NSSL failures are retried with backoff.
+- Log lines carry the UTC date and time, a per-run session ID and the open case.
+- American spelling throughout the interface and documentation.
+- `envs/storm.yml` adds `openpyxl` (Excel storm-track files).
+
+### Fixed
+- WSR-88D archive scans occasionally drawn rotated; split-cut velocity volumes; the radar image's time now shows the scan's own acquisition time.
+- A native crash when an archive window closed during startup.
+- Pre-2020 SPC outlooks (shapefile fallback, reprojection and smoothing).
+- CLAMPS surface temperatures stored in kelvin under a °C label (shown as ~290–305 °C); CLAMPS MWR files missed by a fixed filename guess.
+- NWS CWA boundaries in archive mode; live mode finishing startup; ASOS and damage-path box drawing losing its crosshair.
+- Tooltip panels much larger than their text on macOS.
+- `scripts/create_app.sh` failing to compile its launcher with current clang.
 
 ---
 

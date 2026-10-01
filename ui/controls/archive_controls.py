@@ -80,8 +80,6 @@ class ArchiveControls(QWidget):
     tilt_changed         = pyqtSignal(int)
     product_changed      = pyqtSignal(str)
     change_day_requested = pyqtSignal()   # user confirmed exiting this session to pick a new day
-    export_case_requested = pyqtSignal()  # CASE > Export case package…
-    open_case_requested = pyqtSignal()    # CASE > Open case package…
 
     def __init__(self, time_controller: TimeController, parent=None):
         super().__init__(parent)
@@ -213,20 +211,6 @@ class ArchiveControls(QWidget):
         self._speed_combo.setFixedWidth(54)
         row2.addWidget(self._speed_combo)
 
-        self._speed_div = self._vdiv()          # hidden with the speed control
-        row2.addWidget(self._speed_div)
-
-        from PyQt6.QtWidgets import QMenu
-        case_btn = self._ctrl_btn("CASE", "Export this case's saved work and provenance, or open a case package")
-        case_btn.setFixedWidth(44)
-        case_menu = QMenu(case_btn)
-        case_menu.addAction("Export case package…", self.export_case_requested.emit)
-        case_menu.addAction("Open case package…", self.open_case_requested.emit)
-        case_btn.setMenu(case_menu)
-        case_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        case_btn.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0px; }")   # arrow overlapped the text
-        row2.addWidget(case_btn)
-
         root.addLayout(row2)
         self._precision_mode = False
 
@@ -297,7 +281,6 @@ class ArchiveControls(QWidget):
         self._btn_end.setText("+10")
         self._speed_label.setVisible(not enabled)
         self._speed_combo.setVisible(not enabled)
-        self._speed_div.setVisible(not enabled)
         self._tc.set_precision_playback(enabled)
 
     def _connect_controller(self):

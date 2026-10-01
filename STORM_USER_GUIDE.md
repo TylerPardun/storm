@@ -1022,6 +1022,15 @@ The window title and status pill display the current archive timestamp while in 
 
 ---
 
+### Menu Bar
+
+The main window has a menu bar (at the top of the screen on macOS):
+
+- **File**: Open Case Package…, Export Case Package…, Show Case Packages Folder (archive mode); Save Map Screenshot…; Exit Session and Change Day… (archive mode, same as EXIT).
+- **Edit**: Undo and Redo, for storm-track edits or the text field you're typing in.
+- **View**: Error Log and Debug Panel.
+- **Help**: this user guide and About STORM (on macOS, About is in the STORM menu).
+
 ### Archive Controls Bar
 
 A time bar sits at the bottom of the map in archive mode (it is not shown in live modes): the date and time, the radar image's time, data status (radar, satellite, observations), the timeline slider, and the playback buttons.
@@ -1030,7 +1039,7 @@ A time bar sits at the bottom of the map in archive mode (it is not shown in liv
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ARCHIVE  2026-05-17  20:00:00 UTC   15:00 CDT     Radar  Sat  OBS    │
 │ ─────────────────────────────●────────────────────────────────────── │
-│      -10     ⏮      ▶      ⏭      +10                        CASE    │
+│      -10     ⏮      ▶      ⏭      +10                                │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1046,7 +1055,7 @@ Drag the slider to any time in the session and fine-tune with the buttons or key
 
 When the session has no one-second observations, a **SPEED** dropdown (1× to 300×) sets how fast playback runs; with one-second observations, playback steps through them and the dropdown is hidden.
 
-**CASE** exports the case (a case package) or opens one.
+Case packages are opened and exported from the **File** menu (see Case packages below).
 
 **EXIT** sits on its own at the top right of the map. It asks first, then closes the session and returns to the launch screen to pick another day.
 
@@ -1437,8 +1446,11 @@ Missing certificates cause MQTT to fail silently — all other features remain o
 | Key | Action |
 |-----|--------|
 | **Escape** | Cancel active drawing / annotation placement / measurement mode |
-| **Ctrl+D** | Toggle debug panel |
-| **Ctrl+E** | Toggle error log panel |
+| **Ctrl+D** (Cmd+D on macOS) | Toggle debug panel (View > Debug Panel) |
+| **Ctrl+E** (Cmd+E on macOS) | Toggle error log panel (View > Error Log) |
+| **Ctrl+O** / **Ctrl+Shift+E** | Open / export a case package (File menu, archive mode) |
+| **Ctrl+Shift+S** | Save a map screenshot (File menu) |
+| **Ctrl+Z** / **Ctrl+Shift+Z** | Undo / redo (Edit menu: track edits, or the text field you're typing in) |
 | **Right-click** | Finish drawing or measurement in progress |
 
 **Archive playback**
@@ -1487,7 +1499,7 @@ When the truck's heading isn't known, its azimuths are labeled *relative to the 
 
 **LiDAR Truck scan orientation.** The truck's lidar files store scan directions relative to the truck, so STORM turns them to true north using the truck heading recorded in each file. When a file has no heading (all 2026 files so far), STORM estimates it from the truck's own compass in the mesonet data and the RAW LIDAR panel says so in amber; if no compass reading covers the scan either, it isn't drawn on the map and the panel says why in red. `scripts/report_missing_truck_heading.py` lists every affected file with the estimate, for the data to be fixed at the source.
 
-**Case packages (CASE button, archive bar).** *Export case package…* first asks what to include: storm tracks and each type of data the session loaded (radar volumes, mobile mesonet, recorded vehicles/annotations, CLAMPS, raw lidar, NOXP, soundings, satellite, ASOS, hazards, damage paths…), each with its file count and size — all ticked by default. It also asks for a **time frame** (UTC): radar volumes, raw lidar scans, NOXP and satellite images are packed only for that span, while daily files (mobile mesonet, CLAMPS) and everything else are packed whole. The default is the storm track's span with 30 minutes either side, or the hour either side of the clock when the date has no track; *Whole session* packs everything. Counts and sizes update as you change it. *Also pack files listed for this span that weren't loaded yet* (on by default) adds the scans the session's catalogs list for the time frame but that you hadn't played through, such as a trailer's stare file, so the case opens offline with nothing missing; its count and size are shown, since a day of CLAMPS stares can be over 300 MB. The package (a ZIP, saved by default in `data/case_packages/<session date>/`, with a notice showing where) always holds the case settings (date, window, clock, radar station/product/tilt, velocity options), the STORM version and the list of every source file with its checksum. *Open case package…* imports the tracks, restores the case and loads the included data straight from the package; anything that was left out is downloaded from its source automatically, and a notice says which is which. A package for another date reopens STORM on that date. You can also open a case from the launch window: choose ARCHIVE, click *Open case…*, pick the package and launch. The date and time move to the case, and choosing a different date clears it. If an upstream file has changed since the case was viewed, the package keeps the new copy and records both checksums.
+**Case packages (File menu).** *File > Export Case Package…* (Cmd+Shift+E) first asks what to include: storm tracks and each type of data the session loaded (radar volumes, mobile mesonet, recorded vehicles/annotations, CLAMPS, raw lidar, NOXP, soundings, satellite, ASOS, hazards, damage paths…), each with its file count and size — all ticked by default. It also asks for a **time frame** (UTC): radar volumes, raw lidar scans, NOXP and satellite images are packed only for that span, while daily files (mobile mesonet, CLAMPS) and everything else are packed whole. The default is the storm track's span with 30 minutes either side, or the hour either side of the clock when the date has no track; *Whole session* packs everything. Counts and sizes update as you change it. *Also pack files listed for this span that weren't loaded yet* (on by default) adds the scans the session's catalogs list for the time frame but that you hadn't played through, such as a trailer's stare file, so the case opens offline with nothing missing; its count and size are shown, since a day of CLAMPS stares can be over 300 MB. The package (a ZIP, saved by default in `data/case_packages/<session date>/`, with a notice showing where) always holds the case settings (date, window, clock, radar station/product/tilt, velocity options), the STORM version and the list of every source file with its checksum. *File > Open Case Package…* (Cmd+O) imports the tracks, restores the case and loads the included data straight from the package; anything that was left out is downloaded from its source automatically, and a notice says which is which. A package for another date reopens STORM on that date. *File > Show Case Packages Folder* opens `data/case_packages/` in Finder. You can also open a case from the launch window: choose ARCHIVE, click *Open case…*, pick the package and launch. The date and time move to the case, and choosing a different date clears it. If an upstream file has changed since the case was viewed, the package keeps the new copy and records both checksums.
 
 **Velocity processing (archive WSR-88D).** With velocity shown, the radar panel offers **Dealias** (Py-ART region-based, as in MESO-VIEW) and **Storm-relative** (subtracts the track's mean motion along each beam; needs two track points at different times). The status line says `dealiased`, or `not dealiased` when a sweep couldn't be; raw velocity is never labeled as dealiased. Dealiasing takes a few seconds per sweep.
 

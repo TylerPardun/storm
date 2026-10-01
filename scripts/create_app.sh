@@ -85,7 +85,11 @@ chmod +x "$MACOS_DIR/storm_launcher.sh"
 # macOS Finder (Sequoia+) silently refuses to launch shell-script app bundles.
 
 cat > /tmp/storm_wrapper.c << 'CWRAPPER'
+#include <mach-o/dyld.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <string.h>
+#include <unistd.h>
 
 int main(void) {
     char self[4096];

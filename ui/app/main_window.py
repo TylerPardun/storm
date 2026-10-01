@@ -399,12 +399,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         QTimer.singleShot(0, self._layout_overlays)
         QTimer.singleShot(220, self._layout_overlays)
 
-        # ctrl+d toggles debug panel even outside --debug mode (emergency diagnostic)
-        self._debug_shortcut = QShortcut(QKeySequence("Ctrl+D"), self)
-        self._debug_shortcut.activated.connect(self._toggle_debug_panel)
-        # ctrl+E toggles error log panel
-        self._error_log_shortcut = QShortcut(QKeySequence("Ctrl+E"), self)
-        self._error_log_shortcut.activated.connect(self._toggle_error_log_panel)
+        # File / Edit / View / Help in the menu bar (the top of the screen on
+        # macOS); it also owns Cmd+D (debug panel) and Cmd+E (error log)
+        self._init_menu_bar()
         # esc cancels in-progress line/polygon/front drawing.
         self._esc_shortcut = QShortcut(QKeySequence("Escape"), self)
         self._esc_shortcut.activated.connect(self._on_escape_pressed)
@@ -465,8 +462,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             "QToolButton#archiveExitButton:hover { background-color: rgba(248, 113, 113, 0.16); }")
         self._exit_button.clicked.connect(self._archive_controls.request_exit)
         self._exit_button.show()
-        self._archive_controls.export_case_requested.connect(self._export_case_package)
-        self._archive_controls.open_case_requested.connect(self._open_case_package)
+        self._update_menu_state()
         if self._case_package_at_start:
             self._later(0, lambda: self._load_case_package(Path(self._case_package_at_start), at_start=True))
         self._archive_controls.show()
@@ -1881,10 +1877,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._track_marker_point_shortcut = QShortcut(QKeySequence("A"), self)
             self._track_marker_point_shortcut.activated.connect(self._add_track_point_at_marker)
             self._set_track_letter_keys(False)
-            self._track_undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
-            self._track_undo_shortcut.activated.connect(self._undo_track_edit)
-            self._track_redo_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
-            self._track_redo_shortcut.activated.connect(self._redo_track_edit)
+            # Cmd+Z / Cmd+Shift+Z are Edit > Undo / Redo (_init_menu_bar)
             # self._time_ctrl doesn't exist yet here (_init_toolbar runs from
             # __init__, before _begin_archive_startup creates it) -- that
             # connection is made there instead, guarded by hasattr(self, "btn_track").
@@ -2339,6 +2332,93 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.trail_controls.set_status("No observations within the storm track's time span")
         else:
             self.trail_controls.set_status(f"No {QUANTITIES[quantity].label.lower()} in the last {minutes} min")
+
+    # ---- menu bar -----------------------------------------------------------
+    def _init_menu_bar(self) -> None:
+        """File: cases, screenshot, ending the session. Edit: undo/redo (track
+        edits, or the text field being typed in). View: error log and debug
+        panel. Help: the user guide and About. Archive-only items stay
+        disabled until the archive session has started (_update_menu_state)."""
+        from PyQt6.QtGui import QAction
+        bar = self.menuBar()
+
+        def action(menu, text, slot, shortcut=None, role=None):
+            a = QAction(text, self)
+            if shortcut:
+                a.setShortcut(QKeySequence(shortcut))
+            if role is not None:
+                a.setMenuRole(role)
+            a.triggered.connect(lambda _checked=False: slot())
+            menu.addAction(a)
+            return a
+
+        file_menu = bar.addMenu("File")
+        self._menu_archive_actions = [
+            action(file_menu, "Open Case Package…", self._open_case_package, "Ctrl+O"),
+            action(file_menu, "Export Case Package…", self._export_case_package, "Ctrl+Shift+E"),
+            action(file_menu, "Show Case Packages Folder", self._show_case_packages_folder),
+        ]
+        file_menu.addSeparator()
+        action(file_menu, "Save Map Screenshot…", self._menu_screenshot, "Ctrl+Shift+S")
+        file_menu.addSeparator()
+        self._menu_archive_actions.append(
+            action(file_menu, "Exit Session and Change Day…", self._menu_exit_session))
+
+        edit_menu = bar.addMenu("Edit")
+        action(edit_menu, "Undo", lambda: self._menu_undo(redo=False), "Ctrl+Z")
+        action(edit_menu, "Redo", lambda: self._menu_undo(redo=True), "Ctrl+Shift+Z")
+
+        view_menu = bar.addMenu("View")
+        action(view_menu, "Error Log", self._toggle_error_log_panel, "Ctrl+E")
+        action(view_menu, "Debug Panel", self._toggle_debug_panel, "Ctrl+D")
+
+        help_menu = bar.addMenu("Help")
+        action(help_menu, "STORM User Guide", self._show_user_guide)
+        action(help_menu, "About STORM", self._show_about, role=QAction.MenuRole.AboutRole)
+        self._update_menu_state()
+
+    def _update_menu_state(self) -> None:
+        ready = self._archive and hasattr(self, "_archive_controls")
+        for a in getattr(self, "_menu_archive_actions", []):
+            a.setVisible(self._archive)
+            a.setEnabled(ready)
+
+    def _menu_undo(self, *, redo: bool) -> None:
+        # a text field being typed in keeps its own undo
+        focus = QApplication.focusWidget()
+        if focus is not None and hasattr(focus, "undo") and hasattr(focus, "redo"):
+            focus.redo() if redo else focus.undo()
+        elif hasattr(self, "_track_points"):
+            self._redo_track_edit() if redo else self._undo_track_edit()
+
+    def _menu_screenshot(self) -> None:
+        if hasattr(self, "btn_screenshot"):
+            self._on_screenshot_clicked()
+
+    def _menu_exit_session(self) -> None:
+        if hasattr(self, "_archive_controls"):
+            self._archive_controls.request_exit()
+
+    def _show_case_packages_folder(self) -> None:
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        CASE_PACKAGES_ROOT.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(CASE_PACKAGES_ROOT)))
+
+    def _show_user_guide(self) -> None:
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(__file__).resolve().parents[2] / "STORM_USER_GUIDE.md")))
+
+    def _show_about(self) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+        from core.case_package import storm_version
+        v = storm_version()
+        commit = f"\nCommit {v['commit'][:10]}" + (" (with local changes)" if v.get("uncommitted_changes") else "") \
+            if v.get("commit") else ""
+        QMessageBox.about(self, "About STORM",
+                          f"STORM {v.get('version') or ''}\n"
+                          f"Severe Thunderstorm Observation and Reconnaissance Monitor{commit}")
 
     # ---- case packages (core/case_package.py) ----------------------------
     def _case_settings(self) -> dict:

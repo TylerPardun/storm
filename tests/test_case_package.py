@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 import zipfile
 
 import pytest
@@ -134,3 +135,89 @@ def test_data_paths_outside_data_are_refused(tmp_path):
                                                "data": [{"member": "../../etc/x", "url": "u"}]}))
     with pytest.raises(ValueError, match="unexpected entry"):
         case_package.read(path)
+
+
+@pytest.mark.parametrize("url, expected", [
+    ("https://s3/2024/04/27/KFDR/KFDR20240427_200445_V06", datetime(2024, 4, 27, 20, 4, 45)),
+    ("https://t/CLAMPS/clamps1/clampsdlfpC1.b1/clampsdlfpC1.b1.20240427.200000.cdf", datetime(2024, 4, 27, 20)),
+    ("https://t/x/DL1dlppi.20240427.203512.cdf", datetime(2024, 4, 27, 20, 35, 12)),
+    ("https://s3/ABI/OR_ABI-L2-CMIPC-M6C13_G16_s20241182031171_e20241182033544_c1.nc",
+     datetime(2024, 4, 27, 20, 31, 17)),
+    ("https://t/probe1/qc_v2/20240427.txt", None),                          # daily
+    ("https://s3/?list-type=2&prefix=2024/04/27/KFDR/KFDR20240427_20", None),  # listing
+])
+def test_file_start_reads_the_scan_time_from_the_name(url, expected):
+    from core.case_package import file_start
+    got = file_start(url)
+    assert got == (expected.replace(tzinfo=timezone.utc) if expected else None)
+
+
+def test_time_frame_keeps_files_covering_it(tmp_path):
+    from core.case_package import in_time_frame
+    frame = (datetime(2024, 4, 27, 20, 30, tzinfo=timezone.utc), datetime(2024, 4, 27, 21, tzinfo=timezone.utc))
+    radar = [{"kind": "radar", "url": f"https://s3/KFDR20240427_{t}_V06"}
+             for t in ("200000", "202600", "203100", "205800", "210400")]
+    kept = in_time_frame(radar, frame)
+    names = sorted(u.rsplit("/", 1)[1][13:19] for u in kept)
+    assert names == ["202600", "203100", "205800"]       # 20:26 is on screen at 20:30; 20:00 and 21:04 aren't
+    # a daily CLAMPS stare file stamped .000000 covers the whole day
+    daily = [{"kind": "raw lidar", "url": f"https://t/clampsdlfpC2.b1.202404{d}.000000.cdf"} for d in (27, 28)]
+    assert in_time_frame(daily, frame) == {daily[0]["url"]}
+    # a lone radar volume long before the frame doesn't cover it
+    assert not in_time_frame([{"kind": "radar", "url": "https://s3/KFDR20240427_120000_V06"}], frame)
+    # daily mesonet files and anything without a frame are kept
+    meso = {"kind": "mesonet", "url": "https://t/20240427.txt"}
+    assert in_time_frame([meso], frame) == {meso["url"]}
+    assert in_time_frame(radar, None) == {r["url"] for r in radar}
+
+
+def test_a_time_frame_is_recorded_and_only_its_scans_are_packed(tmp_path):
+    from core import case_package
+    frame = (datetime(2024, 4, 27, 20, tzinfo=timezone.utc), datetime(2024, 4, 27, 21, tzinfo=timezone.utc))
+    sources = [{"kind": "radar", "url": f"https://s3/KFDR20240427_{t}_V06", "sha256": None, "bytes": 3}
+               for t in ("200445", "230000")]
+    out = case_package.build(tmp_path / "c.zip", case={"session_date": "2024-04-27"}, tracks=[],
+                             sources=sources, include_kinds={"radar"}, time_frame=frame,
+                             fetch=lambda url: b"abc")
+    manifest, _ = case_package.read(out)
+    assert [d["url"].rsplit("/", 1)[1] for d in manifest["data"]] == ["KFDR20240427_200445_V06"]
+    assert manifest["time_frame"] == {"start": "2024-04-27T20:00:00Z", "end": "2024-04-27T21:00:00Z"}
+    assert "Time frame:     2024-04-27T20:00:00Z" in zipfile.ZipFile(out).read("README.txt").decode()
+
+
+def test_identical_files_from_two_queries_are_stored_once(tmp_path):
+    import warnings
+    sources = [{"kind": "hazards", "url": f"https://iem/spcwatch.py?ts={t}", "sha256": None, "bytes": 2}
+               for t in ("1", "2")]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")          # zipfile warns on a duplicate name
+        out = case_package.build(tmp_path / "c.zip", case={}, tracks=[], sources=sources,
+                                 include_kinds={"hazards"}, fetch=lambda url: b"{}")
+    manifest, _ = case_package.read(out)
+    assert len(manifest["data"]) == 2 and len({d["member"] for d in manifest["data"]}) == 1
+    assert sum(n.startswith("data/") for n in zipfile.ZipFile(out).namelist()) == 1
+
+
+def test_listed_files_offer_unloaded_scans_from_loaded_catalogs():
+    from core.case_package import in_time_frame, listed_files
+    thredds = "https://data.nssl.noaa.gov/thredds/catalog/FRDD/CLAMPS/clamps2/ingested/clampsdlfpC2.b1/catalog.html"
+    s3 = "https://s3.example/?prefix=2024/04/27/KFDR/KFDR20240427_20&list-type=2"
+    html = "".join(
+        f'<tr><td><a href="catalog.html?dataset=FRDD/CLAMPS/clamps2/ingested/clampsdlfpC2.b1/'
+        f'clampsdlfpC2.b1.202404{d}.000000.cdf"><code>x</code></a></td>'
+        f'<td align="right">&nbsp;<code>338.4 Mbytes</code></td></tr>' for d in (26, 27, 28))
+    xml = "".join(f"<Contents><Key>2024/04/27/KFDR/KFDR20240427_{t}</Key><Size>14000000</Size></Contents>"
+                  for t in ("200445_V06", "201130_V06", "201130_V06_MDM"))
+    sources = [{"kind": "raw lidar", "url": thredds}, {"kind": "radar", "url": s3},
+               {"kind": "radar", "url": "https://s3.example/2024/04/27/KFDR/KFDR20240427_200445_V06"}]
+    found = listed_files(sources, {thredds: html.encode(), s3: xml.encode()}.get)
+    urls = {e["url"]: e for e in found}
+    stare = "https://data.nssl.noaa.gov/thredds/fileServer/FRDD/CLAMPS/clamps2/ingested/clampsdlfpC2.b1/" \
+            "clampsdlfpC2.b1.20240427.000000.cdf"
+    assert urls[stare]["bytes"] == 338_400_000 and urls[stare]["listed"]
+    assert "https://s3.example/2024/04/27/KFDR/KFDR20240427_201130_V06" in urls    # gap in a shown series
+    assert not any(u.endswith("_MDM") for u in urls)                               # a series never shown
+    assert not any(u.endswith("200445_V06") for u in urls)                         # already loaded
+    frame = (datetime(2024, 4, 27, 20, tzinfo=timezone.utc), datetime(2024, 4, 27, 21, tzinfo=timezone.utc))
+    keep = in_time_frame(sources + found, frame)
+    assert stare in keep and not any("20240426" in u or "20240428" in u for u in keep)

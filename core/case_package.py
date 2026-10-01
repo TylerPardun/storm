@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
 FORMAT = "storm-case-package"
@@ -46,6 +47,105 @@ DATA_TYPES = {
     "listings": "Other catalog listings",
 }
 _ROOT = Path(__file__).resolve().parents[1]
+PACKAGES_ROOT = _ROOT / "data" / "case_packages"     # exports go to <session date>/ under here
+
+# Per-scan data types: their file names carry the scan's start time, so a
+# package can hold only the files covering its time frame. Everything else
+# (daily mesonet files, catalog listings, soundings) is always packed whole.
+# A file covers the time until the next file of the same stream starts, up
+# to these minutes: radar volumes and satellite scans last minutes, while
+# some CLAMPS lidar files hold a whole day (…20240427.000000.cdf).
+TIME_FRAMED_KINDS = {"radar": 15, "noxp radar": 15, "satellite": 15, "raw lidar": 24 * 60}
+_STAMP = re.compile(r"(?<!\d)(\d{8})[._-]?(\d{4})(\d{2})?(?!\d)")       # 20240427_200445, 20240427.203512
+_GOES_STAMP = re.compile(r"_s(\d{4})(\d{3})(\d{2})(\d{2})(\d{2})")     # _s20241182031171 (year, day of year)
+
+
+def file_start(url: str) -> datetime | None:
+    """The start time in a data file's name, or None if it has none."""
+    name = PurePosixPath(url.split("?", 1)[0]).name
+    try:
+        m = _GOES_STAMP.search(name)
+        if m:
+            y, j, hh, mm, ss = m.groups()
+            return datetime.strptime(f"{y}{j}{hh}{mm}{ss}", "%Y%j%H%M%S").replace(tzinfo=timezone.utc)
+        m = _STAMP.search(name)
+        if m:
+            day, hhmm, ss = m.groups()
+            return datetime.strptime(f"{day}{hhmm}{ss or '00'}", "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    return None
+
+
+def _stream(url: str) -> str:
+    """A file's series: its URL with the time stamps blanked out."""
+    base, _, name = url.split("?", 1)[0].rpartition("/")
+    goes = _GOES_STAMP.search(name)
+    return f"{base}/{name[:goes.start()] if goes else _STAMP.sub('*', name)}"
+
+
+def in_time_frame(sources: list[dict], frame: tuple[datetime, datetime] | None) -> set[str]:
+    """URLs of the loaded files that belong in a package limited to `frame`
+    (start, end). Files that aren't per-scan, or whose time can't be read
+    from the name, are always kept."""
+    keep, streams = set(), {}
+    for e in sources:
+        start = file_start(e["url"]) if frame is not None and e.get("kind") in TIME_FRAMED_KINDS else None
+        if start is None:
+            keep.add(e["url"])
+        else:
+            streams.setdefault((e["kind"], _stream(e["url"])), []).append((start, e["url"]))
+    for (kind, _), files in streams.items():
+        files.sort()
+        longest = timedelta(minutes=TIME_FRAMED_KINDS[kind])
+        for i, (start, url) in enumerate(files):
+            nxt = files[i + 1][0] if i + 1 < len(files) else start + longest
+            if start <= frame[1] and min(nxt, start + longest) > frame[0]:
+                keep.add(url)
+    return keep
+
+
+_S3_KEY = re.compile(r"<Key>([^<]+)</Key>.*?<Size>(\d+)</Size>", re.S)
+_THREDDS_ROW = re.compile(r"""href=["']catalog\.html\?dataset=([^"'&]+)["'].*?<code>([\d.]+)\s*([KMG]?)bytes</code>""", re.S)
+_UNITS = {"": 1, "K": 1e3, "M": 1e6, "G": 1e9}
+
+
+def listed_files(sources: list[dict], listing_bytes) -> list[dict]:
+    """Scan files the session's catalog listings name but that it hadn't
+    loaded yet, so a package can carry what an offline session will ask
+    for. `listing_bytes(url)` returns a loaded listing's bytes, or None.
+    A THREDDS catalog is one lidar/NOXP series, so all its time-stamped
+    files are offered; an S3 listing (radar, satellite) spans many series
+    (every satellite channel), so only series the session showed are."""
+    loaded = {e["url"] for e in sources}
+    series = {(e["kind"], _stream(e["url"])) for e in sources if file_start(e["url"])}
+    found = {}
+    for e in sources:
+        kind, url = e.get("kind"), e["url"]
+        if kind not in TIME_FRAMED_KINDS or file_start(url):
+            continue
+        if "list-type=2" in url:
+            rows, from_s3 = _S3_KEY.findall(_text(listing_bytes(url))), True
+            base = url.split("?", 1)[0].rstrip("/")
+            entries = [(f"{base}/{key}", int(size)) for key, size in rows]
+        elif "/thredds/catalog/" in url:
+            from_s3 = False
+            host = url.split("/thredds/catalog/", 1)[0]
+            entries = [(f"{host}/thredds/fileServer/{dataset}", int(float(num) * _UNITS[unit]))
+                       for dataset, num, unit in _THREDDS_ROW.findall(_text(listing_bytes(url)))]
+        else:
+            continue
+        for file_url, size in entries:
+            if file_url in loaded or file_url in found or not file_start(file_url):
+                continue
+            if from_s3 and (kind, _stream(file_url)) not in series:
+                continue
+            found[file_url] = {"kind": kind, "url": file_url, "sha256": None, "bytes": size, "listed": True}
+    return list(found.values())
+
+
+def _text(data: bytes | None) -> str:
+    return data.decode("utf-8", errors="replace") if data else ""
 
 
 def storm_version() -> dict:
@@ -69,15 +169,18 @@ def _member_name(entry: dict, digest: str) -> str:
 
 
 def build(path: Path, *, case: dict, tracks: list[Path], sources: list[dict], note: str = "",
-          include_kinds: set[str] = frozenset(), fetch=None, progress=None, cancel=None) -> Path:
+          include_kinds: set[str] = frozenset(), time_frame: tuple[datetime, datetime] | None = None,
+          fetch=None, progress=None, cancel=None) -> Path:
     """Write a package. `case` holds JSON-ready case settings (see MainWindow).
     Files of the kinds in `include_kinds` are packed: `fetch(url)` returns
     their bytes (the session's kept copy or a fresh download); a download
     whose hash differs from what was viewed is packed but marked as changed.
+    `time_frame` (start, end) limits per-scan data to that span (in_time_frame).
     `progress(done, total, label)` reports and `cancel` (an Event) stops."""
     path = Path(path)
-    included, changed = [], 0
-    wanted = [e for e in sources if e.get("kind") in include_kinds]
+    included, changed, written = [], 0, set()
+    in_frame = in_time_frame(sources, time_frame)
+    wanted = [e for e in sources if e.get("kind") in include_kinds and e["url"] in in_frame]
     tmp = path.with_name(f".{path.name}.part")
     tmp.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -94,16 +197,18 @@ def build(path: Path, *, case: dict, tracks: list[Path], sources: list[dict], no
                     continue
                 digest = hashlib.sha256(data).hexdigest()
                 member = _member_name(entry, digest)
-                # radar volumes, netCDF and gzip are compressed already
-                z.writestr(member, data, compress_type=zipfile.ZIP_STORED if len(data) > 1_000_000
-                           else zipfile.ZIP_DEFLATED)
+                if member not in written:       # identical bytes from two queries share one copy
+                    written.add(member)
+                    # radar volumes, netCDF and gzip are compressed already
+                    z.writestr(member, data, compress_type=zipfile.ZIP_STORED if len(data) > 1_000_000
+                               else zipfile.ZIP_DEFLATED)
                 record = {"kind": entry.get("kind"), "url": entry["url"], "sha256": digest,
                           "bytes": len(data), "member": member}
                 if entry.get("sha256") and entry["sha256"] != digest:
                     record["viewed_sha256"] = entry["sha256"]
                     changed += 1
                 included.append(record)
-            manifest = _manifest(case, tracks, sources, note, included, include_kinds, changed)
+            manifest = _manifest(case, tracks, sources, note, included, include_kinds, changed, time_frame)
             z.writestr("package.json", json.dumps(manifest, indent=2) + "\n")
             z.writestr("README.txt", _readme(manifest))
             for track in tracks:
@@ -116,7 +221,11 @@ def build(path: Path, *, case: dict, tracks: list[Path], sources: list[dict], no
     return path
 
 
-def _manifest(case, tracks, sources, note, included, include_kinds, changed) -> dict:
+def _iso(t: datetime) -> str:
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _manifest(case, tracks, sources, note, included, include_kinds, changed, time_frame=None) -> dict:
     packed = {e["url"] for e in included if e.get("member")}
     return {
         "format": FORMAT,
@@ -127,6 +236,7 @@ def _manifest(case, tracks, sources, note, included, include_kinds, changed) -> 
         "note": note,
         "tracks": [f"tracks/{Path(t).name}" for t in tracks],
         "included_data_types": sorted(include_kinds),
+        "time_frame": {"start": _iso(time_frame[0]), "end": _iso(time_frame[1])} if time_frame else None,
         "data": [e for e in included if e.get("member")],
         "data_not_packed": [e for e in included if not e.get("member")],
         "data_changed_since_viewed": changed,
@@ -171,6 +281,8 @@ def _readme(m: dict) -> str:
         f"Archive date:   {case.get('session_date')}",
         f"Session window: {case.get('window_start')} to {case.get('window_end')}",
         f"Clock time:     {case.get('clock_time')}",
+        f"Time frame:     {m['time_frame']['start']} to {m['time_frame']['end']} (radar, lidar and satellite scans)"
+        if m.get("time_frame") else "Time frame:     whole session",
         f"Radar:          {case.get('radar_station') or '—'} {case.get('radar_product') or ''}"
         f" (tilt index {case.get('radar_tilt_index')})",
     ]
@@ -196,7 +308,8 @@ def _readme(m: dict) -> str:
                   + ", ".join(DATA_TYPES.get(k, k) for k in left_out)]
     lines += ["", f"Source files loaded during the session ({len(m['sources'])}), with SHA-256:"]
     for s in m["sources"]:
-        lines.append(f"  [{s['kind']}]{' (included)' if s.get('included') else ''} {s['url']}")
+        lines.append(f"  [{s['kind']}]{' (included)' if s.get('included') else ''}"
+                     f"{' (listed, not viewed)' if s.get('listed') else ''} {s['url']}")
         if s.get("sha256"):
             lines.append(f"      sha256 {s['sha256']}  {s.get('bytes') or '?'} bytes, loaded {s.get('loaded_at', '?')}")
     lines += ["", "Opening this package in STORM uses the included files first and downloads anything else",

@@ -440,6 +440,7 @@ def main() -> None:
             monitor      = dialog.monitor()
             viewer       = dialog.viewer()
             archive_time = dialog.archive_start_time()   # None unless archive mode
+            case_package = dialog.case_package()         # a case to open at launch, if chosen
             runtime_flags.FLAGS.admin_mode = dialog.admin_mode()
 
             # apply radar render resolution from the launch dialog

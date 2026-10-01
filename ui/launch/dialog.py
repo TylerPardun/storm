@@ -636,6 +636,15 @@ class LaunchDialog(QDialog):
         self._surprise_btn.setStyleSheet(_link_style)
         self._surprise_btn.clicked.connect(self._on_surprise_me_clicked)
         action_row.addWidget(self._surprise_btn)
+
+        # open a case package (core/case_package.py) straight from here
+        self._case_package_path: Path | None = None
+        self._open_case_btn = QPushButton("Open case…")
+        self._open_case_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._open_case_btn.setFlat(True)
+        self._open_case_btn.setStyleSheet(_link_style)
+        self._open_case_btn.clicked.connect(self._on_open_case_clicked)
+        action_row.addWidget(self._open_case_btn)
         action_row.addStretch()
 
         self._availability_refresh_btn = QPushButton("↻  Refresh data")
@@ -647,6 +656,23 @@ class LaunchDialog(QDialog):
         action_row.addWidget(self._availability_refresh_btn)
 
         av_layout.addLayout(action_row)
+
+        case_row = QHBoxLayout()
+        case_row.setSpacing(6)
+        self._case_label = QLabel("")
+        self._case_label.setObjectName("hint")
+        self._case_label.setToolTip("Launch opens this case: its storm tracks, settings and packed data")
+        case_row.addWidget(self._case_label, 1)
+        self._case_clear_btn = QPushButton("Clear")
+        self._case_clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._case_clear_btn.setFlat(True)
+        self._case_clear_btn.setStyleSheet(_link_style)
+        self._case_clear_btn.clicked.connect(self._clear_case_package)
+        case_row.addWidget(self._case_clear_btn, 0, Qt.AlignmentFlag.AlignTop)
+        self._case_label.hide()
+        self._case_clear_btn.hide()
+        av_layout.addLayout(case_row)
+        self._archive_dt_edit.dateTimeChanged.connect(self._on_archive_dt_changed_for_case)
 
         av_layout.addSpacing(8)
         self._build_browse_section(av_layout)
@@ -925,6 +951,52 @@ class LaunchDialog(QDialog):
         self._archive_dt_edit.setDateTime(QDateTime(qdate, current_time))
         if self._calendar_popup is not None:
             self._calendar_popup.hide()
+
+    def _on_open_case_clicked(self):
+        """Choose a case package; the date/time moves to the case and Launch
+        opens it (its tracks, settings and packed data)."""
+        from core import case_package
+        folder = case_package.PACKAGES_ROOT
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Case Package", str(folder if folder.is_dir() else Path.home()),
+            "STORM case package (*.zip)")
+        if not path:
+            return
+        try:
+            manifest, tracks = case_package.read(Path(path))
+            case = manifest["case"]
+            when = datetime.fromisoformat(case["archive_time"].replace("Z", "+00:00"))
+        except (ValueError, KeyError) as exc:
+            QMessageBox.warning(self, "Open Case Package", f"{Path(path).name}: {exc}")
+            return
+        self._case_package_path = None          # the date change below must not clear it
+        self._archive_dt_edit.setDateTime(QDateTime(when.year, when.month, when.day,
+                                                    when.hour, when.minute, when.second))
+        self._case_package_path = Path(path)
+        self._case_package_day = when.date()
+        packed = len(manifest.get("data", []))
+        frame = manifest.get("time_frame")
+        span = f"{frame['start'][11:16]}–{frame['end'][11:16]} UTC" if frame else "whole session"
+        self._case_label.setText(
+            f"Case: {Path(path).name}\n"
+            f"{case.get('radar_station') or 'No radar'} · {span} · {len(tracks)} track{'s' if len(tracks) != 1 else ''}"
+            f" · {packed} file{'s' if packed != 1 else ''}")
+        self._case_label.show()
+        self._case_clear_btn.show()
+
+    def _clear_case_package(self):
+        self._case_package_path = None
+        self._case_label.hide()
+        self._case_clear_btn.hide()
+
+    def _on_archive_dt_changed_for_case(self, qdt):
+        # picking another date means not this case any more
+        if self._case_package_path is not None and qdt.date().toPyDate() != self._case_package_day:
+            self._clear_case_package()
+
+    def case_package(self) -> Path | None:
+        """The case package chosen to open at launch (archive mode only)."""
+        return self._case_package_path if self.archive() else None
 
     def _on_surprise_me_clicked(self):
         """Jump to a random date that actually has catalog data -- the same

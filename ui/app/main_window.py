@@ -155,7 +155,7 @@ def _clear_layout(layout):
             w.deleteLater()
 
 
-CASE_PACKAGES_ROOT = Path(__file__).resolve().parents[2] / "data" / "case_packages"
+from core.case_package import PACKAGES_ROOT as CASE_PACKAGES_ROOT  # noqa: E402
 
 
 def _package_fetch(url: str) -> bytes:
@@ -2359,29 +2359,48 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             "track_workspace": self._track_workspace().name if hasattr(self, "_track_points") else None,
         }
 
+    def _default_case_frame(self, session: tuple[datetime, datetime]) -> tuple[datetime, datetime]:
+        """The storm track's span with 30 minutes either side when the date
+        has a track, otherwise the hour either side of the clock; never
+        outside the session."""
+        pad = timedelta(minutes=30)
+        points = getattr(self, "_track_points", None)
+        if points:
+            start, end = points[0].time - pad, points[-1].time + pad
+        else:
+            clock = self._time_ctrl.current_time
+            start, end = clock - timedelta(hours=1), clock + timedelta(hours=1)
+        return max(start, session[0]), min(end, session[1])
+
     def _export_case_package(self) -> None:
         """Choose what to include (all by default), then build the package
         in the background with a progress bar and cancel."""
         import threading
-        from PyQt6.QtWidgets import QMessageBox, QProgressDialog
+        from PyQt6.QtWidgets import QMessageBox
         from core import case_package, provenance
         from ui.dialogs.case_export_dialog import CaseExportDialog
+        from ui.dialogs.task_progress_dialog import TaskProgressDialog
         sources = provenance.snapshot()
-        groups = []
-        for kind, label in case_package.DATA_TYPES.items():
-            files = [s for s in sources if s["kind"] == kind]
-            if files:
-                groups.append((kind, label, len(files), sum(s.get("bytes") or 0 for s in files)))
         tracks = []
         if hasattr(self, "_track_points"):
             tracks = [t["path"] for t in self._session_tracks()]
-        dialog = CaseExportDialog(groups, len(tracks), self)
+        session = self._time_ctrl.window
+        listed = case_package.listed_files(sources, provenance.kept_bytes)
+        dialog = CaseExportDialog(sources, len(tracks), session, self._default_case_frame(session), self,
+                                  listed=listed)
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
-        include_tracks, kinds = dialog.choices()
+        include_tracks, kinds, time_frame = dialog.choices()
+        if dialog.include_listed():
+            # a catalog lists every date it holds: only the frame (or the session) is wanted
+            keep = case_package.in_time_frame(sources + listed, time_frame or session)
+            sources = sources + [e for e in listed if e["url"] in keep]
         tracks = tracks if include_tracks else []
 
         case = self._case_settings()
+        if time_frame is not None:
+            case["clock_time"] = min(max(case["clock_time"], f"{time_frame[0]:%Y-%m-%dT%H:%M:%SZ}"),
+                                     f"{time_frame[1]:%Y-%m-%dT%H:%M:%SZ}")
         folder = CASE_PACKAGES_ROOT / self._track_session_day().strftime("%Y%m%d")
         folder.mkdir(parents=True, exist_ok=True)
         clock = self._time_ctrl.current_time
@@ -2401,20 +2420,18 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         def work():
             try:
                 case_package.build(path, case=case, tracks=tracks, sources=sources, include_kinds=kinds,
-                                   fetch=_package_fetch, progress=progress, cancel=cancel)
+                                   time_frame=time_frame, fetch=_package_fetch, progress=progress, cancel=cancel)
             except Exception as exc:  # noqa: BLE001 -- disk full, canceled, ...
                 state["error"] = exc
             finally:
                 state["finished"] = True
 
-        bar = QProgressDialog("Preparing case package…", "Cancel", 0, 100, self)
-        bar.setWindowTitle("Export Case Package")
-        bar.setMinimumDuration(0)
+        bar = TaskProgressDialog("Export Case Package", f"Packing {path.name}", self)
         bar.canceled.connect(cancel.set)
+        bar.show()
         threading.Thread(target=work, daemon=True, name="case-export").start()
         while not state["finished"]:
-            bar.setValue(int(100 * state["done"] / state["total"]))
-            bar.setLabelText(f"Packing {state['done']} of {state['total']} files… {state['label']}")
+            bar.set_progress(state["done"], state["total"], state["label"])
             QApplication.processEvents()
             threading.Event().wait(0.05)
         bar.close()
@@ -2436,7 +2453,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                            f"{CASE_PACKAGES_ROOT}\norganized by session date.")
 
     def _open_case_package(self) -> None:
-        folder = Path.home() / "STORM" / "packages"
+        folder = CASE_PACKAGES_ROOT
         path, _ = QFileDialog.getOpenFileName(self, "Open Case Package", str(folder if folder.is_dir() else Path.home()),
                                               "STORM case package (*.zip)")
         if path:

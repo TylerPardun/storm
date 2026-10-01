@@ -121,3 +121,44 @@ def test_storm_relative_barbs_subtract_the_storm_motion():
     relative = [f["properties"] for f in fc["features"] if f["properties"]["kind"] == "barb"]
     assert {b["img"] for b in ground} == {"barb-20"} and not any(b["sr"] for b in ground)
     assert {b["img"] for b in relative} == {"barb-0"} and all(b["sr"] for b in relative)
+
+
+def _oklab(hex_color):
+    r, g, b = (int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    lin = lambda c: c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = lin(r), lin(g), lin(b)
+    l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+    m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+    s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+    return (0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+            1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+            0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s)
+
+
+def _drawn(color, opacity, background):
+    """`color` at `opacity` over `background`, as the map shows it."""
+    mix = [round(opacity * int(color[i:i + 2], 16) + (1 - opacity) * int(background[i:i + 2], 16))
+           for i in (1, 3, 5)]
+    return "#" + "".join(f"{c:02x}" for c in mix)
+
+
+def test_trail_colors_never_look_like_a_road():
+    """Trails sit on the roads the vehicles drove: every color-scale step stays
+    at least OKLab delta E 15 from every road color in the base map style."""
+    import math
+    import re
+    from pathlib import Path
+    from core import trails
+    import config
+    html = (Path(__file__).resolve().parents[1] / "ui" / "map" / "map_template.html").read_text()
+    html = html.replace("__ACCENT_COLOR__", config.ACCENT_COLOR)
+    background = re.search(r'"background-color": "(#[0-9A-Fa-f]{6})"', html)[1]
+    roads = []
+    for layer in re.findall(r'(id: "road-(?!label|hover)[^"]+".*?\n        \})', html, re.S):
+        color = re.search(r'"line-color": "(#[0-9A-Fa-f]{6})"', layer)[1]
+        opacity = re.search(r'"line-opacity": ([\d.]+)', layer)
+        roads.append(_drawn(color, float(opacity[1]) if opacity else 1.0, background))
+    assert len(roads) >= 8
+    for color in trails._SEQUENTIAL + trails._DIVERGING:
+        closest = min(100 * math.dist(_oklab(color), _oklab(road)) for road in roads)
+        assert closest >= 15, (color, closest)

@@ -20,15 +20,25 @@ import numpy as np
 
 from core import derived
 
-_THERMAL = ["#313695", "#4575b4", "#74add1", "#abd9e9", "#fee090", "#fdae61", "#f46d43", "#d73027", "#a50026"]
-_DIVERGING = ["#2166ac", "#67a9cf", "#d1e5f0", "#f7f7f7", "#fddbc7", "#ef8a62", "#b2182b"]
+# Trails are drawn on the roads the vehicles drove, so no step may look like
+# a road: the base map's motorways are orange (#CC5528, with a faint cyan
+# glow), trunks and unpaved roads brown, the rest dark gray-blue. The previous
+# ColorBrewer scales ran through that orange (#d73027 was OKLab delta E 5.9
+# from the motorway); every step below is >= 15 from every road as drawn.
+# Sequential: one violet hue, dark -> light for low -> high (OKLCH L 0.50 to
+# 0.93, so the low end still clears the dark map at 3:1).
+_SEQUENTIAL = ["#7444b4", "#885cc8", "#9c75da", "#b08eea", "#c5a8f9", "#dac3ff", "#efdeff"]
+# Diverging: blue (negative; hue 262, clear of the cyan glow) <- pale gray
+# (zero) -> magenta (positive). Each arm steps in lightness as well as color,
+# so it holds for color-blind viewers.
+_DIVERGING = ["#4679db", "#7498da", "#a2b5d7", "#dedede", "#d0a6bc", "#ca7ba8", "#c04b94"]
 RING_SPACING_KM = 5.0
 RING_MAX_KM = 20.0
 
 
 def color_stops(quantity_key: str, vmin: float, vmax: float) -> list:
     """MapLibre 'interpolate' stops [v0, c0, v1, c1, ...] for the quantity's scale."""
-    colors = _DIVERGING if derived.QUANTITIES[quantity_key].colormap == "diverging" else _THERMAL
+    colors = _DIVERGING if derived.QUANTITIES[quantity_key].colormap == "diverging" else _SEQUENTIAL
     if not (math.isfinite(vmin) and math.isfinite(vmax)) or vmax <= vmin:
         vmin, vmax = (vmin - 1, vmin + 1) if math.isfinite(vmin) else (0.0, 1.0)
     stops = []

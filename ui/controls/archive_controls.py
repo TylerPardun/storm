@@ -185,12 +185,12 @@ class ArchiveControls(QWidget):
         row2.setSpacing(5)
         row2.setContentsMargins(0, 0, 0, 0)
 
-        self._btn_start = self._ctrl_btn("-1m", "Step back 1 minute")
+        self._btn_start = self._ctrl_btn("-1m", "")
         self._btn_back  = self._ctrl_btn("⏮", "Previous radar scan (Left / A)")
         self._btn_play  = self._ctrl_btn("▶",  "Play / pause (Space)")
         self._btn_play.setCheckable(True)
         self._btn_fwd   = self._ctrl_btn("⏭", "Next radar scan (Right / D)")
-        self._btn_end   = self._ctrl_btn("+1m", "Step forward 1 minute")
+        self._btn_end   = self._ctrl_btn("+1m", "")
 
         for btn in (self._btn_start, self._btn_back, self._btn_play,
                     self._btn_fwd, self._btn_end):
@@ -295,8 +295,6 @@ class ArchiveControls(QWidget):
         self._precision_mode = enabled
         self._btn_start.setText("-10")
         self._btn_end.setText("+10")
-        self._btn_start.setToolTip("Step back 10 seconds")
-        self._btn_end.setToolTip("Step forward 10 seconds")
         self._speed_label.setVisible(not enabled)
         self._speed_combo.setVisible(not enabled)
         self._speed_div.setVisible(not enabled)
@@ -365,7 +363,6 @@ class ArchiveControls(QWidget):
         self._slider.setRange(0, max(0, self._tc.window_seconds() - 1))
         self._slider.setValue(self._tc.seconds_since_start())
         self._slider.blockSignals(False)
-        self._slider.setToolTip(f"Session ends {end:%Y-%m-%d %H:%M} UTC")
 
     def _on_slider_preview(self, value: int) -> None:
         """Live label update while dragging — no fetcher calls until release."""

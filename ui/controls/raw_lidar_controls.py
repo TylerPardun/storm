@@ -103,7 +103,6 @@ class RawLidarControls(QWidget):
         self._field_combo.setObjectName("lidarCombo")
         self._field_combo.setFixedHeight(22)
         self._field_combo.setMinimumWidth(130)
-        self._field_combo.setToolTip("Field to show")
         self._field_combo.setEnabled(False)
         self._field_combo.currentIndexChanged.connect(self._on_field_changed)
         r1.addWidget(self._field_combo)

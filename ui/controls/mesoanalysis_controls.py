@@ -100,7 +100,6 @@ class MesoanalysisControls(QWidget):
                 btn = QToolButton()
                 btn.setText(text)
                 btn.setCheckable(True)
-                btn.setToolTip(text)
                 btn.setFixedWidth(_PRODUCT_BUTTON_WIDTH)
                 btn.setProperty("paletteButton", True)
                 btn.clicked.connect(
@@ -109,8 +108,8 @@ class MesoanalysisControls(QWidget):
                 self._product_buttons[product_id] = btn
                 grid.addWidget(btn, row_idx, col_idx, Qt.AlignmentFlag.AlignHCenter)
 
-        self._btn_back = self._pbtn("◀", "Previous analysis time")
-        self._btn_fwd = self._pbtn("▶", "Next analysis time")
+        self._btn_back = self._pbtn("◀", "")
+        self._btn_fwd = self._pbtn("▶", "")
         self._btn_back.clicked.connect(self._on_step_back)
         self._btn_fwd.clicked.connect(self._on_step_forward)
         for btn in (self._btn_back, self._btn_fwd):
@@ -133,7 +132,6 @@ class MesoanalysisControls(QWidget):
 
         self._refresh_btn = QPushButton("REFRESH")
         self._refresh_btn.setFixedSize(_PRODUCT_BUTTON_WIDTH, _CONTROL_HEIGHT)
-        self._refresh_btn.setToolTip("Refresh mesoanalysis")
         self._refresh_btn.clicked.connect(self._on_refresh_clicked)
         grid.addWidget(self._refresh_btn, 4, 5, Qt.AlignmentFlag.AlignHCenter)
 

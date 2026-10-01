@@ -81,8 +81,8 @@ class SfcoaControls(QWidget):
         r.addWidget(self._vdiv())
 
         self._btn_jump_start = self._pbtn("⏮", "First valid time")
-        self._btn_back = self._pbtn("⏪", "Previous valid time")
-        self._btn_fwd = self._pbtn("⏩", "Next valid time")
+        self._btn_back = self._pbtn("⏪", "")
+        self._btn_fwd = self._pbtn("⏩", "")
         self._btn_jump_end = self._pbtn("⏭", "Latest valid time")
         self._btn_jump_start.clicked.connect(self._on_jump_start)
         self._btn_back.clicked.connect(self._on_step_back)

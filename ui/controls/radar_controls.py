@@ -177,7 +177,6 @@ class RadarControls(QWidget):
         self._tilt_combo.setFixedHeight(22)
         self._tilt_combo.setFixedWidth(74)
         self._tilt_combo.setObjectName("radarTiltCombo")
-        self._tilt_combo.setToolTip("Radar tilt angle")
         self._tilt_combo.currentIndexChanged.connect(self._on_tilt_changed)
         self._tilt_combo.setVisible(False)
         r1.addWidget(self._tilt_combo)
@@ -186,7 +185,6 @@ class RadarControls(QWidget):
         self._chk_show_data = QCheckBox("show data")
         self._chk_show_data.setChecked(False)
         self._chk_show_data.setFixedHeight(22)
-        self._chk_show_data.setToolTip("Load and show radar")
         self._chk_show_data.toggled.connect(self._on_data_enabled_toggled)
         r1.addWidget(self._chk_show_data)
 
@@ -221,7 +219,6 @@ class RadarControls(QWidget):
         self._btn_back.setText("⏪")
         self._btn_back.setFixedSize(32, 26)
         self._btn_back.setEnabled(False)
-        self._btn_back.setToolTip("Previous frame")
         self._btn_back.clicked.connect(self._on_step_back)
         r2.addWidget(self._btn_back)
 
@@ -230,7 +227,6 @@ class RadarControls(QWidget):
         self._btn_play.setCheckable(True)
         self._btn_play.setFixedSize(32, 26)
         self._btn_play.setEnabled(False)
-        self._btn_play.setToolTip("Play / Pause loop")
         self._btn_play.toggled.connect(self._on_play_toggled)
         r2.addWidget(self._btn_play)
 
@@ -238,7 +234,6 @@ class RadarControls(QWidget):
         self._btn_fwd.setText("⏩")
         self._btn_fwd.setFixedSize(32, 26)
         self._btn_fwd.setEnabled(False)
-        self._btn_fwd.setToolTip("Next frame")
         self._btn_fwd.clicked.connect(self._on_step_forward)
         r2.addWidget(self._btn_fwd)
 
@@ -274,7 +269,6 @@ class RadarControls(QWidget):
         self._speed_combo = QComboBox()
         self._speed_combo.setFixedHeight(26)
         self._speed_combo.setMaximumWidth(5)
-        self._speed_combo.setToolTip("Playback speed")
         for label, ms in [("0.5×", 1000), ("1×", 500), ("2×", 250), ("3×", 167)]:
             self._speed_combo.addItem(label, userData=ms)
         self._speed_combo.setCurrentIndex(1)   # default 1×

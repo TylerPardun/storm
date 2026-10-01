@@ -61,11 +61,11 @@ class MapControls(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
 
-        self.btn_route = self._btn("ROUTE", "Route directions")
+        self.btn_route = self._btn("ROUTE", "")
         self.btn_route.setVisible(self._route_available)
         row.addWidget(self.btn_route)
 
-        self.btn_measure = self._btn("MEASURE", "Measure distance between two points")
+        self.btn_measure = self._btn("MEASURE", "")
         row.addWidget(self.btn_measure)
 
         self.btn_annotations = self._btn(

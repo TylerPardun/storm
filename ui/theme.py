@@ -965,6 +965,7 @@ QToolTip {
     color: #E8EDF5;
     font-size: 12px;
     padding: 5px 9px;
+    qproperty-margin: 0;   /* Qt's own label margin (11 px on macOS) doubled the padding */
 }
 
 /* ── Toolbar checkboxes ──────────────────────────────── */

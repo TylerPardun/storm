@@ -89,7 +89,6 @@ class SatelliteControls(QWidget):
         self._opacity_slider.setValue(70)
         self._opacity_slider.setFixedHeight(22)
         self._opacity_slider.setFixedWidth(110)
-        self._opacity_slider.setToolTip("Satellite image opacity")
         self._opacity_slider.valueChanged.connect(
             lambda v: self.opacity_changed.emit(v / 100.0)
         )
@@ -104,9 +103,9 @@ class SatelliteControls(QWidget):
         r2.setSpacing(2)
 
         self._btn_jump_start = self._pbtn("⏮", "Oldest frame")
-        self._btn_back       = self._pbtn("⏪", "Step back one frame")
-        self._btn_play       = self._pbtn("▶", "Play / Pause loop", checkable=True)
-        self._btn_fwd        = self._pbtn("⏩", "Step forward one frame")
+        self._btn_back       = self._pbtn("⏪", "")
+        self._btn_play       = self._pbtn("▶", "", checkable=True)
+        self._btn_fwd        = self._pbtn("⏩", "")
         self._btn_jump_end   = self._pbtn("⏭", "Latest (live)")
 
         self._btn_jump_start.clicked.connect(self._on_jump_start)
@@ -142,7 +141,6 @@ class SatelliteControls(QWidget):
         self._speed_combo = QComboBox()
         self._speed_combo.setFixedHeight(26)
         self._speed_combo.setMaximumWidth(5)
-        self._speed_combo.setToolTip("Playback speed")
         for label, ms in [("0.5×", 1200), ("1×", 600), ("2×", 300), ("3×", 200)]:
             self._speed_combo.addItem(label, userData=ms)
         self._speed_combo.setCurrentIndex(1)   # default 1×
@@ -179,7 +177,7 @@ class SatelliteControls(QWidget):
         btn.setEnabled(available)
         self._meso_bboxes[idx] = bbox if available else None
         if available:
-            btn.setToolTip(f"Mesoscale sector {idx}")
+            btn.setToolTip("")
         else:
             btn.setToolTip(f"Mesoscale sector {idx} · unavailable")
             if btn.isChecked():
@@ -247,9 +245,9 @@ class SatelliteControls(QWidget):
         if enabled:
             # meso buttons are disabled until live sectors are found; in archive
             self._btn_meso1.setEnabled(True)
-            self._btn_meso1.setToolTip("Mesoscale sector 1")
+            self._btn_meso1.setToolTip("")
             self._btn_meso2.setEnabled(True)
-            self._btn_meso2.setToolTip("Mesoscale sector 2")
+            self._btn_meso2.setToolTip("")
 
     def toggle_drawer(self, checked: bool):
         if checked:

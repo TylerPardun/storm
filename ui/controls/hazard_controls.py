@@ -480,7 +480,6 @@ class HazardControls(QWidget):
         btn = QToolButton()
         btn.setCheckable(True)
         btn.setText(f"■ {label}")
-        btn.setToolTip(f"Show/hide {label}")
         btn.setStyleSheet(f"""
             QToolButton {{
                 color: {color};

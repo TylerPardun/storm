@@ -1700,7 +1700,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         tb.setContentsMargins(8, 4, 8, 4)
         tb.setSpacing(4)
 
-        self.btn_radar = self._toolbar_toggle("RADAR", "Radar controls", tb)
+        self.btn_radar = self._toolbar_toggle("RADAR", "", tb)
         # radar controls drop down below the toolbar as a separate floating pill
         self.radar_controls = RadarControls(self._map_container)
         self.radar_controls.setObjectName("floatingToolbar")
@@ -1737,7 +1737,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         self._add_separator(tb)
 
-        self.btn_vehicles = self._toolbar_toggle("VEHICLES", "Vehicle panel", tb)
+        self.btn_vehicles = self._toolbar_toggle("VEHICLES", "", tb)
 
         self.btn_prev_locs = self._toolbar_toggle(
             "PREV LOCS", "Previous deployments", tb
@@ -1911,7 +1911,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._trails_timer.timeout.connect(self._refresh_trails)
 
         self.btn_surface = self._toolbar_toggle(
-            "SURFACE", "Surface observations", tb
+            "SURFACE", "", tb
         )
         self.surface_controls = SurfaceControls(self._map_container)
         self.surface_controls.setObjectName("floatingToolbar")
@@ -7981,7 +7981,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         name_btn = QPushButton(v.id)
         name_btn.setFlat(True)
-        name_btn.setToolTip(v.id)
         name_btn.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Fixed,

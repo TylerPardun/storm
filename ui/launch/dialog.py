@@ -639,7 +639,6 @@ class LaunchDialog(QDialog):
         action_row.addStretch()
 
         self._availability_refresh_btn = QPushButton("↻  Refresh data")
-        self._availability_refresh_btn.setToolTip("Refresh available dates")
         self._availability_refresh_btn.setAccessibleName("Refresh archive availability")
         self._availability_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._availability_refresh_btn.setFlat(True)

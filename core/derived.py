@@ -31,6 +31,7 @@ class Quantity:
     units: str
     colormap: str          # "thermal" (sequential) or "diverging"
     needs_track: bool = False
+    base_of: str | None = None     # a perturbation: this quantity minus its base state
 
 
 QUANTITIES: dict[str, Quantity] = {q.key: q for q in (
@@ -49,7 +50,23 @@ QUANTITIES: dict[str, Quantity] = {q.key: q for q in (
     Quantity("sr_wind", "Storm-relative wind speed", "m/s", "thermal", needs_track=True),
     Quantity("radial_wind", "Radial wind (+ out from storm)", "m/s", "diverging", needs_track=True),
     Quantity("tangential_wind", "Tangential wind (+ cyclonic)", "m/s", "diverging", needs_track=True),
+    # perturbations from the RAP/RUC base state (core/base_state.py)
+    Quantity("theta_p", "θ′ (from base state)", "K", "diverging", base_of="theta"),
+    Quantity("theta_v_p", "θv′ (from base state)", "K", "diverging", base_of="theta_v"),
+    Quantity("theta_e_p", "θe′ (from base state)", "K", "diverging", base_of="theta_e"),
+    Quantity("theta_w_p", "θw′ (from base state)", "K", "diverging", base_of="theta_w"),
+    Quantity("mixing_ratio_p", "Mixing ratio′ (from base state)", "g/kg", "diverging", base_of="mixing_ratio"),
+    Quantity("temperature_p", "T′ (from base state)", "°C", "diverging", base_of="temperature"),
+    Quantity("dewpoint_p", "Td′ (from base state)", "°C", "diverging", base_of="dewpoint"),
+    Quantity("u_p", "u′ (from base state)", "m/s", "diverging", base_of="u"),
+    Quantity("v_p", "v′ (from base state)", "m/s", "diverging", base_of="v"),
 )}
+
+# The base-state field (core.base_state.BaseState) each perturbation subtracts,
+# and the factor that puts it in the observation's units.
+BASE_FIELDS = {"theta": ("th", 1.0), "theta_v": ("thv", 1.0), "theta_e": ("the", 1.0),
+               "theta_w": ("thw", 1.0), "mixing_ratio": ("qv", 1000.0), "temperature": ("temp", 1.0),
+               "dewpoint": ("dew", 1.0), "u": ("u", 1.0), "v": ("v", 1.0)}
 
 
 def _array(values) -> np.ndarray:

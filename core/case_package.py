@@ -44,6 +44,8 @@ DATA_TYPES = {
     "asos": "ASOS observations",
     "hazards": "SPC / NWS hazards",
     "damage paths": "Damage paths",
+    "base state": "RAP/RUC analyses (base state)",
+    "terrain": "Terrain tiles (base-state height)",
     "listings": "Other catalog listings",
 }
 _ROOT = Path(__file__).resolve().parents[1]

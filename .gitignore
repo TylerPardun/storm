@@ -56,3 +56,7 @@ data/storm_tracks/*
 
 # case packages users export (data/case_packages/<session date>/*.zip)
 data/case_packages/
+
+# RAP/RUC analyses downloaded for base states (core/base_state.py)
+data/rap_cache/
+data/terrain_cache/

@@ -14,6 +14,8 @@ _GROUPS = (
     ("Measured", ("temperature", "dewpoint", "rh", "pressure", "wind_speed")),
     ("Thermodynamic", ("theta", "theta_v", "theta_e", "theta_w", "mixing_ratio")),
     ("Kinematic", ("u", "v", "sr_wind", "radial_wind", "tangential_wind")),
+    ("Perturbation (RAP/RUC base state)", ("theta_v_p", "theta_e_p", "theta_p", "theta_w_p",
+                                           "mixing_ratio_p", "temperature_p", "dewpoint_p", "u_p", "v_p")),
 )
 WINDOWS_MIN = (5, 10, 15, 30, 60)
 

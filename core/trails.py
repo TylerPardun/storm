@@ -86,7 +86,7 @@ class TrailBuilder:
     def build(self, observations_by_vehicle: dict, quantity_key: str, start: datetime, end: datetime, *,
               track_points=(), motion=None, time_to_space: bool = False,
               no_station_pressure: frozenset = frozenset(), wind_barbs: bool = False,
-              storm_relative_barbs: bool = False, base_states=None):
+              storm_relative_barbs: bool = False):
         """Returns (FeatureCollection dict, (vmin, vmax), n_values).
         `no_station_pressure`: platforms whose pressure isn't measured at the
         station (sea-level/altimeter), so pressure-based values stay blank.
@@ -120,14 +120,7 @@ class TrailBuilder:
             if idx.size > self.max_points:
                 idx = idx[np.linspace(0, idx.size - 1, self.max_points).round().astype(int)]
             sub = {k: v[idx] for k, v in columns.items()}
-            if quantity.base_of:
-                # perturbation: the observation minus the base state of its
-                # analysis window (core/base_state.py); blank without one
-                field, scale = derived.BASE_FIELDS[quantity.base_of]
-                base = (base_states.values(field, sub["time"]) * scale if base_states is not None
-                        else np.full(idx.size, np.nan))
-                values = values_all[quantity.base_of][idx] - base
-            elif quantity.needs_track:
+            if quantity.needs_track:
                 sub_derived = {k: v[idx] for k, v in values_all.items() if k in ("u", "v")}
                 values = derived.storm_relative(sub, sub_derived, list(track_points), motion)[quantity_key]
             else:

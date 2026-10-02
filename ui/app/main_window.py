@@ -205,8 +205,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     # emitted from the decode thread on a decode failure — site, product.
     _radar_decode_failed = pyqtSignal(str, str)
     _render_ready = pyqtSignal(object)
-    # emitted from the base-state thread (core/base_state.py): (done, total)
-    _base_state_progress = pyqtSignal(int, int)
     # emitted from the archive-render thread when an archive scan PNG is ready.
     _archive_render_ready = pyqtSignal(object)
     # emitted from the archive super-res render thread when a debounced
@@ -1904,13 +1902,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._trails_timer.setSingleShot(True)
             self._trails_timer.setInterval(250)     # coalesce clock ticks while playing
             self._trails_timer.timeout.connect(self._refresh_trails)
-            from core.base_state import BaseStateSeries
-            self._base_states = BaseStateSeries()      # perturbation trails (core/base_state.py)
-            self._base_done: dict[int, tuple] = {}     # analysis time -> track it was computed for
-            self._base_busy = False
-            self._base_progress = (0, 0)
-            self._base_retry_at = 0.0                  # after a network failure, wait before retrying
-            self._base_state_progress.connect(self._on_base_state_progress)
 
         self.btn_surface = self._toolbar_toggle(
             "SURFACE", "", tb
@@ -2329,90 +2320,23 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             asos_obs = {f"ASOS {sid}": rows for sid, rows in asos._observations.items() if rows}
             observations.update(asos_obs)
             asos_ids = frozenset(asos_obs)
-        perturbation = QUANTITIES[quantity].base_of is not None
-        if perturbation:
-            self._ensure_base_states(end - timedelta(minutes=minutes), end, track)
         fc, (vmin, vmax), n = self._trail_builder.build(
             observations, quantity, end - timedelta(minutes=minutes), end,
             track_points=track, motion=motion, time_to_space=time_to_space and motion is not None,
             no_station_pressure=asos_ids, wind_barbs=wind_barbs,
             storm_relative_barbs=sr_barbs and motion is not None,
-            base_states=self._base_states,
         )
         units = QUANTITIES[quantity].units
         stops = color_stops(quantity, vmin, vmax) if n else []
         self.map_widget.set_trails(fc, stops, units, QUANTITIES[quantity].label)
         self.trail_controls.set_scale(stops, vmin, vmax, units)
-        if perturbation and (n or self._base_busy):
-            self.trail_controls.set_status(self._base_state_status(end, n))
-        elif n:
+        if n:
             mode = " · time-to-space" if time_to_space and motion is not None else ""
             self.trail_controls.set_status(f"{n} segments over the last {minutes} min{mode}")
-        elif perturbation:
-            self.trail_controls.set_status("No base state: needs mobile mesonet observations in the window "
-                                           "and a RAP/RUC analysis (see the error log)")
         elif time_to_space and motion is not None:
             self.trail_controls.set_status("No observations within the storm track's time span")
         else:
             self.trail_controls.set_status(f"No {QUANTITIES[quantity].label.lower()} in the last {minutes} min")
-
-    # ---- base states (core/base_state.py) ----------------------------------
-    def _ensure_base_states(self, start, end, track) -> None:
-        """Compute, in the background, the base state of every 5-minute
-        analysis time the trail window covers that isn't done yet for the
-        current track (a track edit moves the center, so it's redone)."""
-        import threading
-        import time as _time
-        from core import base_state, derived
-        if self._base_busy or _time.monotonic() < self._base_retry_at:
-            return
-        track_sig = tuple((p.time.timestamp(), round(p.lat, 4), round(p.lon, 4)) for p in track)
-        todo = [e for e in base_state.analysis_epochs(start.timestamp(), end.timestamp())
-                if self._base_done.get(e) != track_sig]
-        if not todo:
-            return
-        dense = getattr(self, "_archive_vehicle_obs", None)
-        mobile = ([derived.observation_arrays(dense._observations[v]) for v in dense.available_vehicle_ids]
-                  if dense is not None else [])
-        self._base_busy = True
-        self._base_progress = (0, len(todo))
-        series, done = self._base_states, self._base_done
-
-        def work():
-            try:
-                for i, epoch in enumerate(todo):
-                    try:
-                        inputs = base_state.inputs_for(epoch, mobile, track)
-                        if inputs is not None and not series.has(inputs):
-                            when = datetime.fromtimestamp(epoch, timezone.utc)
-                            series.put(inputs, base_state.base_state_at(when, inputs.center, inputs.z_m))
-                        done[epoch] = track_sig
-                    except ConnectionError as exc:     # offline: not done, retried in a minute
-                        log.warning("Base state for %s: %s", epoch, exc)
-                        self._base_retry_at = _time.monotonic() + 60
-                    except Exception:  # noqa: BLE001 -- one bad hour mustn't stop the rest
-                        log.exception("Base state for %s failed", epoch)
-                        done[epoch] = track_sig
-                    self._base_state_progress.emit(i + 1, len(todo))
-            finally:
-                self._base_busy = False
-                self._base_state_progress.emit(len(todo), len(todo))
-
-        threading.Thread(target=work, daemon=True, name="base-states").start()
-
-    def _on_base_state_progress(self, done: int, total: int) -> None:
-        self._base_progress = (done, total)
-        self._schedule_trails()
-
-    def _base_state_status(self, end, n_segments: int) -> str:
-        from core import base_state
-        done, total = self._base_progress
-        busy = f" · computing base states {done}/{total}…" if self._base_busy else ""
-        state = self._base_states.get(base_state.analysis_epoch(end.timestamp()))
-        if state is None:
-            return f"{n_segments} segments{busy}"
-        return (f"{n_segments} segments · base {state.model} {state.model_hour[11:13]}Z at {state.z_m:.0f} m: "
-                f"θv {state.thv:.1f} K, θe {state.the:.1f} K, {state.n_points} pts{busy}")
 
     # ---- menu bar -----------------------------------------------------------
     def _init_menu_bar(self) -> None:
@@ -2518,8 +2442,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             "radar_tilt_index": self.radar_controls.current_tilt_index(),
             "velocity": {"dealias": dealias_on, "storm_relative": storm_relative_on},
             "track_workspace": self._track_workspace().name if hasattr(self, "_track_points") else None,
-            # perturbation trails: every base state computed, with its inputs
-            "base_states": self._base_states.to_json() if getattr(self, "_base_states", None) else [],
         }
 
     def _default_case_frame(self, session: tuple[datetime, datetime]) -> tuple[datetime, datetime]:

@@ -21,7 +21,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Case packages** (*File > Export / Open Case Package*): tracks, case settings, the provenance (URL and SHA-256) of every source file and, optionally, the data itself, limited to a chosen UTC time frame and including scans the catalogs list for it, so a case opens offline. Saved in `data/case_packages/<date>/`.
 - **Menu bar**: File (cases, map screenshot, change day), Edit (undo/redo), View (error log, debug panel) and Help (user guide, About STORM).
 - **Online base map**: without `tiles/storm.mbtiles`, the map loads from OpenFreeMap whenever the computer is online, and says so on the map (retrying) when it isn't.
-- **Perturbation trails** (θv′, θe′, θ′, θw′, mixing ratio′, T′, Td′, u′, v′) from RAP/RUC base states that STORM computes itself, the way MESO-VIEW's base-state builder did (checked against MESO-VIEW's base states, 2009–2026).
 - **Replay of annotations, storm cones and drawings** as they stood at the playback time; *MAP > ANNOTATIONS* shows or hides them.
 - Colorado Mesonet surface observations are now available from the SURFACE drawer and launch dialog alongside OK Mesonet, WTM, KS Mesonet, and ASOS.
 - CO Mesonet station plots use the NSSL API-hosted `co_mesonet.json` feed with station positions and names from `co_metadata.json`.
@@ -38,7 +37,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Network requests try IPv4 before IPv6 (an unreachable IPv6 route had added ~6 s to each request); transient NSSL failures are retried with backoff.
 - Log lines carry the UTC date and time, a per-run session ID and the open case.
 - American spelling throughout the interface and documentation.
-- `envs/storm.yml` adds `openpyxl` (Excel storm-track files) and `cfgrib`/`eccodes` (RAP/RUC analyses).
+- `envs/storm.yml` adds `openpyxl` (Excel storm-track files).
 
 ### Fixed
 - WSR-88D archive scans occasionally drawn rotated; split-cut velocity volumes; the radar image's time now shows the scan's own acquisition time.

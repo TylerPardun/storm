@@ -58,6 +58,11 @@ class TrailControls(QWidget):
         row = QHBoxLayout(drawer)              # one row, like the other toolbar drawers
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
+        # trails live in the VEHICLES drawer; off until asked for, like "show data"
+        self._chk_show = QCheckBox("show trails")
+        self._chk_show.setChecked(False)
+        self._chk_show.toggled.connect(self.settings_changed.emit)
+        row.addWidget(self._chk_show)
         small = "color: #B5BDCC; font-size: 10px;"
 
         self._quantity = QComboBox()
@@ -117,6 +122,9 @@ class TrailControls(QWidget):
         self.set_track_available(False)
 
     # ---- state -------------------------------------------------------
+    def trails_on(self) -> bool:
+        return self._chk_show.isChecked()
+
     def settings(self) -> tuple[str, int, bool, bool, bool]:
         """(quantity key, window minutes, time-to-space, wind barbs, storm-relative barbs)"""
         return (self._quantity.currentData(), self._window.currentData(),

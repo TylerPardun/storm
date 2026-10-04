@@ -1031,6 +1031,15 @@ The main window has a menu bar (at the top of the screen on macOS):
 - **View**: Error Log and Debug Panel.
 - **Help**: this user guide and About STORM (on macOS, About is in the STORM menu).
 
+### Archive Header
+
+In archive mode the header reads **RADAR · LIDAR | VEHICLES | HAZARDS | SATELLITE | TRACK | SURFACE | SOUNDING | MAP**:
+
+- **VEHICLES** — the vehicle list, and the observation-trail controls under it (*show trails*, quantity, window, time-to-space, wind barbs).
+- **HAZARDS** — SPC outlooks, watches and MDs, NWS warnings and CWAs, and **DAMAGE PATHS** (NWS damage surveys; checking it starts drawing a box).
+- **TRACK** — the storm track editor (trails' time-to-space and storm-relative velocity use it).
+- **SURFACE** — ASOS stations, chosen by drawing a box (live mode's SURFACE drawer of mesonet networks isn't available for past cases).
+
 ### Archive Controls Bar
 
 In archive mode one bar runs across the bottom of the map; it replaces the status panel that live modes show at the bottom left. It holds the archive clock (large, in UTC, with the date and Central/Mountain time), what's on screen (the radar site and volume time, e.g. *KOAX · 19:55:55Z*, then its product and tilt; satellite and mobile mesonet as status dots — hover the satellite dot for its state), the timeline with hour labels, and the playback controls. On the right of the controls row: status messages, the cursor's latitude/longitude, the vehicle count and the network state. The STORM version is under Help > About; the computer's own clock isn't shown, since a replayed case runs on the archive clock. The map's zoom buttons, scale and legend sit just above the bar.
@@ -1484,7 +1493,7 @@ The reference marker (one at a time, like MESO-VIEW's review marker) is a precis
 
 **Track table.** **Table…** lists every point for exact editing. Edits apply as one undoable step when you click **Apply**; invalid cells, or two points at the same second, are highlighted and nothing is applied. Selecting a row selects the point on the map; double-clicking goes to its time.
 
-**Observation trails (TRAILS).** Vehicle markers and station plots stay as they are; TRAILS adds each platform's recent path, colored by one quantity: measured (temperature, dewpoint, RH, pressure, wind speed), thermodynamic (θ, θv, θe, θw, mixing ratio, from each observation's own pressure — left blank if pressure wasn't measured), or kinematic (u, v, and with a storm track: storm-relative wind, radial wind + outward and tangential wind + cyclonic about the storm center). Choose how far back (5–60 min); the color bar shows the range on screen (symmetric about zero for signed winds). Trail colors never resemble the roads underneath: most quantities run dark violet (low) to pale lavender (high); signed winds run blue (negative) through pale gray (zero) to magenta (positive). Hover a trail for its value, time and platform. Gaps in the data break the line rather than bridging it.
+**Observation trails (VEHICLES > show trails).** VEHICLES opens the vehicle list and, under it, the trail controls; *show trails* (off until you turn it on) adds each platform's recent path, colored by one quantity: measured (temperature, dewpoint, RH, pressure, wind speed), thermodynamic (θ, θv, θe, θw, mixing ratio, from each observation's own pressure — left blank if pressure wasn't measured), or kinematic (u, v, and with a storm track: storm-relative wind, radial wind + outward and tangential wind + cyclonic about the storm center). Choose how far back (5–60 min); the color bar shows the range on screen (symmetric about zero for signed winds). Trail colors never resemble the roads underneath: most quantities run dark violet (low) to pale lavender (high); signed winds run blue (negative) through pale gray (zero) to magenta (positive). Hover a trail for its value, time and platform. Gaps in the data break the line rather than bridging it.
 
 **Time-to-space.** With a storm track, *Time-to-space* draws every trail observation at its offset from the storm center at the time it was taken, around the storm's position now, with 5-km range rings. Values and times are unchanged; observations outside the track's time span are hidden in this mode. ASOS stations drawn with the ASOS box join the trails here (a fixed station only makes a path relative to the storm); ASOS reports sea-level pressure, not station pressure, so pressure and θ-type quantities are left blank for them.
 

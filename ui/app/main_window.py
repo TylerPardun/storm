@@ -707,7 +707,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # already built the TRACK tab -- the time_changed connection has
             # to wait until here, once _time_ctrl is actually constructed.
             self._time_ctrl.time_changed.connect(self._on_time_changed_update_track_highlight)
-        if hasattr(self, "btn_trails"):
+        if hasattr(self, "trail_controls"):
             self._time_ctrl.time_changed.connect(self._schedule_trails)
 
         # Small top-left status text while initial data fetches run, in
@@ -1732,7 +1732,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         self._add_separator(tb)
 
-        self.btn_vehicles = self._toolbar_toggle("VEHICLES", "", tb)
+        self.btn_vehicles = self._toolbar_toggle(
+            "VEHICLES", "Vehicle list and observation trails" if self._archive else "", tb)
 
         self.btn_prev_locs = self._toolbar_toggle(
             "PREV LOCS", "Previous deployments", tb
@@ -1753,6 +1754,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.btn_hazards.toggled.connect(self.hazard_controls.toggle_drawer)
         self.btn_hazards.toggled.connect(self._start_layout_pulse)
         self.hazard_controls.content_resized.connect(self._start_layout_pulse)
+        if self._archive and feature_flags.is_enabled("damage_paths"):
+            # damage surveys are NWS hazard products: a toggle in the HAZARDS
+            # drawer (checking it starts drawing a box)
+            self.btn_damage_paths = self.hazard_controls.add_damage_paths_button()
+            self.btn_damage_paths.toggled.connect(self._on_damage_paths_toggled)
 
         self.outlook_panel = OutlookPanel(self._map_container)
         self.outlook_panel.closed.connect(self._layout_overlays)
@@ -1810,20 +1816,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # any other platform marker.
             self.map_widget.platform_marker_clicked.connect(self._on_platform_marker_clicked)
 
-        if self._archive and feature_flags.is_enabled("archive_asos"):
-            # No drawer -- nothing to pick from a list, just "draw a box,
-            # see markers replay," so a standalone toggle button is enough.
-            self.btn_archive_asos = self._toolbar_toggle(
-                "ASOS", "Draw a box for ASOS observations", tb
-            )
-            self.btn_archive_asos.toggled.connect(self._on_archive_asos_toggled)
-
-        if self._archive and feature_flags.is_enabled("damage_paths"):
-            # No drawer -- like ASOS, nothing to pick from a list.
-            self.btn_damage_paths = self._toolbar_toggle(
-                "DAMAGE", "Draw a box for damage paths", tb
-            )
-            self.btn_damage_paths.toggled.connect(self._on_damage_paths_toggled)
 
         if self._archive:
             # R and V flip reflectivity/velocity whether or not TRACK is open
@@ -1886,14 +1878,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._refresh_track_workspace_lists()
 
         if self._archive and feature_flags.is_enabled("obs_trails"):
-            self.btn_trails = self._toolbar_toggle(
-                "TRAILS", "Observation trails colored by measured and derived quantities", tb
-            )
+            # trails are the vehicles' own observations: their controls are
+            # the VEHICLES drawer, with a "show trails" switch
             self.trail_controls = TrailControls(self._map_container)
             self.trail_controls.setObjectName("floatingToolbar")
-            self.btn_trails.toggled.connect(self.trail_controls.toggle_drawer)
-            self.btn_trails.toggled.connect(self._start_layout_pulse)
-            self.btn_trails.toggled.connect(self._schedule_trails)
+            self.btn_vehicles.toggled.connect(self.trail_controls.toggle_drawer)
+            self.btn_vehicles.toggled.connect(self._start_layout_pulse)
             self.trail_controls.settings_changed.connect(self._schedule_trails)
             from core.trails import TrailBuilder
             self._trail_builder = TrailBuilder()
@@ -1901,6 +1891,15 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._trails_timer.setSingleShot(True)
             self._trails_timer.setInterval(250)     # coalesce clock ticks while playing
             self._trails_timer.timeout.connect(self._refresh_trails)
+
+        if self._archive and feature_flags.is_enabled("archive_asos"):
+            # archive mode's surface stations: ASOS, by drawing a box (live
+            # mode's SURFACE drawer, below, is hidden in archive mode)
+            self._add_separator(tb)
+            self.btn_archive_asos = self._toolbar_toggle(
+                "SURFACE", "Draw a box for ASOS stations", tb
+            )
+            self.btn_archive_asos.toggled.connect(self._on_archive_asos_toggled)
 
         self.btn_surface = self._toolbar_toggle(
             "SURFACE", "", tb
@@ -2301,9 +2300,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _refresh_trails(self) -> None:
         from core.derived import QUANTITIES
         from core.trails import color_stops
-        if not hasattr(self, "btn_trails"):
+        if not hasattr(self, "trail_controls"):
             return
-        if not self.btn_trails.isChecked():
+        if not self.trail_controls.trails_on():
             self.map_widget.set_trails(None)
             return
         quantity, minutes, time_to_space, wind_barbs, sr_barbs = self.trail_controls.settings()
@@ -2826,7 +2825,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 _stack(self.raw_lidar_controls)
             if hasattr(self, "track_controls") and self.btn_track.isChecked():
                 _stack(self.track_controls)
-            if hasattr(self, "trail_controls") and self.btn_trails.isChecked():
+            if hasattr(self, "trail_controls") and self.btn_vehicles.isChecked():
                 _stack(self.trail_controls)
             if hasattr(self, "surface_controls") and self.btn_surface.isChecked():
                 _stack(self.surface_controls)

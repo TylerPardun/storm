@@ -115,6 +115,18 @@ def cwa_label_points(features: list[dict], shp_path: str) -> list[list[float] | 
     return points
 
 
+def _no_result(script: str) -> str:
+    """The script with a final `void 0`, so its completion value is undefined.
+
+    QtWebEngine sends a script's completion value (its last expression) back
+    from the page to this process even when no callback asks for it. MapLibre
+    methods return the map itself (map.setLayoutProperty(...) is `this`), so a
+    script ending in one made Chromium serialize the whole map -- 1.2 GB with
+    a radar image and lidar scans loaded (trace, 2026-10-04): ~28 s with the
+    page and STORM's main thread frozen, and the memory spike with it."""
+    return f"{script}\n;void 0;"
+
+
 class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
     map_ready             = pyqtSignal()
     map_clicked           = pyqtSignal(float, float)
@@ -268,7 +280,7 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
             return
         self._map_ready = True
         for script in self._js_queue:
-            self.page().runJavaScript(script)
+            self.page().runJavaScript(_no_result(script))
         self._js_queue.clear()
         self.map_ready.emit()
 
@@ -285,7 +297,7 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         if SAFE_MAP_MODE:
             return
         if self._map_ready:
-            self.page().runJavaScript(script)
+            self.page().runJavaScript(_no_result(script))
         else:
             self._js_queue.append(script)
 

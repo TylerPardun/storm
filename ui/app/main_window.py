@@ -1724,6 +1724,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.btn_raw_lidar.toggled.connect(self._show_lidar_locations)
             self.raw_lidar_controls.availability_changed.connect(self._on_raw_lidar_availability)
             self.raw_lidar_controls.field_selected.connect(self._on_raw_lidar_field_selected)
+            self.raw_lidar_controls.data_toggled.connect(self._on_lidar_data_toggled)
             self.raw_lidar_controls.location_requested.connect(self._center_on_lidar_location)
             self.raw_lidar_controls.radar_visible_toggled.connect(self.map_widget.set_radar_visible)
             if not feature_flags.is_enabled("noxp_radar"):       # else connected with NOXP below
@@ -5364,6 +5365,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._lidar_overlay_key = None
         if self._lidar_overlay is not None:
             self._lidar_overlay.clear()
+        if not self.raw_lidar_controls.data_is_on():
+            self.raw_lidar_controls.set_data_on(True)   # picking a lidar means showing it
         self.map_widget.set_radar_visible(self.raw_lidar_controls.radar_is_on())
         self._show_lidar_location_details()
         self._show_lidar_locations(self.btn_raw_lidar.isChecked())
@@ -5412,6 +5415,20 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if loc is not None:
             self.map_widget.fly_to(loc.lat, loc.lon)
 
+    def _on_lidar_data_toggled(self, on: bool) -> None:
+        """Hide or show the lidar's scans on the map (the chosen lidar stays
+        chosen); with them hidden the radar shows as usual."""
+        self._lidar_overlay_generation += 1
+        self._lidar_overlay_key = None
+        if not on:
+            if self._lidar_overlay is not None:
+                self._lidar_overlay.hide()
+            self.map_widget.set_radar_visible(True)
+            return
+        if self._lidar_location is not None:
+            self.map_widget.set_radar_visible(self.raw_lidar_controls.radar_is_on())
+        self._render_lidar_overlay()
+
     def _on_raw_lidar_field_selected(self, field):
         self._lidar_overlay_field = field
         self._lidar_overlay_generation += 1
@@ -5429,7 +5446,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         and re-rendering and re-sending it on every clock tick only churned
         memory in the map's web view."""
         from core.lidar_scans import scan_at
-        if not self._lidar_scans:
+        if not self._lidar_scans or not self.raw_lidar_controls.data_is_on():
             self._lidar_awaiting_first_render = False
             self._maybe_end_lidar_location_loading()
             return
@@ -5495,8 +5512,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if result["generation"] == self._lidar_overlay_generation:
             self._lidar_awaiting_first_render = False
             self._maybe_end_lidar_location_loading()
-        if not self._lidar_instrument or result["generation"] != self._lidar_overlay_generation:
-            pass  # superseded lidar or time
+        if (not self._lidar_instrument or result["generation"] != self._lidar_overlay_generation
+                or not self.raw_lidar_controls.data_is_on()):
+            pass  # superseded lidar or time, or switched off while rendering
         elif "error" in result:
             if not result.get("quiet"):
                 self.status_msg_label.setText(f"Lidar map: {result['error']}")

@@ -35,12 +35,14 @@ class RawLidarControls(QWidget):
     """Signals
     -------
     field_selected(str)          field to show
+    data_toggled(bool)           show the lidar's scans on the map (like the radar's "show data")
     radar_visible_toggled(bool)  radar under the lidar on/off
     location_requested()         the chosen lidar's button: center the map on it
     availability_changed(bool)   any lidar data for this date
     """
 
     field_selected = pyqtSignal(str)
+    data_toggled = pyqtSignal(bool)
     radar_visible_toggled = pyqtSignal(bool)
     location_requested = pyqtSignal()
     availability_changed = pyqtSignal(bool)
@@ -88,6 +90,12 @@ class RawLidarControls(QWidget):
         self._field_combo.setEnabled(False)
         self._field_combo.currentIndexChanged.connect(self._on_field_changed)
         row.addWidget(self._field_combo)
+
+        self._chk_data = QCheckBox("show data")
+        self._chk_data.setChecked(True)
+        self._chk_data.setFixedHeight(22)
+        self._chk_data.toggled.connect(self._on_data_toggled)
+        row.addWidget(self._chk_data)
 
         self._chk_radar = QCheckBox("radar")
         self._chk_radar.setChecked(True)
@@ -212,6 +220,16 @@ class RawLidarControls(QWidget):
 
     def radar_is_on(self) -> bool:
         return self._chk_radar.isChecked()
+
+    def data_is_on(self) -> bool:
+        return self._chk_data.isChecked()
+
+    def set_data_on(self, on: bool) -> None:
+        self._chk_data.setChecked(on)
+
+    def _on_data_toggled(self, checked: bool) -> None:
+        self._chk_radar.setVisible(checked)       # "radar under the lidar" only means something with it on
+        self.data_toggled.emit(checked)
 
     def _on_field_changed(self, _index=None):
         name = self._field_combo.currentData()

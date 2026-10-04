@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time as _time
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -56,6 +57,13 @@ ARCHIVE_UNAVAILABLE_STATIONS: frozenset[str] = frozenset({
 
 BUFFER_BEFORE = 4
 BUFFER_AFTER  = 4
+# A parsed Level-2 volume holds ~465 MB of Python objects for a 10 MB file
+# (MetPy keeps every tilt and moment; measured KDDC 2026-05-17), and the buffer
+# used to keep one per scan in a +/-8 window -- several GB. Only the scan on
+# screen keeps its parse (so switching its product or tilt is instant);
+# prefetched neighbors are decoded for the current product and their parse
+# dropped, and re-parsed from the raw file on disk if ever needed again.
+PARSED_KEEP = 1
 
 
 class ArchiveRadarFetcher(QObject):
@@ -120,7 +128,7 @@ class ArchiveRadarFetcher(QObject):
         # maps scan_time → parsed metpy Level2File (binary structure only,
         # independent of product/tilt) so switching product/tilt on an
         # already-fetched scan doesn't re-parse the raw bytes.
-        self._parsed_cache: dict[datetime, object] = {}
+        self._parsed_cache: "OrderedDict[datetime, object]" = OrderedDict()   # LRU, PARSED_KEEP
         self._decoded_cache: dict[tuple, Level2RadarScan] = {}
         # sorted list of all known scan times for the date.
         self._index: list[datetime] = []
@@ -507,13 +515,18 @@ class ArchiveRadarFetcher(QObject):
         """
         with self._parse_lock:
             f = self._parsed_cache.get(scan_time)
-            if f is None:
-                from metpy.io import Level2File
-                t0 = _time.perf_counter()
-                f = Level2File(io.BytesIO(file_bytes))
-                log.info("ArchiveRadarFetcher: parse %s %s in %.0f ms", self._station,
-                         scan_time.strftime("%H:%M:%S"), (_time.perf_counter() - t0) * 1000)
+            if f is not None:
+                self._parsed_cache.move_to_end(scan_time)
+                return f
+            from metpy.io import Level2File
+            t0 = _time.perf_counter()
+            f = Level2File(io.BytesIO(file_bytes))
+            log.info("ArchiveRadarFetcher: parse %s %s in %.0f ms", self._station,
+                     scan_time.strftime("%H:%M:%S"), (_time.perf_counter() - t0) * 1000)
+            if scan_time == getattr(self, "_target_scan", None):     # only the scan on screen
                 self._parsed_cache[scan_time] = f
+                while len(self._parsed_cache) > PARSED_KEEP:
+                    self._parsed_cache.popitem(last=False)
             return f
 
     def _decode(self, scan_time: datetime, file_bytes: bytes, *, product=None, tilt_idx=None,

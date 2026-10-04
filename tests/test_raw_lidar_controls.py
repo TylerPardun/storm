@@ -81,3 +81,14 @@ def test_radar_switch_under_the_lidar():
     assert controls.radar_is_on()
     controls._chk_radar.setChecked(False)
     assert radar == [False]
+
+
+def test_show_data_toggles_the_lidar_scans_and_hides_the_radar_switch_when_off():
+    controls, _, _ = _controls({})
+    shown = []
+    controls.data_toggled.connect(shown.append)
+    assert controls.data_is_on() and not controls._chk_radar.isHidden()
+    controls._chk_data.setChecked(False)
+    assert shown == [False] and not controls.data_is_on() and controls._chk_radar.isHidden()
+    controls.set_data_on(True)
+    assert shown == [False, True] and not controls._chk_radar.isHidden()

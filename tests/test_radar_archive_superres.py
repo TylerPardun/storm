@@ -154,3 +154,28 @@ def test_cache_get_marks_entry_most_recently_used():
     assert cache.get(k2) is None  # k2 evicted, not k1
     assert cache.get(k1) is not None
     assert cache.get(k3) is not None
+
+
+def test_only_the_scan_on_screen_keeps_its_parse(monkeypatch):
+    """A parsed Level-2 volume holds ~465 MB; the cache must not grow with the buffer."""
+    from datetime import datetime, timedelta, timezone
+    import archive.fetchers.radar_archive_fetcher as raf
+    import metpy.io
+    parsed = []
+    monkeypatch.setattr(metpy.io, "Level2File", lambda stream: parsed.append(object()) or parsed[-1])
+    fetcher = raf.ArchiveRadarFetcher.__new__(raf.ArchiveRadarFetcher)
+    import threading
+    fetcher._parse_lock = threading.Lock()
+    fetcher._parsed_cache = raf.OrderedDict()
+    fetcher._station = "KDDC"
+    t0 = datetime(2026, 5, 17, 22, tzinfo=timezone.utc)
+    times = [t0 + timedelta(minutes=5 * i) for i in range(5)]
+    fetcher._target_scan = times[2]
+    for t in times:                                       # prefetching the buffer
+        fetcher._get_parsed(t, b"x")
+    assert list(fetcher._parsed_cache) == [times[2]]      # neighbors decoded, parse dropped
+    again = fetcher._get_parsed(times[2], b"x")           # product/tilt switch: reused
+    assert len(parsed) == 5 and again is parsed[2]
+    fetcher._target_scan = times[3]
+    fetcher._get_parsed(times[3], b"x")
+    assert list(fetcher._parsed_cache) == [times[3]]

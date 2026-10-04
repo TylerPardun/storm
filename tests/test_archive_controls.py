@@ -101,8 +101,10 @@ def test_rendered_radar_time_survives_loading_and_clock_changes():
     scan = SimpleNamespace(site='KTWX', scan_time=datetime(2026, 6, 11, 0, 3, 42, tzinfo=timezone.utc))
     controls.set_rendered_radar(scan)
     original = controls._radar_time_label.text()
-    assert '11 Jun 2026 00:03:42Z' in original
+    assert original == 'KTWX · 00:03:42Z'
+    assert '11 Jun 2026 00:03:42 UTC' in controls._radar_time_label.toolTip()
     controls.set_radar_status('Radar: loading…')
+    assert controls._radar_status.text() == 'loading…'          # without the 'Radar:' prefix
     controller.step(10)
     assert controls._radar_time_label.text() == original
     controls.set_rendered_radar(None)
@@ -169,3 +171,18 @@ def test_letter_step_keys_can_be_handed_to_another_tool():
     assert deleted == [True]
     assert controller.current_time == datetime(2026, 4, 16, 12, 3, tzinfo=timezone.utc)
     win.close()
+
+
+def test_bar_header_shows_one_clock_and_compact_status():
+    _, controller, controls = _controls()
+    assert controls._utc_label.text().endswith(" UTC")
+    controls.set_obs_status("OBS: 1-second partial 3/7", active=True)
+    assert "Mesonet 1-second partial 3/7" in controls._obs_status.text()
+    controls.set_satellite_status("Sat: waiting")
+    assert "Sat" in controls._sat_status.text() and controls._sat_status.toolTip() == "Satellite: waiting"
+    from PyQt6.QtWidgets import QLabel
+    extra = QLabel("LAT: 41.2879")
+    controls.add_info_widget(extra)
+    assert extra.parent() is controls
+    controller.toggle_play()
+    assert controls._btn_play.text().endswith("Pause")

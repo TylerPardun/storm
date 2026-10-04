@@ -447,6 +447,15 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_controls.set_satellite_status("Sat: waiting")
         self._archive_controls.set_obs_status("OBS: probing")
         self._archive_controls.change_day_requested.connect(self._on_change_day_requested)
+        # archive mode has one bar: the status panel's live pieces move into it
+        # (the wall clock, mode badge and version don't -- see Help > About)
+        self.status_msg_label.setMaximumWidth(380)
+        self.status_msg_label.setStyleSheet("color: #9BA3B2; font-size: 11px;")
+        for widget in (self.status_msg_label, self.coord_label, self.vehicle_count_label, self.net_indicator):
+            self._archive_controls.add_info_widget(widget)
+        self.coord_label.setStyleSheet(self.coord_label.styleSheet() + "font-size: 11px;")
+        self.vehicle_count_label.setStyleSheet(self.vehicle_count_label.styleSheet() + "font-size: 11px;")
+        self._status_left.hide()
         # EXIT floats on its own at the map's top right, apart from the header
         # and the time bar (positioned in _layout_overlays)
         self._exit_button = QToolButton(self._map_container)
@@ -2861,20 +2870,23 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                            OutlookPanel.PANEL_WIDTH, panel_h)
             op.raise_()
 
-        # archive controls bar — centered, pinned to bottom
+        # archive bar — full width, pinned to the bottom; the map's own bottom
+        # controls (zoom, scale, legend) are lifted above it
         arc_bar_h = 0
         archive_rect = None
         if hasattr(self, "_archive_controls"):
             ac = self._archive_controls
-            ac_w = min(r.width() - 2 * MARGIN, 680)
+            ac_w = r.width() - 2 * MARGIN
             ac.setFixedWidth(ac_w)
             ac.adjustSize()
             ac_h = ac.sizeHint().height()
             arc_bar_h = ac_h + MARGIN
-            ac_x = max(MARGIN, (r.width() - ac_w) // 2)
-            ac.setGeometry(ac_x, r.height() - arc_bar_h, ac_w, ac_h)
-            archive_rect = (ac_x, r.height() - arc_bar_h, ac_w, ac_h)
+            ac.setGeometry(MARGIN, r.height() - arc_bar_h, ac_w, ac_h)
+            archive_rect = (MARGIN, r.height() - arc_bar_h, ac_w, ac_h)
             ac.raise_()
+            if getattr(self, "_map_bottom_inset", None) != arc_bar_h:
+                self._map_bottom_inset = arc_bar_h
+                self.map_widget.run_js(f"if (window.stormSetBottomInset) stormSetBottomInset({arc_bar_h});")
 
         # debug pill — bottom-center, sits above archive controls (or above bottom margin)
         if hasattr(self, "_debug_pill"):
@@ -2888,7 +2900,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         # Left status pill stays bottom-left when there is room.  On narrower
         # archive layouts it moves above the playback bar instead of covering it.
-        if hasattr(self, "_status_left"):
+        _status_y = r.height() - arc_bar_h - MARGIN       # without the panel: just above the bar
+        if hasattr(self, "_status_left") and not self._status_left.isHidden():
             self._status_left.adjustSize()
             sl = self._status_left.size()
             _status_y = bottom_left_y_avoiding(
@@ -2918,7 +2931,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         # re-center button — bottom-right, above MapLibre zoom controls (~70px tall)
         _ZOOM_CTRL_H = 70   # approximate height of MapLibre NavigationControl
         _GAP = 6
-        _recenter_top = r.height() - _ZOOM_CTRL_H - _GAP
+        _recenter_top = r.height() - arc_bar_h - _ZOOM_CTRL_H - _GAP
         if hasattr(self, "btn_recenter"):
             btn_w = self.btn_recenter.width()
             btn_h = self.btn_recenter.height()

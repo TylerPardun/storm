@@ -2770,6 +2770,16 @@
       else if (el) el.remove();
     };
 
+    // Lift the map's bottom controls (zoom, scale, legend) above a bar
+    // across the bottom of the window (the archive bar), px from the bottom.
+    window.stormSetBottomInset = function(px) {
+      var b = (10 + (px || 0)) + "px";
+      document.querySelectorAll(".maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right")
+        .forEach(function(el) { el.style.setProperty("bottom", b, "important"); });
+      var legend = document.getElementById("storm-legend");
+      if (legend) legend.style.bottom = b;
+    };
+
     window.stormFlyTo = function(lat, lon, zoom) {
       map.flyTo({
         center: [lon, lat],

@@ -5,7 +5,7 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
-    QToolButton, QComboBox, QFrame, QSlider, QMessageBox,
+    QToolButton, QComboBox, QFrame, QSlider, QMessageBox, QPushButton,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
@@ -59,9 +59,50 @@ class _CoverageStrip(QWidget):
             painter.fillRect(int(x0), 0, max(2, int(x1 - x0)), self.height(), QColor(self._color))
 
 
+class _HourAxis(QWidget):
+    """Hour labels under the time slider (12Z, 15Z, ...), aligned with the
+    slider's groove."""
+
+    def __init__(self, controller, parent=None):
+        super().__init__(parent)
+        self._tc = controller
+        self.setFixedHeight(13)
+
+    def paintEvent(self, _event) -> None:
+        from PyQt6.QtGui import QColor, QFont, QPainter
+        start, end = self._tc.window
+        total = (end - start).total_seconds()
+        if total <= 0:
+            return
+        hours = total / 3600
+        step = 1 if hours <= 8 else 3 if hours <= 30 else 6
+        painter = QPainter(self)
+        font = QFont(self.font())
+        font.setPixelSize(10)
+        painter.setFont(font)
+        painter.setPen(QColor("#5B6480"))
+        inset, width = 8, max(1, self.width() - 16)
+        t = start.replace(minute=0, second=0, microsecond=0)
+        if t < start:
+            t += timedelta(hours=1)
+        metrics = painter.fontMetrics()
+        while t <= end:
+            if t.hour % step == 0:
+                x = inset + width * (t - start).total_seconds() / total
+                label = f"{t:%H}Z"
+                w = metrics.horizontalAdvance(label)
+                painter.drawText(int(min(max(0, x - w / 2), self.width() - w)), 10, label)
+            t += timedelta(hours=1)
+
+
 class ArchiveControls(QWidget):
     """
-    Floating bottom bar providing time navigation controls for archive mode.
+    The archive bar across the bottom of the map: the one place for the
+    archive clock and data status (header), the timeline (slider with hour
+    labels and any coverage strip), and playback (Play, speed, scan steps).
+    MainWindow adds the cursor position, vehicle count and status messages
+    on the right of the controls row (add_info_widget), so archive mode has
+    no separate status panel.
 
     Connects to a TimeController and exposes:
       • Play / pause
@@ -95,113 +136,74 @@ class ArchiveControls(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 5, 10, 5)
-        root.setSpacing(2)
+        root.setContentsMargins(12, 7, 12, 7)
+        root.setSpacing(3)
 
-        row1 = QHBoxLayout()
-        row1.setSpacing(8)
-        row1.setContentsMargins(0, 0, 0, 0)
+        def label(text, style):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(style)
+            return lbl
 
-        archive_badge = QLabel("ARCHIVE")
-        archive_badge.setStyleSheet(
-            "color: #FF9F1C; font-size: 10px; font-weight: 700; letter-spacing: 1px;"
-        )
-        row1.addWidget(archive_badge)
+        # ---- header: mode, the archive clock, then what's on screen --------
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        head.setContentsMargins(0, 0, 0, 0)
+        head.addWidget(label("● ARCHIVE", "color: #FF9F1C; font-size: 10px; font-weight: 700; letter-spacing: 1px;"))
+        self._utc_label = label("--:--:-- UTC", "color: #F2F5FA; font-size: 16px; font-weight: 700;")
+        head.addWidget(self._utc_label)
+        self._date_label = label("---", "color: #C8D0DE; font-size: 11px; font-weight: 500;")
+        head.addWidget(self._date_label)
+        self._local_label = label("", "color: #8E97AB; font-size: 11px;")
+        head.addWidget(self._local_label)
+        head.addStretch()
+        # the radar on screen: site and volume time, then its product / state
+        self._radar_time_label = label("Radar —", "color: #E8EAF0; font-size: 11px; font-weight: 600;")
+        self._radar_time_label.setToolTip("Volume time of the radar image on the map")
+        head.addWidget(self._radar_time_label)
+        self._radar_status = label("", "")
+        head.addWidget(self._radar_status)
+        head.addWidget(self._vdiv())
+        self._sat_status = label("", "")
+        head.addWidget(self._sat_status)
+        self._obs_status = label("", "")
+        head.addWidget(self._obs_status)
+        self.set_radar_status("waiting")
+        self.set_satellite_status("Sat: --")
+        self.set_obs_status("OBS: MQTT")
+        root.addLayout(head)
 
-        row1.addWidget(self._vdiv())
-
-        self._date_label = QLabel("---- -- --")
-        self._date_label.setStyleSheet(
-            "color: #C8D0DE; font-size: 10px; font-weight: 600; letter-spacing: 0.5px;"
-        )
-        row1.addWidget(self._date_label)
-
-        self._utc_label = QLabel("--:--:-- UTC")
-        self._utc_label.setStyleSheet(
-            "color: #E8EAF0; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;"
-        )
-        row1.addWidget(self._utc_label)
-
-        row1.addWidget(self._vdiv())
-
-        self._local_label = QLabel("--:-- CT / --:-- MT")
-        self._local_label.setStyleSheet(
-            "color: #8E97AB; font-size: 10px; font-weight: 500; letter-spacing: 0.5px;"
-        )
-        row1.addWidget(self._local_label)
-
-        row1.addStretch()
-
-        self._radar_status = QLabel("Radar: --")
-        self._radar_status.setStyleSheet(
-            "color: #8E97AB; font-size: 9px; font-weight: 600; letter-spacing: 0.4px;"
-        )
-        row1.addWidget(self._radar_status)
-
-        row1.addWidget(self._vdiv())
-
-        self._sat_status = QLabel("Sat: --")
-        self._sat_status.setStyleSheet(
-            "color: #8E97AB; font-size: 9px; font-weight: 600; letter-spacing: 0.4px;"
-        )
-        row1.addWidget(self._sat_status)
-
-        row1.addWidget(self._vdiv())
-
-        self._obs_status = QLabel("OBS: MQTT")
-        self._obs_status.setStyleSheet(
-            "color: #8E97AB; font-size: 9px; font-weight: 600; letter-spacing: 0.4px;"
-        )
-        row1.addWidget(self._obs_status)
-
-        root.addLayout(row1)
-
-        self._radar_time_label = QLabel("Radar image: —")
-        self._radar_time_label.setStyleSheet("color: #E8EAF0; font-size: 11px; font-weight: 600;")
-        self._radar_time_label.setToolTip("Volume time of the displayed radar image")
-        root.addWidget(self._radar_time_label)
-
-        # scrubber — seconds since 00:00 UTC of the session date, running to
-        # the session's end (which can be into the next UTC day). Dragging
-        # only updates the time label (cheap); the actual seek (which fans
-        # out to every fetcher's on_time_changed) only fires on release, so
-        # scrubbing never floods the archive fetchers with intermediate seeks.
+        # ---- timeline -------------------------------------------------------
+        # seconds since the session start, running to the session's end (which
+        # can be into the next UTC day). Dragging only updates the clock text
+        # (cheap); the seek (which fans out to every fetcher) fires on release.
         self._slider = QSlider(Qt.Orientation.Horizontal)
         self._slider.setRange(0, max(0, self._tc.window_seconds() - 1))
-        self._slider.setTickInterval(3600)   # one tick per hour
-        self._slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self._slider.setTracking(False)
-        self._slider.setFixedHeight(18)
+        self._slider.setFixedHeight(16)
         self._slider.sliderMoved.connect(self._on_slider_preview)
         self._slider.valueChanged.connect(self._on_slider_committed)
         root.addWidget(self._slider)
         # when the chosen lidar was scanning (set_coverage), under the slider
         self._coverage = _CoverageStrip(self._tc, self)
         root.addWidget(self._coverage)
+        self._hours = _HourAxis(self._tc, self)
+        root.addWidget(self._hours)
 
-        row2 = QHBoxLayout()
-        row2.setSpacing(5)
-        row2.setContentsMargins(0, 0, 0, 0)
-
-        self._btn_start = self._ctrl_btn("-1m", "")
-        self._btn_back  = self._ctrl_btn("⏮", "Previous radar scan (Left / A)")
-        self._btn_play  = self._ctrl_btn("▶",  "Play / pause (Space)")
+        # ---- playback, then the info MainWindow adds on the right -----------
+        row = QHBoxLayout()
+        row.setSpacing(5)
+        row.setContentsMargins(0, 2, 0, 0)
+        self._btn_play = QPushButton("▶  Play")
+        self._btn_play.setObjectName("archivePlayButton")
+        self._btn_play.setToolTip("Space")
         self._btn_play.setCheckable(True)
-        self._btn_fwd   = self._ctrl_btn("⏭", "Next radar scan (Right / D)")
-        self._btn_end   = self._ctrl_btn("+1m", "")
+        self._btn_play.setFixedHeight(24)
+        self._btn_play.setMinimumWidth(78)
+        row.addWidget(self._btn_play)
+        row.addSpacing(6)
 
-        for btn in (self._btn_start, self._btn_back, self._btn_play,
-                    self._btn_fwd, self._btn_end):
-            row2.addWidget(btn)
-
-        row2.addWidget(self._vdiv())
-
-        self._speed_label = QLabel("SPEED")
-        self._speed_label.setStyleSheet(
-            "color: #6E7A8F; font-size: 9px; font-weight: 600; letter-spacing: 0.5px;"
-        )
-        row2.addWidget(self._speed_label)
-
+        self._speed_label = label("SPEED", "color: #6E7A8F; font-size: 9px; font-weight: 600; letter-spacing: 0.5px;")
+        row.addWidget(self._speed_label)
         self._speed_combo = QComboBox()
         self._speed_combo.setObjectName("archiveSpeedCombo")
         for s in SPEED_OPTIONS:
@@ -209,14 +211,31 @@ class ArchiveControls(QWidget):
         self._speed_combo.setCurrentIndex(SPEED_OPTIONS.index(self._tc.speed))
         self._speed_combo.currentIndexChanged.connect(self._on_speed_changed)
         self._speed_combo.setFixedWidth(54)
-        row2.addWidget(self._speed_combo)
+        row.addWidget(self._speed_combo)
+        self._speed_div = self._vdiv()
+        row.addWidget(self._speed_div)
 
-        root.addLayout(row2)
+        self._btn_start = self._ctrl_btn("-1m", "")
+        self._btn_back = self._ctrl_btn("⏮", "Previous radar scan (Left / A)")
+        self._btn_fwd = self._ctrl_btn("⏭", "Next radar scan (Right / D)")
+        self._btn_end = self._ctrl_btn("+1m", "")
+        for btn in (self._btn_start, self._btn_back, self._btn_fwd, self._btn_end):
+            row.addWidget(btn)
+        row.addStretch()
+        self._info_row = row
+        root.addLayout(row)
         self._precision_mode = False
 
         # populate the slider/labels from wherever the clock actually starts,
         # rather than leaving them at placeholder text until the first step.
         self._on_time_changed(self._tc.current_time)
+
+    def add_info_widget(self, widget: QWidget) -> None:
+        """Put a widget at the right end of the controls row (MainWindow:
+        cursor position, vehicle count, status messages)."""
+        if self._info_row.count() > 0 and self._info_row.itemAt(self._info_row.count() - 1).widget() is not None:
+            self._info_row.addWidget(self._vdiv())
+        self._info_row.addWidget(widget)
 
     def _ctrl_btn(self, text: str, tooltip: str) -> QToolButton:
         btn = QToolButton()
@@ -231,28 +250,32 @@ class ArchiveControls(QWidget):
         d.setStyleSheet("color: #394056; margin: 3px 0;")
         return d
 
+    @staticmethod
+    def _dot(text: str, color: str) -> str:
+        return f'<span style="color:{color}">●</span> {text}'
+
     def set_radar_status(self, text: str, error: bool = False) -> None:
-        self._radar_status.setText(text)
-        color = "#FF8F8F" if error else "#8E97AB"
+        """e.g. 'Radar: REF 0.7°' or 'Radar: loading KOAX…' -- shown after the
+        radar's site and time, without the 'Radar:' prefix."""
+        self._radar_status.setText(str(text).removeprefix("Radar:").strip())
         self._radar_status.setStyleSheet(
-            f"color: {color}; font-size: 9px; font-weight: 600; letter-spacing: 0.4px;"
-        )
+            f"color: {'#FF8F8F' if error else '#8E97AB'}; font-size: 11px; font-weight: 600;")
 
     def set_rendered_radar(self, scan) -> None:
         if scan is None:
-            self._radar_time_label.setText("Radar image: —")
+            self._radar_time_label.setText("Radar —")
             return
         timestamp = scan.scan_time.astimezone(timezone.utc)
-        self._radar_time_label.setText(
-            f"Radar image: {scan.site} · {timestamp:%d %b %Y %H:%M:%SZ}"
-        )
+        self._radar_time_label.setText(f"{scan.site} · {timestamp:%H:%M:%SZ}")
+        self._radar_time_label.setToolTip(f"Radar image on the map: {scan.site}, volume time "
+                                          f"{timestamp:%d %b %Y %H:%M:%S} UTC")
 
     def set_satellite_status(self, text: str, error: bool = False) -> None:
-        self._sat_status.setText(text)
-        color = "#FF8F8F" if error else "#8E97AB"
-        self._sat_status.setStyleSheet(
-            f"color: {color}; font-size: 9px; font-weight: 600; letter-spacing: 0.4px;"
-        )
+        state = str(text).removeprefix("Sat:").strip()
+        color = "#FF8F8F" if error else ("#5B6480" if state in ("--", "waiting", "") else "#39D98A")
+        self._sat_status.setText(self._dot("Sat", color))
+        self._sat_status.setToolTip(f"Satellite: {state}")
+        self._sat_status.setStyleSheet("color: #8E97AB; font-size: 11px; font-weight: 600;")
 
     def set_available_scan_times(self, iso_times: list[str]) -> None:
         """Record the current radar station's scan index (ISO UTC strings,
@@ -265,11 +288,10 @@ class ArchiveControls(QWidget):
         ]
 
     def set_obs_status(self, text: str, active: bool = False) -> None:
-        self._obs_status.setText(text)
-        color = "#39D98A" if active else "#8E97AB"
-        self._obs_status.setStyleSheet(
-            f"color: {color}; font-size: 9px; font-weight: 600; letter-spacing: 0.4px;"
-        )
+        """e.g. 'OBS: 1-second partial 3/7' -> '● Mesonet 1-second partial 3/7'."""
+        state = str(text).removeprefix("OBS:").strip()
+        self._obs_status.setText(self._dot(f"Mesonet {state}", "#39D98A" if active else "#5B6480"))
+        self._obs_status.setStyleSheet("color: #8E97AB; font-size: 11px; font-weight: 600;")
 
     def set_precision_mode(self, enabled: bool) -> None:
         """Use one-second playback navigation when dense observations are
@@ -281,6 +303,7 @@ class ArchiveControls(QWidget):
         self._btn_end.setText("+10")
         self._speed_label.setVisible(not enabled)
         self._speed_combo.setVisible(not enabled)
+        self._speed_div.setVisible(not enabled)
         self._tc.set_precision_playback(enabled)
 
     def _connect_controller(self):
@@ -342,6 +365,7 @@ class ArchiveControls(QWidget):
 
     def _on_window_changed(self, start: datetime, end: datetime) -> None:
         self._coverage.update()
+        self._hours.update()
         self._slider.blockSignals(True)
         self._slider.setRange(0, max(0, self._tc.window_seconds() - 1))
         self._slider.setValue(self._tc.seconds_since_start())
@@ -376,7 +400,7 @@ class ArchiveControls(QWidget):
     def _on_playing_changed(self, playing: bool) -> None:
         self._btn_play.blockSignals(True)
         self._btn_play.setChecked(playing)
-        self._btn_play.setText("⏸" if playing else "▶")
+        self._btn_play.setText("⏸  Pause" if playing else "▶  Play")
         self._btn_play.blockSignals(False)
 
     def _on_speed_changed(self, idx: int) -> None:
@@ -420,7 +444,7 @@ class ArchiveControls(QWidget):
         self._tc.step(10 if self._precision_mode else 60)
 
     def _update_time_display(self, t: datetime) -> None:
-        self._date_label.setText(t.strftime("%Y-%m-%d"))
+        self._date_label.setText(f"{t:%a} {t.day} {t:%b %Y}")
         self._utc_label.setText(t.strftime("%H:%M:%S UTC"))
 
         if _CT_TZ:
@@ -431,68 +455,3 @@ class ArchiveControls(QWidget):
             self._local_label.setText(
                 f"{ct.strftime('%H:%M %Z')} / {mt.strftime('%H:%M %Z')}"
             )
-
-
-    def add_radar_selectors(
-        self,
-        products: list[str],      # list of (pyart_field, display_label)
-        tilts: list[float],
-    ) -> None:
-        """
-        Dynamically insert product and tilt combo boxes into the control row.
-        Called by MainWindow once the first Level-2 scan arrives.
-        """
-        # already added.
-        if hasattr(self, "_product_combo"):
-            return
-
-        row2 = self.layout().itemAt(1).layout()
-
-        div = self._vdiv()
-        row2.insertWidget(row2.count() - 1, div)
-
-        prod_lbl = QLabel("PROD")
-        prod_lbl.setStyleSheet(
-            "color: #6E7A8F; font-size: 9px; font-weight: 600; letter-spacing: 0.5px;"
-        )
-        row2.insertWidget(row2.count() - 1, prod_lbl)
-
-        self._product_combo = QComboBox()
-        self._product_combo.setObjectName("archiveProductCombo")
-        self._product_combo.setFixedWidth(120)
-        for field, label in products:
-            self._product_combo.addItem(label, userData=field)
-        self._product_combo.currentIndexChanged.connect(
-            lambda i: self.product_changed.emit(
-                self._product_combo.itemData(i) or self._product_combo.itemText(i)
-            )
-        )
-        row2.insertWidget(row2.count() - 1, self._product_combo)
-
-        tilt_lbl = QLabel("TILT")
-        tilt_lbl.setStyleSheet(
-            "color: #6E7A8F; font-size: 9px; font-weight: 600; letter-spacing: 0.5px;"
-        )
-        row2.insertWidget(row2.count() - 1, tilt_lbl)
-
-        self._tilt_combo = QComboBox()
-        self._tilt_combo.setObjectName("archiveTiltCombo")
-        self._tilt_combo.setFixedWidth(70)
-        for deg in tilts:
-            self._tilt_combo.addItem(f"{deg:.1f}°")
-        self._tilt_combo.currentIndexChanged.connect(
-            lambda i: self.tilt_changed.emit(i)
-        )
-        row2.insertWidget(row2.count() - 1, self._tilt_combo)
-
-    def update_tilt_list(self, tilts: list[float]) -> None:
-        """Refresh the tilt combo when a new scan arrives with different tilts."""
-        if not hasattr(self, "_tilt_combo"):
-            return
-        current = self._tilt_combo.currentIndex()
-        self._tilt_combo.blockSignals(True)
-        self._tilt_combo.clear()
-        for deg in tilts:
-            self._tilt_combo.addItem(f"{deg:.1f}°")
-        self._tilt_combo.setCurrentIndex(min(current, self._tilt_combo.count() - 1))
-        self._tilt_combo.blockSignals(False)

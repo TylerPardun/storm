@@ -1033,14 +1033,15 @@ The main window has a menu bar (at the top of the screen on macOS):
 
 ### Archive Controls Bar
 
-A time bar sits at the bottom of the map in archive mode (it is not shown in live modes): the date and time, the radar image's time, data status (radar, satellite, observations), the timeline slider, and the playback buttons.
+In archive mode one bar runs across the bottom of the map; it replaces the status panel that live modes show at the bottom left. It holds the archive clock (large, in UTC, with the date and Central/Mountain time), what's on screen (the radar site and volume time, e.g. *KOAX · 19:55:55Z*, then its product and tilt; satellite and mobile mesonet as status dots — hover the satellite dot for its state), the timeline with hour labels, and the playback controls. On the right of the controls row: status messages, the cursor's latitude/longitude, the vehicle count and the network state. The STORM version is under Help > About; the computer's own clock isn't shown, since a replayed case runs on the archive clock. The map's zoom buttons, scale and legend sit just above the bar.
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ARCHIVE  2026-05-17  20:00:00 UTC   15:00 CDT     Radar  Sat  OBS    │
-│ ─────────────────────────────●────────────────────────────────────── │
-│      -10     ⏮      ▶      ⏭      +10                                │
-└──────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│ ● ARCHIVE  20:00:00 UTC  Sun 17 May 2026  15:00 CDT / 14:00 MDT   KOAX · 19:55:55Z REF 0.7° │ ● Sat ● Mesonet 3/7 │
+│ ──────────────────────────────────────●───────────────────────────────────────────── │
+│ 00Z      03Z      06Z      09Z      12Z      15Z      18Z      21Z      00Z           │
+│ [▶ Play]  SPEED 1×  │  -10  ⏮  ⏭  +10                 LAT … LON … │ VEHICLES 4 │ ● NET OK │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 #### Moving through time
@@ -1051,7 +1052,7 @@ Drag the slider to any time in the session and fine-tune with the buttons or key
 |--------|------|--------|
 | -10 / +10 | Home / End | Step 10 seconds (1 minute when the session has no one-second observations; the buttons then read -1m / +1m) |
 | ⏮ / ⏭ | Left / Right, `,` / `.` (also `<` / `>`), A / D when TRACK is off | Previous / next radar scan |
-| ▶ / ⏸ | Space | Play / pause |
+| ▶ Play / ⏸ Pause | Space | Play / pause |
 
 When the session has no one-second observations, a **SPEED** dropdown (1× to 300×) sets how fast playback runs; with one-second observations, playback steps through them and the dropdown is hidden.
 

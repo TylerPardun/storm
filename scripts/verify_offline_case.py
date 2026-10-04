@@ -100,13 +100,13 @@ def build(out: Path, when: datetime, station: str, frame_minutes: int) -> None:
     window.resize(1200, 800)
     window.move(-3000, 0)
     window.show()
-    rendered = lambda: hasattr(window, "_archive_controls") and window._archive_controls._radar_status.text().startswith(("Radar: N0", "Radar: REF", "Radar: DBZ"))
+    rendered = lambda: hasattr(window, "_archive_controls") and window._archive_controls._radar_status.text().startswith(("N0", "REF", "DBZ"))
     _pump(app, 30)
     if getattr(window, "_archive_radar", None) is None or window._archive_radar.station != station:
         window._on_radar_station_clicked(station)
     _pump(app, 240, rendered)
-    obs_ready = lambda: window._archive_controls._obs_status.text().startswith("OBS: catalog") \
-        or window._archive_controls._obs_status.text().startswith("OBS: 1-second")
+    obs_ready = lambda: any(w in window._archive_controls._obs_status.text()
+                            for w in ("Mesonet catalog", "Mesonet 1-second"))
     _pump(app, 240, obs_ready)
     # play the frame through so every scan in it is loaded
     for minutes in range(0, frame_minutes + 1, 10):
@@ -157,9 +157,10 @@ def open_offline(package: Path, wait: int) -> int:
     window.move(-3000, 0)
     window.show()
     ready = lambda: hasattr(window, "_archive_controls")      # built once the map is ready
-    rendered = lambda: ready() and window._archive_controls._radar_time_label.text() not in ("", "--:--Z")
+    rendered = lambda: ready() and window._archive_controls._radar_time_label.text() != "Radar —"
     radar_ok = _pump(app, wait, rendered)
-    obs_ok = ready() and _pump(app, 60, lambda: window._archive_controls._obs_status.text().startswith(("OBS: catalog", "OBS: 1-second")))
+    obs_ok = ready() and _pump(app, 60, lambda: any(w in window._archive_controls._obs_status.text()
+                                                       for w in ("Mesonet catalog", "Mesonet 1-second")))
     first = _status(window) if ready() else {"error": "archive startup never ran (map not ready)"}
     # step through the packed time frame
     frame = manifest.get("time_frame")

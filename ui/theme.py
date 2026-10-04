@@ -1080,6 +1080,26 @@ QDialog#annotationDialog QLineEdit:focus {
     color: #0A0A0F;
 }
 
+#archiveControls QPushButton#archivePlayButton {
+    background-color: #FF9F1C;
+    border: 1px solid #FF9F1C;
+    border-radius: 6px;
+    color: #0A0A0F;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 0 12px;
+}
+
+#archiveControls QPushButton#archivePlayButton:hover {
+    background-color: #FFB347;
+    border-color: #FFB347;
+}
+
+#archiveControls QPushButton#archivePlayButton:checked {
+    background-color: transparent;
+    color: #FF9F1C;
+}
+
 #archiveControls QSlider::groove:horizontal {
     height: 4px;
     background: #1E1E2E;

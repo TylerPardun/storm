@@ -73,6 +73,7 @@ def test_empty_task_list_starts_already_hidden():
 def test_later_background_work_shows_after_startup_without_reopening_startup():
     from ui.widgets.archive_loading_indicator import ArchiveLoadingIndicator
     ind = ArchiveLoadingIndicator(["Radar"])
+    ind.MIN_SHOWN_S = 0
     done = []
     ind.all_done.connect(lambda: done.append(True))
     ind.begin("lidar", "Loading Lidar…")
@@ -87,3 +88,19 @@ def test_later_background_work_shows_after_startup_without_reopening_startup():
     ind.end("lidar")
     assert ind.isHidden() and done == [True]         # all_done only once
     ind.end("lidar")                                 # ending twice is harmless
+
+
+def test_a_quick_activity_stays_up_long_enough_to_be_seen(qtbot=None):
+    import time
+    from PyQt6.QtWidgets import QApplication
+    from ui.widgets.archive_loading_indicator import ArchiveLoadingIndicator
+    ind = ArchiveLoadingIndicator([])
+    ind.MIN_SHOWN_S = 0.3
+    ind.begin("stop", "Loading Lidar truck · stop 2 of 2…")
+    ind.end("stop")                                   # done at once (cached files)
+    assert ind.text() == "Loading Lidar truck · stop 2 of 2…" and not ind.isHidden()
+    end = time.monotonic() + 1.0
+    while time.monotonic() < end and not ind.isHidden():
+        QApplication.processEvents()
+        time.sleep(0.02)
+    assert ind.isHidden()

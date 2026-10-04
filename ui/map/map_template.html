@@ -2737,6 +2737,7 @@
         if (bridge) bridge.on_platform_marker_click(id);
       });
       el.addEventListener("mouseenter", function(e) {
+        window._vehicleHovering = true;     // else the map's own mousemove hides this readout
         var tip = document.getElementById("hazard-tooltip");
         if (tip) {
           _setVehicleTip(tip, el.dataset.hoverText || id);
@@ -2753,6 +2754,7 @@
         }
       });
       el.addEventListener("mouseleave", function() {
+        window._vehicleHovering = false;
         var tip = document.getElementById("hazard-tooltip");
         if (tip) tip.style.display = "none";
       });

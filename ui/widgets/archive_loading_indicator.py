@@ -1,5 +1,7 @@
 from PyQt6.QtWidgets import QLabel
-from PyQt6.QtCore import Qt, pyqtSignal
+import time
+
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 
 
 class ArchiveLoadingIndicator(QLabel):
@@ -22,6 +24,7 @@ class ArchiveLoadingIndicator(QLabel):
     """
 
     all_done = pyqtSignal()
+    MIN_SHOWN_S = 1.0     # a later activity's line stays at least this long, so it's seen
 
     def __init__(self, tasks: list[str], parent=None):
         super().__init__(parent)
@@ -35,6 +38,7 @@ class ArchiveLoadingIndicator(QLabel):
         self._status_override: str | None = None
         self._finished = False
         self._activities: dict[str, str] = {}      # key -> text, in the order begun
+        self._begun_at: dict[str, float] = {}
         self._refresh()
 
     def _current_task(self) -> str | None:
@@ -50,10 +54,23 @@ class ArchiveLoadingIndicator(QLabel):
         """Show background work after startup (or once startup finishes)."""
         self._activities.pop(key, None)
         self._activities[key] = text
+        self._begun_at[key] = time.monotonic()
         self._refresh()
 
     def end(self, key: str) -> None:
+        if key not in self._activities:
+            return
+        left = self.MIN_SHOWN_S - (time.monotonic() - self._begun_at.get(key, 0.0))
+        if left > 0:
+            begun = self._begun_at.get(key)
+            # unless it was begun again meanwhile
+            QTimer.singleShot(int(left * 1000), lambda: self._begun_at.get(key) == begun and self._finish(key))
+            return
+        self._finish(key)
+
+    def _finish(self, key: str) -> None:
         if self._activities.pop(key, None) is not None:
+            self._begun_at.pop(key, None)
             self._refresh()
 
     def _refresh(self) -> None:

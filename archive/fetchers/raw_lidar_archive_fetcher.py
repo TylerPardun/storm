@@ -1,4 +1,6 @@
-"""CLAMPS b1 raw rays: CSM, PPI, fixed point and other scans.
+"""CLAMPS b1 raw rays from the lidars' PPI and CSM (continuous scan mode)
+files -- the scans STORM draws on the map. Fixed-point (stare) and "other"
+(RHI) files are not part of STORM.
 
 These are measured radial velocities/backscatter, not VAD wind retrievals.
 The 136 MB HPL catalog is deliberately outside automatic discovery.
@@ -39,9 +41,9 @@ class RawLidarSource:
 
 # DL1 and DL2 are the same physical lidar on the truck (confirmed by Tyler,
 # 2026-09-25): DL2 files exist only 2022-05-13..06-16. On those days both
-# streams can have a file for the same scan mode, and they differ (the fp
-# files are 51.6 MB vs 5.6 MB on 2022-05-13), so both are kept and offered,
-# labeled by stream -- nothing is deduplicated.
+# streams can have a file for the same scan mode, and they differ, so both
+# are kept and offered, labeled by stream -- nothing is deduplicated.
+PRODUCTS = ('csm', 'ppi')     # the PPI-type scan files; nothing else is read
 KNOWN_RAW_LIDAR_SOURCES = tuple(
     RawLidarSource(f'{platform}-{product.upper()}', instrument, directory, f'{prefix}dl{product}{unit}.b1', product, mobile)
     for platform, instrument, directory, prefix, unit, mobile in (
@@ -50,7 +52,7 @@ KNOWN_RAW_LIDAR_SOURCES = tuple(
         ('CLAMPS1', 'CLAMPS1', 'clamps/clamps1', 'clamps', 'C1', False),
         ('CLAMPS2', 'CLAMPS2', 'clamps/clamps2', 'clamps', 'C2', False),
     )
-    for product in ('csm', 'ppi', 'fp', 'other')
+    for product in PRODUCTS
 )
 
 
@@ -59,48 +61,20 @@ class LidarAsset:
     source: RawLidarSource
     filename: str
     catalog_url: str
-    path: str = ''       # THREDDS folder it is actually in, when not the source's own
 
     @property
     def url(self):
-        return f'https://data.nssl.noaa.gov/thredds/fileServer/{self.path or self.source.path}/{self.filename}'
-
-
-# CLAMPS files are sometimes filed under the other trailer's folder -- e.g.
-# six 2017 CLAMPS1 fixed-point files (clampsdlfpC1.*) sit in clamps2's
-# clampsdlfpC2.b1 folder (found 2026-09-28). Each trailer's files are also
-# looked for there, by their own name, so they are found and still labeled
-# with the trailer that recorded them.
-_OTHER_TRAILER = {'clamps/clamps1': 'clamps/clamps2', 'clamps/clamps2': 'clamps/clamps1'}
-
-
-def _other_trailer_path(source: RawLidarSource) -> str | None:
-    other = _OTHER_TRAILER.get(source.platform_dir)
-    if other is None:
-        return None
-    unit = 'C2' if other.endswith('2') else 'C1'
-    return f'FRDD/CLAMPS/{other}/ingested/clampsdl{source.product}{unit}.b1'
+        return f'https://data.nssl.noaa.gov/thredds/fileServer/{self.source.path}/{self.filename}'
 
 
 def discover_raw_lidar(source: RawLidarSource, day: date, *, cancel=None, fetch_catalog=None):
     from archive.catalog import CatalogSpec, _CatalogLinks, _fetch_catalog_html
     prefix = f'{source.datastream}.{day:%Y%m%d}.'
-    found = []
-    for path in (source.path, _other_trailer_path(source)):
-        if path is None:
-            continue
-        spec = CatalogSpec(path, '.cdf')
-        try:
-            html = (fetch_catalog or _fetch_catalog_html)(spec.url, cancel or Event())
-        except Exception:
-            if path == source.path:
-                raise
-            continue          # the other trailer's folder is only a second look
-        parser = _CatalogLinks(spec)
-        parser.feed(html)
-        found += [LidarAsset(source, name, spec.url, '' if path == source.path else path)
-                  for name in sorted(parser.filenames) if name.startswith(prefix)]
-    return found
+    spec = CatalogSpec(source.path, '.cdf')
+    html = (fetch_catalog or _fetch_catalog_html)(spec.url, cancel or Event())
+    parser = _CatalogLinks(spec)
+    parser.feed(html)
+    return [LidarAsset(source, name, spec.url) for name in sorted(parser.filenames) if name.startswith(prefix)]
 
 
 class _RangeFile:
@@ -194,8 +168,7 @@ def read_site(asset: LidarAsset) -> dict | None:
 class RawLidarRays:
     source: RawLidarSource
     time_epoch: np.ndarray
-    distance_m: np.ndarray
-    distance_kind: str  # "range" or file-declared "height"; never silently interchange.
+    distance_m: np.ndarray    # slant range of each gate
     azimuth_deg: np.ndarray
     elevation_deg: np.ndarray
     latitude: np.ndarray
@@ -235,7 +208,6 @@ class RawLidarRays:
     def summary(self):
         return dict(platform=self.source.platform_id, product=self.source.product,
                     rays=int(self.time_epoch.size), gates=int(self.distance_m.size),
-                    distance_kind=self.distance_kind,
                     start=datetime.fromtimestamp(float(self.time_epoch[0]), timezone.utc).isoformat(),
                     end=datetime.fromtimestamp(float(self.time_epoch[-1]), timezone.utc).isoformat(),
                     fields={k: {'units': v.get('units', ''), 'valid_cells': int(np.ma.count(v['data']))} for k, v in self.fields.items()},
@@ -263,15 +235,17 @@ def parse_raw_lidar(path, source: RawLidarSource):
         if not valid.size:
             raise ValueError('Raw lidar has no usable acquisition times')
         times = epoch[valid]
-        dimension = 'range' if 'range' in ds else 'height'
+        if 'range' not in ds:
+            raise ValueError('Not a PPI/CSM scan file: no slant range')
+        dimension = 'range'
         axis = _values(ds[dimension])
         units = ds[dimension].attrs.get('units', '').lower().strip()
-        if units in ('km', 'kilometers', 'kilometres', 'km agl', 'km msl'):   # both spellings occur in files
+        if units in ('km', 'kilometers', 'kilometres'):   # both spellings occur in files
             axis *= 1000
-        elif units not in ('m', 'meters', 'metres', 'm agl', 'm msl'):
-            raise ValueError(f'Unknown raw lidar {dimension} units: {units!r}')
+        elif units not in ('m', 'meters', 'metres'):
+            raise ValueError(f'Unknown raw lidar range units: {units!r}')
         if axis.ndim != 1 or not np.isfinite(axis).all() or (axis < 0).any():
-            raise ValueError('Invalid lidar range/height axis')
+            raise ValueError('Invalid lidar range axis')
         def rays(name):
             if name not in ds:
                 return np.full(times.size, np.nan)
@@ -303,7 +277,7 @@ def parse_raw_lidar(path, source: RawLidarSource):
             azimuth, reference = _truck_azimuth(azimuth, ds.attrs.get('Trailer_heading'))
             warnings.append(reference['azimuth_reference'])
             warnings.append('No platform-motion correction is applied to radial velocity.')
-        return RawLidarRays(source, times, axis, dimension, azimuth, rays('elevation'),
+        return RawLidarRays(source, times, axis, azimuth, rays('elevation'),
                             lat, lon, rays('alt'), rays('heading'), rays('snum'), fields, housekeeping,
                             origin, np.where(np.isfinite(lat), times, np.nan),
                             {'format': 'CLAMPS b1 raw lidar', 'metadata': {k: str(v) for k, v in ds.attrs.items()},

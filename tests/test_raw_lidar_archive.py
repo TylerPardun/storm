@@ -14,7 +14,7 @@ def _source(product='ppi', mobile=False):
 
 
 def _file(path, source, bad_time=False, trailer_heading=None):
-    dimension = 'height' if source.product == 'fp' else 'range'
+    dimension = 'range'
     ds = xr.Dataset({
         'base_time': ((), 1782001159.),
         'time_offset': ('time', [120., np.nan if bad_time else 0., 360.]),
@@ -27,7 +27,7 @@ def _file(path, source, bad_time=False, trailer_heading=None):
         'heading': ('time', [-999.] * 3), 'snum': ('time', [9., 20., 4.]),
     }, attrs={'Site_latitude': -999. if source.mobile else 35.,
               'Site_longitude': -999. if source.mobile else -97.})
-    ds[dimension].attrs['units'] = 'km AGL' if dimension == 'height' else 'km'
+    ds[dimension].attrs['units'] = 'km'
     ds['velocity'].attrs['units'] = 'm/s'
     ds['azimuth'].attrs['comment'] = '0 degrees is north'
     if trailer_heading is not None:
@@ -35,7 +35,7 @@ def _file(path, source, bad_time=False, trailer_heading=None):
     ds.to_netcdf(path, engine='h5netcdf')
 
 
-@pytest.mark.parametrize('product', ['csm', 'ppi', 'fp', 'other'])
+@pytest.mark.parametrize('product', ['csm', 'ppi'])
 def test_raw_ray_products_preserve_times_axes_scan_ids_and_fill(product, tmp_path):
     source = _source(product)
     path = tmp_path / 'r.cdf'
@@ -43,11 +43,10 @@ def test_raw_ray_products_preserve_times_axes_scan_ids_and_fill(product, tmp_pat
     result = raw.parse_raw_lidar(path, source)
     assert np.diff(result.time_epoch).min() > 0
     np.testing.assert_allclose(result.distance_m, [15., 45.])
-    assert result.distance_kind == ('height' if product == 'fp' else 'range')
     assert result.fields['velocity']['data'].mask[1, 1]
     assert result.fields['velocity']['data'][0, 0] == 20.
     assert result.scan_number.tolist() == [20., 9., 4.]  # never sort by scan number
-    assert result.elevation_deg[1] == 180.  # over-the-top RHI rays are retained
+    assert result.elevation_deg[1] == 180.  # rays are kept as stored; core/lidar_scans picks the PPIs
     assert result.latitude.tolist() == [35.] * 3
     when = datetime.fromtimestamp(result.time_epoch[1], timezone.utc)
     assert result.rays_at(when).tolist() == [1]
@@ -82,12 +81,13 @@ def test_bad_time_drops_aligned_measurements(tmp_path):
     assert result.fields['velocity']['data'][0, 0] == 10.
 
 
-def test_raw_registry_has_sixteen_streams_and_excludes_hpl():
-    assert len(raw.KNOWN_RAW_LIDAR_SOURCES) == 16
-    assert not any('hpl' in s.datastream for s in raw.KNOWN_RAW_LIDAR_SOURCES)
+def test_raw_registry_is_ppi_and_csm_only():
+    assert len(raw.KNOWN_RAW_LIDAR_SOURCES) == 8          # 4 lidar streams x {ppi, csm}
+    assert {s.product for s in raw.KNOWN_RAW_LIDAR_SOURCES} == {'ppi', 'csm'}
+    assert not any(tag in s.datastream for s in raw.KNOWN_RAW_LIDAR_SOURCES for tag in ('hpl', 'dlfp', 'dlother'))
     from archive.catalog import ALL_PLATFORMS, catalogs_for_platform
     sources = [p for p in ALL_PLATFORMS if p.family == 'CLAMPS Raw Lidar']
-    assert len(sources) == 16
+    assert len(sources) == 8
     assert all('/ingested/' in catalogs_for_platform(p)[0].path for p in sources)
 
 
@@ -179,3 +179,12 @@ def test_no_compass_at_all_leaves_the_file_unoriented(monkeypatch, tmp_path):
                                 track_loader=lambda day: [Observation('dltruck', 35., -97., t)])
     assert not result.ground_geometry_valid.any()
     assert 'No truck compass reading covers these times either' in result.provenance['azimuth_reference']
+
+
+def test_a_file_without_slant_range_is_refused(tmp_path):
+    source = _source()
+    path = tmp_path / 'r.cdf'
+    xr.Dataset({'base_time': ((), 1782001159.), 'time_offset': ('time', [0.]),
+                'height': ('height', [.015]), 'velocity': (('time', 'height'), [[1.]])}).to_netcdf(path, engine='h5netcdf')
+    with pytest.raises(ValueError, match='no slant range'):
+        raw.parse_raw_lidar(path, source)

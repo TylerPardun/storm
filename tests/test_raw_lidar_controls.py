@@ -17,50 +17,67 @@ def _controls(assets):
     return controls, built, available
 
 
-def test_there_is_nothing_to_pick_in_the_panel_a_location_is_clicked_on_the_map():
+def test_one_row_like_the_radar_and_nothing_to_pick_until_a_lidar_is_clicked():
     controls, _, available = _controls({"DLTRUCK1-DL1-PPI": ["dltruckdlppiDL1.b1.20260517.000000.cdf"]})
     assert available == [True]
-    assert not hasattr(controls, "_source_combo") and not hasattr(controls, "_btn_locate")
-    assert controls._location_label.text() == "Click a lidar location on the map"
-    assert not controls._field_combo.isEnabled() and not controls._btn_viewer.isEnabled()
+    for gone in ("_btn_viewer", "_scan_row", "_chk_map", "_coverage_label", "_scale_label", "_status_label"):
+        assert not hasattr(controls, gone)
+    assert controls._location_button.text() == "Finding lidar scans…"
+    controls.set_status("Pick a lidar on the map (5 locations)")
+    assert controls._location_button.text() == "Pick a lidar on the map (5 locations)"
+    assert not controls._field_combo.isEnabled()
 
 
 def test_every_lidars_files_are_grouped_by_lidar_for_the_survey():
     controls, built, _ = _controls({
         "DLTRUCK1-DL1-PPI": ["dltruckdlppiDL1.b1.20260517.000000.cdf"],
-        "DLTRUCK1-DL1-FP": ["dltruckdlfpDL1.b1.20260517.000000.cdf"],
+        "DLTRUCK1-DL1-CSM": ["dltruckdlcsmDL1.b1.20260517.000000.cdf"],
         "CLAMPS1-PPI": ["clampsdlppiC1.b1.20260517.000000.cdf"]})
     grouped = controls.assets_by_instrument()
     assert sorted(grouped) == ["CLAMPS1", "DLTRUCK1"]
     assert len(grouped["DLTRUCK1"]) == 2 and len(grouped["CLAMPS1"]) == 1
-    assert "Lidar truck, CLAMPS1 trailer" in controls._status_label.text()
 
 
 def test_no_lidar_data():
     controls, _, available = _controls({})
-    assert available == [False] and "No lidar data" in controls._status_label.text()
+    assert available == [False] and controls._location_button.text() == "No lidar data this date"
     assert controls.assets_by_instrument() == {}
 
 
-def test_a_chosen_location_says_what_it_holds():
-    controls, _, _ = _controls({"DLTRUCK1-DL1-FP": ["dltruckdlfpDL1.b1.20260517.000000.cdf"]})
-    controls.set_location("Lidar truck · stop 2 of 4 (41.438, -97.337), 82 km from KOAX")
+def test_a_chosen_lidar_shows_its_name_with_details_on_hover():
+    controls, _, _ = _controls({"DLTRUCK1-DL1-PPI": ["dltruckdlppiDL1.b1.20260517.000000.cdf"]})
+    centered = []
+    controls.location_requested.connect(lambda: centered.append(True))
+    controls._location_button.click()
+    assert centered == []                              # nothing chosen yet
+    controls.set_location("Lidar truck · stop 2 of 4", "Lidar truck · stop 2 of 4 (41.438, -97.337)\nScanning …")
     controls.set_fields({"velocity": "m/s", "intensity": ""})
-    controls.set_coverage("Scanning 18:49–19:23Z  ·  12 VAD · 1 vertical stare", has_vertical=True)
-    assert controls._location_label.text().startswith("Lidar truck · stop 2 of 4")
-    assert controls.current_field() == "velocity" and controls._btn_viewer.isEnabled()
-    assert not controls._scan_row.isHidden()
-    controls.set_location(None)                       # nothing chosen again
-    assert controls._location_label.text() == "Click a lidar location on the map"
-    assert not controls._btn_viewer.isEnabled() and controls._scan_row.isHidden()
+    assert controls._location_button.text() == "Lidar truck · stop 2 of 4"
+    assert "(41.438, -97.337)" in controls._location_button.toolTip()
+    assert controls.current_field() == "velocity" and controls._field_combo.isEnabled()
+    controls._location_button.click()
+    assert centered == [True]
+    controls.set_status("Pick a lidar on the map")     # doesn't replace the chosen name
+    assert controls._location_button.text() == "Lidar truck · stop 2 of 4"
+    controls.set_location(None)
+    assert controls._location_button.text() == "Pick a lidar on the map" and not controls._field_combo.isEnabled()
 
 
-def test_map_is_on_by_default_with_the_radar_under_it():
-    controls, _, _ = _controls({"CLAMPS1-PPI": ["clampsdlppiC1.b1.20260517.000000.cdf"]})
-    radar, mapped = [], []
+def test_heading_warning_is_a_small_symbol_with_the_explanation_on_hover():
+    controls, _, _ = _controls({})
+    assert controls._heading_warning.isHidden()
+    controls.set_heading_notice({"heading_missing_in_file": True,
+                                 "azimuth_reference": "Truck heading is missing from this lidar file; estimated…"})
+    assert not controls._heading_warning.isHidden() and controls._heading_warning.text() == "⚠"
+    assert "estimated" in controls._heading_warning.toolTip()
+    controls.set_heading_notice({"north_referenced": True})
+    assert controls._heading_warning.isHidden()
+
+
+def test_radar_switch_under_the_lidar():
+    controls, _, _ = _controls({})
+    radar = []
     controls.radar_visible_toggled.connect(radar.append)
-    controls.map_toggled.connect(mapped.append)
-    assert controls.map_is_on() and controls.radar_is_on()
+    assert controls.radar_is_on()
     controls._chk_radar.setChecked(False)
-    controls._chk_map.setChecked(False)
-    assert mapped == [False] and radar == [False, True] and controls._chk_radar.isHidden()
+    assert radar == [False]

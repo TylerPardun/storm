@@ -9,8 +9,7 @@ file's time span -- what STORM uses in its place (see
 archive/fetchers/raw_lidar_archive_fetcher.py:_estimate_truck_heading).
 
 Only file headers are read (HTTP range requests), so large files are not
-downloaded. The fixed-point product points straight up, where heading does
-not matter, and is skipped unless --products includes fp.
+downloaded. Covers the PPI and CSM files, the scans STORM draws.
 
     python scripts/report_missing_truck_heading.py --out missing_truck_heading.csv
 """
@@ -123,7 +122,8 @@ def compass_estimate(start, end, tracks, load_track):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--products", default="ppi,csm,other")
+    from archive.fetchers.raw_lidar_archive_fetcher import PRODUCTS
+    parser.add_argument("--products", default=",".join(PRODUCTS))
     parser.add_argument("--streams", default="DL1,DL2")
     parser.add_argument("--out", type=Path, default=Path("missing_truck_heading.csv"))
     args = parser.parse_args()
@@ -135,6 +135,8 @@ def main() -> int:
     jobs = []
     for stream in args.streams.split(","):
         for product in args.products.split(","):
+            if product not in PRODUCTS:
+                parser.error(f"--products: {product!r} is not one of {', '.join(PRODUCTS)}")
             datastream = f"dltruckdl{product}{stream}.b1"
             for name in c._list_catalog_filenames("dltruck/dltruck1", datastream):
                 jobs.append((stream, product, name, f"{c._FRDD_ROOT}/dltruck/dltruck1/ingested/{datastream}/{name}"))

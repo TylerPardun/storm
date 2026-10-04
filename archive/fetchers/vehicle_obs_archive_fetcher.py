@@ -958,10 +958,36 @@ def _is_misfiled_duplicate(
     return shared * 2 > len(first_day)
 
 
-def load_dltruck_track(archive_date: datetime) -> list[Observation]:
-    """Load the truck's measured FOFS track once for timestamp-based backfills."""
-    try:
-        return ArchiveVehicleObsFetcher(archive_date)._fetch_vehicle("dltruck", None)
-    except Exception as exc:
-        log.warning("DL Truck track lookup failed for %s: %s", archive_date.date(), exc)
-        return []
+_DLTRUCK_TRACKS: dict = {}            # date -> fixes, the last two days asked for
+_DLTRUCK_TRACKS_LOCK = threading.Lock()
+
+
+class TruckFix:
+    """One GPS fix of the truck: all the lidar and sonde placement read
+    (time, position, compass heading). Much smaller than an Observation, so
+    two kept days cost ~10x less memory."""
+    __slots__ = ("timestamp", "lat", "lon", "heading_deg")
+
+    def __init__(self, timestamp, lat, lon, heading_deg):
+        self.timestamp, self.lat, self.lon, self.heading_deg = timestamp, lat, lon, heading_deg
+
+
+def load_dltruck_track(archive_date: datetime) -> list[TruckFix]:
+    """The truck's measured FOFS track for one day, for placing and orienting
+    its lidar files and sondes. Every truck lidar file needs the same one or
+    two days, so they're kept: loading and parsing a day took ~30 s per file."""
+    day = archive_date.date()
+    with _DLTRUCK_TRACKS_LOCK:
+        if day in _DLTRUCK_TRACKS:
+            return _DLTRUCK_TRACKS[day]
+        try:
+            track = [TruckFix(o.timestamp, o.lat, o.lon, getattr(o, "heading_deg", None))
+                     for o in ArchiveVehicleObsFetcher(archive_date)._fetch_vehicle("dltruck", None) or []]
+        except Exception as exc:
+            log.warning("DL Truck track lookup failed for %s: %s", day, exc)
+            return []                     # not kept: a network hiccup is tried again next file
+        if track:                         # an empty answer may be transient: not kept
+            while len(_DLTRUCK_TRACKS) >= 2:
+                _DLTRUCK_TRACKS.pop(next(iter(_DLTRUCK_TRACKS)))
+            _DLTRUCK_TRACKS[day] = track
+        return track

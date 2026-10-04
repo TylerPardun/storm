@@ -14,6 +14,11 @@ class ArchiveLoadingIndicator(QLabel):
     can legitimately take minutes, and a list of five items sitting behind
     four checkmarks for that whole time reads as far more "stuck" than one
     line of text quietly changing.
+
+    After startup the same line shows later background work (begin/end,
+    e.g. "Loading Lidar truck · stop 2…"), the most recent first, so the
+    user can see something is churning. startup_pending() -- not
+    isVisible() -- says whether startup itself is still going.
     """
 
     all_done = pyqtSignal()
@@ -29,6 +34,7 @@ class ArchiveLoadingIndicator(QLabel):
         self._done: set[str] = set()
         self._status_override: str | None = None
         self._finished = False
+        self._activities: dict[str, str] = {}      # key -> text, in the order begun
         self._refresh()
 
     def _current_task(self) -> str | None:
@@ -37,15 +43,32 @@ class ArchiveLoadingIndicator(QLabel):
                 return task
         return None
 
+    def startup_pending(self) -> bool:
+        return self._current_task() is not None
+
+    def begin(self, key: str, text: str) -> None:
+        """Show background work after startup (or once startup finishes)."""
+        self._activities.pop(key, None)
+        self._activities[key] = text
+        self._refresh()
+
+    def end(self, key: str) -> None:
+        if self._activities.pop(key, None) is not None:
+            self._refresh()
+
     def _refresh(self) -> None:
         task = self._current_task()
-        if task is None:
+        if task is None and not self._finished:
+            self._finished = True
+            self.all_done.emit()
+        if task is not None:
+            text = self._status_override or f"Loading {task}…"
+        elif self._activities:
+            text = list(self._activities.values())[-1]
+        else:
             self.hide()
-            if not self._finished:
-                self._finished = True
-                self.all_done.emit()
             return
-        self.setText(self._status_override or f"Loading {task}…")
+        self.setText(text)
         self.adjustSize()
         self.show()
 

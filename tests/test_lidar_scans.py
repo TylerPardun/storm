@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from core.lidar_scans import classify_scans, counts, nearest_scan_time, scan_at, step
+from core.lidar_scans import classify_scans, scan_at
 
 T0 = datetime(2026, 5, 17, 18, 0, tzinfo=timezone.utc)
 
@@ -19,85 +19,82 @@ def _rays(segments):
                            elevation_deg=np.array(el, float), scan_number=np.array(sn, float))
 
 
-def test_scans_are_named_by_geometry_not_by_file():
+def _ppi(start, number, el=2.0):
+    return (start, [(a, el) for a in range(0, 360, 45)], 2, number)
+
+
+def test_only_low_angle_azimuth_sweeps_are_scans():
     rays = _rays([
-        (0, [(a, 60.0) for a in range(0, 360, 45)], 2, 1),        # VAD ring
-        (100, [(a, 3.0) for a in range(200, 300, 2)], 0.5, 2),    # low sector PPI
-        (200, [(320.6, e) for e in np.arange(0, 80, 2.0)], 0.5, 3),   # RHI
-        (400, [(0.0, 90.0)] * 5, 3, np.nan),                      # vertical stare...
-        (430, [(0.0, 90.0)] * 5, 3, np.nan),                      # ...continued after a pause
+        (0, [(a, 60.0) for a in range(0, 360, 45)], 2, 1),            # VAD ring: high elevation
+        (100, [(a, 3.0) for a in range(200, 300, 2)], 0.5, 2),        # low sector PPI
+        (200, [(320.6, e) for e in np.arange(0, 80, 2.0)], 0.5, 3),   # elevation sweep
+        (400, [(0.0, 90.0)] * 5, 3, np.nan),                          # fixed pointing up
+        (500, [(300.0, 1.0)] * 10, 3, np.nan),                        # fixed pointing low
     ])
     scans = classify_scans(rays)
-    assert [s.kind for s in scans] == ["VAD", "PPI", "RHI", "Stare"]
-    assert scans[3].rays == 10 and scans[2].azimuth_deg == 320.6
-    assert [s.mappable for s in scans] == [True, True, False, False]
-    assert counts(scans) == "1 PPI · 1 VAD · 1 RHI · 1 vertical stare"
+    assert len(scans) == 1 and scans[0].rays == 50 and scans[0].elevation_deg == 3.0
+    assert scans[0].describe() == "PPI 18:01:40Z · 3.0° · 50 rays"
 
 
-def test_the_map_shows_the_latest_plan_view_scan_and_the_clock_can_jump_to_one():
-    rays = _rays([(0, [(a, 60.0) for a in range(0, 360, 45)], 2, 1),
-                  (600, [(a, 60.0) for a in range(0, 360, 45)], 2, 2)])
-    scans = classify_scans(rays)
+def test_fixed_pointing_isnt_a_sweep_while_the_truck_turns():
+    rays = _rays([(0, [(300.0, 2.0)] * 20, 3, np.nan)])
+    rays.instrument_azimuth_deg = rays.azimuth_deg.copy()                  # as pointed: fixed
+    rays.azimuth_deg = (rays.azimuth_deg + np.linspace(0, 90, 20)) % 360   # true north: the truck turned
+    assert classify_scans(rays) == []
+
+
+def test_a_scan_number_spanning_elevations_is_split():
+    rays = _rays([(0, [(a, 2.0) for a in range(0, 360, 30)] + [(a, 8.0) for a in range(0, 360, 30)], 1, 1)])
+    assert [s.elevation_deg for s in classify_scans(rays)] == [2.0, 8.0]
+
+
+def test_the_map_shows_the_latest_scan_held_until_the_next():
+    scans = classify_scans(_rays([_ppi(0, 1), _ppi(600, 2)]))
+    assert len(scans) == 2
     assert scan_at(scans, T0 - timedelta(minutes=1)) is None               # before any scan
     assert scan_at(scans, T0 + timedelta(minutes=5)) is scans[0]           # held until the next
     assert scan_at(scans, T0 + timedelta(minutes=10, seconds=30)) is scans[1]
     assert scan_at(scans, T0 + timedelta(minutes=40)) is None              # too old to show
-    assert nearest_scan_time(scans, T0 - timedelta(hours=1)) == scans[0].end   # first one ahead
-    assert nearest_scan_time(scans, T0 + timedelta(hours=1)) == scans[1].end   # else the last one
-    assert step(scans, scans[0].end, +1) is scans[1]
-    assert step(scans, scans[1].end, -1) is scans[0]
 
 
-def test_a_stare_stays_a_stare_while_the_truck_turns():
-    rays = _rays([(0, [(300.0, 90.0)] * 20, 3, np.nan)])
-    rays.instrument_azimuth_deg = rays.azimuth_deg.copy()          # as pointed: fixed
-    rays.azimuth_deg = (rays.azimuth_deg + np.linspace(0, 90, 20)) % 360   # true north: the truck turned
-    scans = classify_scans(rays)
-    assert [s.kind for s in scans] == ["Stare"] and scans[0].rays == 20
-
-
-def test_an_rhi_says_when_its_azimuth_is_only_relative_to_the_truck():
-    rays = _rays([(0, [(320.6, e) for e in np.arange(0, 80, 2.0)], 0.5, 1)])
+def test_unknown_truck_heading_is_carried_on_the_scan():
+    rays = _rays([_ppi(0, 1)])
     rays.provenance = {"north_referenced": False}
     rays.azimuth_known = None
-    scan = classify_scans(rays)[0]
-    assert scan.kind == "RHI" and not scan.north_referenced
-    assert "relative to the truck (heading unknown)" in scan.describe()
+    assert not classify_scans(rays)[0].north_referenced
 
 
 def test_a_lidars_files_make_one_timeline_with_scanning_periods():
-    from core.lidar_scans import describe_periods, periods, scanning_at, timeline
-    vad = _rays([(0, [(a, 60.0) for a in range(0, 360, 45)], 2, 1),
-                 (600, [(a, 60.0) for a in range(0, 360, 45)], 2, 2)])
-    stares = _rays([(3600, [(0.0, 90.0)] * 10, 3, np.nan)])
-    for rays in (vad, stares):
+    from core.lidar_scans import describe_periods, periods, timeline
+    early = _rays([_ppi(0, 1), _ppi(600, 2)])
+    late = _rays([_ppi(3600, 3)])
+    for rays in (early, late):
         rays.scans = classify_scans(rays)
-    scans = timeline([stares, vad])
-    assert [s.kind for s in scans] == ["VAD", "VAD", "Stare"]
-    assert scans[0].source is vad and scans[2].source is stares
+    scans = timeline([late, early])
+    assert [s.source for s in scans] == [early, early, late]
     spans = periods(scans)
     assert len(spans) == 2                                   # 18:00-18:10 and 19:00
     assert describe_periods(spans) == "Scanning 18:00–18:10Z, 19:00–19:00Z"
-    late = [(T0 + timedelta(hours=6), T0 + timedelta(hours=8))]          # 00:00-02:00Z the next day
-    assert describe_periods(late) == "Scanning 00:00–02:00Z"
+    next_day = [(T0 + timedelta(hours=6), T0 + timedelta(hours=8))]     # 00:00-02:00Z the next day
+    assert describe_periods(next_day) == "Scanning 00:00–02:00Z"
     across = [(T0, T0 + timedelta(hours=8))]
     assert describe_periods(across) == "Scanning 18:00Z May 17 – 02:00Z May 18"
-    assert scanning_at(scans, T0 + timedelta(minutes=5)) and not scanning_at(scans, T0 + timedelta(minutes=40))
-    assert [s.kind for s in timeline([vad, stares], start=T0 + timedelta(minutes=30))] == ["Stare"]
+    assert [s.source for s in timeline([early, late], start=T0 + timedelta(minutes=30))] == [late]
 
 
-def test_a_low_angle_stare_is_a_beam_for_the_map_not_a_vertical_stare():
-    rays = _rays([(0, [(300.0, 1.0)] * 10, 3, np.nan), (100, [(0.0, 90.0)] * 10, 3, np.nan)])
-    scans = classify_scans(rays)
-    assert [s.kind for s in scans] == ["Beam", "Stare"]
-    assert scans[0].mappable and not scans[1].mappable
+def test_a_scan_running_past_the_session_start_is_cut_to_the_session():
+    from core.lidar_scans import timeline
+    rays = _rays([(0, [(a % 360, 2.0) for a in range(0, 1000, 10)], 6, 1)])     # 18:00 onward, 10 min
+    rays.scans = classify_scans(rays)
+    [scan] = timeline([rays], start=T0 + timedelta(minutes=5))
+    assert scan.start == T0 + timedelta(minutes=5) and scan.rays == 50 and scan.source is rays
 
 
 def test_the_truck_has_one_location_per_stop_and_a_trailer_one_at_its_site():
     from core.lidar_scans import locations
-    rays = _rays([(0, [(a, 60.0) for a in range(0, 360, 45)], 2, 1),        # stop 1
-                  (600, [(a, 60.0) for a in range(0, 360, 45)], 2, 2),      # stop 1 again, 100 m on
-                  (1200, [(a, 60.0) for a in range(0, 360, 45)], 2, 3)])    # stop 2, 5 km away
+    rays = _rays([_ppi(0, 1),             # stop 1
+                  _ppi(600, 2),           # stop 1 again, 100 m on
+                  _ppi(1200, 3)])         # stop 2, 5 km away
     n = rays.time_epoch.size
     rays.latitude = np.array([35.0] * 8 + [35.0009] * 8 + [35.045] * 8)
     rays.longitude = np.full(n, -98.0)
@@ -108,11 +105,3 @@ def test_the_truck_has_one_location_per_stop_and_a_trailer_one_at_its_site():
     assert stops[0].start == scans[0].start and stops[0].end == scans[1].end
     site, _ = locations("CLAMPS1", scans, site={"lat": 34.98, "lon": -97.52, "description": "NWC Vehicle Bay"})
     assert len(site) == 1 and len(site[0].scans) == 3 and site[0].place == "NWC Vehicle Bay"
-
-
-def test_a_stare_running_past_the_session_start_is_cut_to_the_session():
-    from core.lidar_scans import timeline
-    rays = _rays([(0, [(0.0, 90.0)] * 100, 60, np.nan)])       # 18:00 onward, one ray a minute
-    rays.scans = classify_scans(rays)
-    [stare] = timeline([rays], start=T0 + timedelta(minutes=30))
-    assert stare.start == T0 + timedelta(minutes=30) and stare.rays == 70 and stare.source is rays

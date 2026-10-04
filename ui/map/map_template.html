@@ -2707,12 +2707,17 @@
     // Generic clickable instrument-site marker (NOXP, raw lidar, ...) --
     // same _vIcons set as vehicles, but a separate "platform-" DOM
     // namespace so it's never touched by vehicle add/remove/clear logic.
-    window.stormAddPlatformMarker = function(id, lat, lon, color, iconType, hoverText) {
+    // `selected` (the one in use) gets a white ring rather than a different
+    // color: on these icons color means data age (vehicles: green fresh ...
+    // red stale), so a color change would read as lagged data.
+    window.stormAddPlatformMarker = function(id, lat, lon, color, iconType, hoverText, selected) {
       const existing = document.getElementById("platform-" + id);
       var _iconFn = _vIcons[iconType] || _vIcons.radar;
       var _c = color || "__ACCENT_COLOR__";
+      var _ring = selected ? "0 0 0 2px #FFFFFF" : "none";
       if (existing) {
         existing.style.filter = "drop-shadow(0 0 5px " + _c + ")";
+        existing.style.boxShadow = _ring;
         existing.innerHTML = _iconFn(_c);
         existing.dataset.hoverText = hoverText || id;
         if (existing._stormMarker) existing._stormMarker.setLngLat([lon, lat]);
@@ -2721,8 +2726,9 @@
 
       const el = document.createElement("div");
       el.id = "platform-" + id;
-      el.style.cssText = "width:28px;height:28px;cursor:pointer;";
+      el.style.cssText = "width:28px;height:28px;cursor:pointer;border-radius:50%;";
       el.style.filter = "drop-shadow(0 0 5px " + _c + ")";
+      el.style.boxShadow = _ring;
       el.innerHTML = _iconFn(_c);
       el.dataset.hoverText = hoverText || id;
 

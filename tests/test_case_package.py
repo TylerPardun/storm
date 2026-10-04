@@ -139,7 +139,7 @@ def test_data_paths_outside_data_are_refused(tmp_path):
 
 @pytest.mark.parametrize("url, expected", [
     ("https://s3/2024/04/27/KFDR/KFDR20240427_200445_V06", datetime(2024, 4, 27, 20, 4, 45)),
-    ("https://t/CLAMPS/clamps1/clampsdlfpC1.b1/clampsdlfpC1.b1.20240427.200000.cdf", datetime(2024, 4, 27, 20)),
+    ("https://t/CLAMPS/clamps1/clampsdlppiC1.b1/clampsdlppiC1.b1.20240427.200000.cdf", datetime(2024, 4, 27, 20)),
     ("https://t/x/DL1dlppi.20240427.203512.cdf", datetime(2024, 4, 27, 20, 35, 12)),
     ("https://s3/ABI/OR_ABI-L2-CMIPC-M6C13_G16_s20241182031171_e20241182033544_c1.nc",
      datetime(2024, 4, 27, 20, 31, 17)),
@@ -160,8 +160,8 @@ def test_time_frame_keeps_files_covering_it(tmp_path):
     kept = in_time_frame(radar, frame)
     names = sorted(u.rsplit("/", 1)[1][13:19] for u in kept)
     assert names == ["202600", "203100", "205800"]       # 20:26 is on screen at 20:30; 20:00 and 21:04 aren't
-    # a daily CLAMPS stare file stamped .000000 covers the whole day
-    daily = [{"kind": "raw lidar", "url": f"https://t/clampsdlfpC2.b1.202404{d}.000000.cdf"} for d in (27, 28)]
+    # a daily CLAMPS file stamped .000000 covers the whole day
+    daily = [{"kind": "raw lidar", "url": f"https://t/clampsdlppiC2.b1.202404{d}.000000.cdf"} for d in (27, 28)]
     assert in_time_frame(daily, frame) == {daily[0]["url"]}
     # a lone radar volume long before the frame doesn't cover it
     assert not in_time_frame([{"kind": "radar", "url": "https://s3/KFDR20240427_120000_V06"}], frame)
@@ -200,11 +200,11 @@ def test_identical_files_from_two_queries_are_stored_once(tmp_path):
 
 def test_listed_files_offer_unloaded_scans_from_loaded_catalogs():
     from core.case_package import in_time_frame, listed_files
-    thredds = "https://data.nssl.noaa.gov/thredds/catalog/FRDD/CLAMPS/clamps2/ingested/clampsdlfpC2.b1/catalog.html"
+    thredds = "https://data.nssl.noaa.gov/thredds/catalog/FRDD/CLAMPS/clamps2/ingested/clampsdlppiC2.b1/catalog.html"
     s3 = "https://s3.example/?prefix=2024/04/27/KFDR/KFDR20240427_20&list-type=2"
     html = "".join(
-        f'<tr><td><a href="catalog.html?dataset=FRDD/CLAMPS/clamps2/ingested/clampsdlfpC2.b1/'
-        f'clampsdlfpC2.b1.202404{d}.000000.cdf"><code>x</code></a></td>'
+        f'<tr><td><a href="catalog.html?dataset=FRDD/CLAMPS/clamps2/ingested/clampsdlppiC2.b1/'
+        f'clampsdlppiC2.b1.202404{d}.000000.cdf"><code>x</code></a></td>'
         f'<td align="right">&nbsp;<code>338.4 Mbytes</code></td></tr>' for d in (26, 27, 28))
     xml = "".join(f"<Contents><Key>2024/04/27/KFDR/KFDR20240427_{t}</Key><Size>14000000</Size></Contents>"
                   for t in ("200445_V06", "201130_V06", "201130_V06_MDM"))
@@ -212,12 +212,12 @@ def test_listed_files_offer_unloaded_scans_from_loaded_catalogs():
                {"kind": "radar", "url": "https://s3.example/2024/04/27/KFDR/KFDR20240427_200445_V06"}]
     found = listed_files(sources, {thredds: html.encode(), s3: xml.encode()}.get)
     urls = {e["url"]: e for e in found}
-    stare = "https://data.nssl.noaa.gov/thredds/fileServer/FRDD/CLAMPS/clamps2/ingested/clampsdlfpC2.b1/" \
-            "clampsdlfpC2.b1.20240427.000000.cdf"
-    assert urls[stare]["bytes"] == 338_400_000 and urls[stare]["listed"]
+    daily = "https://data.nssl.noaa.gov/thredds/fileServer/FRDD/CLAMPS/clamps2/ingested/clampsdlppiC2.b1/" \
+            "clampsdlppiC2.b1.20240427.000000.cdf"
+    assert urls[daily]["bytes"] == 338_400_000 and urls[daily]["listed"]
     assert "https://s3.example/2024/04/27/KFDR/KFDR20240427_201130_V06" in urls    # gap in a shown series
     assert not any(u.endswith("_MDM") for u in urls)                               # a series never shown
     assert not any(u.endswith("200445_V06") for u in urls)                         # already loaded
     frame = (datetime(2024, 4, 27, 20, tzinfo=timezone.utc), datetime(2024, 4, 27, 21, tzinfo=timezone.utc))
     keep = in_time_frame(sources + found, frame)
-    assert stare in keep and not any("20240426" in u or "20240428" in u for u in keep)
+    assert daily in keep and not any("20240426" in u or "20240428" in u for u in keep)

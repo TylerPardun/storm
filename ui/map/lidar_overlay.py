@@ -14,8 +14,6 @@ def render_lidar_to_png(rays, when, field='velocity', grid_size=768, *, ray_indi
     rotation. Angular cell widths describe sampling support, not beam width.
     Co-pointing measurements are drawn as one-pixel beam strokes.
     """
-    if rays.distance_kind != 'range':
-        raise ValueError('Map rendering requires slant range')
     if field not in rays.fields:
         raise ValueError(f'No {field} field')
     if ray_indices is None:

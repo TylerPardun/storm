@@ -34,7 +34,6 @@ def _ppi_rays(source=None, n_rays=121, field="velocity", units="m/s"):
         source=source,
         time_epoch=times,
         distance_m=np.array([75.0, 150.0, 225.0, 300.0, 375.0]),
-        distance_kind="range",
         azimuth_deg=az,
         elevation_deg=np.full(n_rays, 2.0),
         latitude=np.full(n_rays, 36.0),
@@ -109,12 +108,10 @@ def test_masked_gates_are_transparent():
     assert not pixels[:, :, 3].any()
 
 
-@pytest.mark.parametrize('change,match', [('height','slant range'), ('stale','recent'), ('field','No velocity')])
+@pytest.mark.parametrize('change,match', [('stale','recent'), ('field','No velocity')])
 def test_invalid_inputs(change, match):
     rays = _ppi_rays()
-    if change == 'height':
-        rays.distance_kind = 'height'
-    elif change == 'stale':
+    if change == 'stale':
         rays.time_epoch -= 3600
     else:
         rays.fields = {}

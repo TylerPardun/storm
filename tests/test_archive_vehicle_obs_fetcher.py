@@ -681,17 +681,23 @@ def _obs_at(lat, lon):
 
 
 def test_dltruck_track_retains_paired_fixes(monkeypatch):
+    import archive.fetchers.vehicle_obs_archive_fetcher as vof
+    vof._DLTRUCK_TRACKS.clear()
     observations = [_obs_at(35.0, -97.0), _obs_at(35.2, -97.2)]
     requested = []
     def fetch(self, vehicle_id, icon_type):
         requested.append(vehicle_id)
         return observations
     monkeypatch.setattr(ArchiveVehicleObsFetcher, "_fetch_vehicle", fetch)
-    assert load_dltruck_track(_utc(0)) == observations
+    track = load_dltruck_track(_utc(0))
+    assert [(f.timestamp, f.lat, f.lon) for f in track] == [(o.timestamp, o.lat, o.lon) for o in observations]
     assert requested == ["dltruck"]
+    assert load_dltruck_track(_utc(0)) is track and requested == ["dltruck"]     # kept: not fetched again
 
 
 def test_dltruck_track_failure_is_unknown(monkeypatch):
+    import archive.fetchers.vehicle_obs_archive_fetcher as vof
+    vof._DLTRUCK_TRACKS.clear()
     def fail(*args):
         raise URLError("timed out")
     monkeypatch.setattr(ArchiveVehicleObsFetcher, "_fetch_vehicle", fail)

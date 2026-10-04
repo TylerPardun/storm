@@ -56,7 +56,7 @@ def test_an_end_before_the_start_cannot_be_exported():
 
 def test_files_not_loaded_yet_can_be_added():
     listed = [{"kind": "radar", "url": f"{B}KFDR20240427_201000_V06", "bytes": 14_000_000, "listed": True},
-              {"kind": "raw lidar", "url": "https://t/clampsdlfpC2.b1.20240427.000000.cdf",
+              {"kind": "raw lidar", "url": "https://t/clampsdlppiC2.b1.20240427.000000.cdf",
                "bytes": 338_400_000, "listed": True}]
     frame = (datetime(2024, 4, 27, 20, tzinfo=UTC), datetime(2024, 4, 27, 21, tzinfo=UTC))
     d = CaseExportDialog(SOURCES, tracks=0, session=SESSION, default_frame=frame, listed=listed)

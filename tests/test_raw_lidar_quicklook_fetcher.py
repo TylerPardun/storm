@@ -22,6 +22,8 @@ def test_do_fetch_unions_assets_across_every_known_source(monkeypatch):
     # the session day and the next morning (the session runs to 06Z)
     assert len(calls) == 2 * len(KNOWN_RAW_LIDAR_SOURCES)
     assert {day for _, day in calls} == {date(2026, 5, 17), date(2026, 5, 18)}
+    # vertical stares (fp) and RHIs (other) are never even looked for
+    assert not any(pid.endswith(("-FP", "-OTHER")) for pid, _ in calls)
     first = KNOWN_RAW_LIDAR_SOURCES[0]
     assert received[0] == {first.platform_id: [LidarAsset(first, 'x.20260517.000000.cdf', 'catalog'),
                                                LidarAsset(first, 'x.20260518.000000.cdf', 'catalog')]}
@@ -38,40 +40,6 @@ def test_do_fetch_preserves_unresolved_sources(monkeypatch):
     fetcher._do_fetch(datetime(2026, 5, 17, tzinfo=timezone.utc))
     assert errors and 'down' in errors[0]
     assert assets_events == [{s.platform_id: None for s in KNOWN_RAW_LIDAR_SOURCES}]
-
-
-def test_do_load_emits_rays_ready(monkeypatch):
-    sentinel_rays = object()
-    captured = {}
-
-    def fake_load(asset, cache_dir):
-        captured['asset'] = asset
-        captured['cache_dir'] = cache_dir
-        return sentinel_rays
-
-    monkeypatch.setattr(rlq, 'load_raw_lidar', fake_load)
-    fetcher = rlq.ArchiveRawLidarQuicklookFetcher()
-    received = []
-    fetcher.rays_ready.connect(lambda pid, rays: received.append((pid, rays)))
-    asset = LidarAsset(KNOWN_RAW_LIDAR_SOURCES[0], 'x.20260517.000000.cdf', 'catalog')
-    fetcher._do_load('DLTRUCK1-DL1-CSM', asset)
-    assert received == [('DLTRUCK1-DL1-CSM', sentinel_rays)]
-    assert captured['asset'] is asset
-    assert captured['cache_dir'] == rlq._RAW_LIDAR_CACHE_DIR
-
-
-def test_do_load_emits_error_on_failure(monkeypatch):
-    def failing_load(asset, cache_dir):
-        raise ValueError('bad file')
-    monkeypatch.setattr(rlq, 'load_raw_lidar', failing_load)
-    fetcher = rlq.ArchiveRawLidarQuicklookFetcher()
-    errors, loaded = [], []
-    fetcher.error.connect(errors.append)
-    fetcher.rays_ready.connect(lambda *a: loaded.append(a))
-    asset = LidarAsset(KNOWN_RAW_LIDAR_SOURCES[0], 'x.20260517.000000.cdf', 'catalog')
-    fetcher._do_load('DLTRUCK1-DL1-CSM', asset)
-    assert loaded == []
-    assert 'bad file' in errors[0]
 
 
 def test_discovery_guard_blocks_a_second_discovery_while_busy():
@@ -96,35 +64,3 @@ def test_partial_success_does_not_hide_discovery_errors(monkeypatch):
     assert errors
     assert results[0][source.platform_id] == [asset]
     assert results[0][KNOWN_RAW_LIDAR_SOURCES[1].platform_id] is None
-
-
-def test_loads_keep_only_the_latest_request_and_drop_superseded_results(monkeypatch):
-    import threading, time
-    gate = threading.Event()
-    calls = []
-
-    def slow_load(asset, cache_dir):
-        calls.append(asset.filename)
-        if asset.filename == 'first.cdf':
-            gate.wait(5)
-        return SimpleNamespace(provenance={'url': asset.url})
-    monkeypatch.setattr(rlq, 'load_raw_lidar', slow_load)
-    fetcher = rlq.ArchiveRawLidarQuicklookFetcher()
-    shown = []
-    fetcher.rays_ready.connect(lambda pid, rays: shown.append(rays.provenance['url']))
-    source = KNOWN_RAW_LIDAR_SOURCES[0]
-    first, second, third = (LidarAsset(source, f'{n}.cdf', 'catalog') for n in ('first', 'second', 'third'))
-
-    assert fetcher.load(source.platform_id, first) is True
-    time.sleep(0.05)
-    assert fetcher.load(source.platform_id, second) is True     # waits, then replaced
-    assert fetcher.load(source.platform_id, third) is True
-    from PyQt6.QtCore import QCoreApplication
-    app = QCoreApplication.instance() or QCoreApplication([])
-    gate.set()
-    deadline = time.time() + 5
-    while (fetcher._load_running or not shown) and time.time() < deadline:
-        app.processEvents()                                    # results arrive via the event loop
-        time.sleep(0.01)
-    assert calls == ['first.cdf', 'third.cdf']                 # 'second' never loaded
-    assert shown == [third.url]                                # 'first' finished but was superseded

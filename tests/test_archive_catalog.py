@@ -29,13 +29,13 @@ def test_registry_unique_and_every_registered_source_has_catalogs():
 
 
 def test_platforms_by_site_groups_one_vehicle_across_families():
-    # The lidar truck carries a mesonet probe (FOFS), two lidars x four raw
-    # scan modes each (CLAMPS Raw Lidar), two lidars x {VAD, CSM wind}
+    # The lidar truck carries a mesonet probe (FOFS), two lidar streams x the
+    # two scan modes STORM shows (PPI, CSM -- CLAMPS Raw Lidar), two lidars x {VAD, CSM wind}
     # (CLAMPS Winds), and mobile radiosonde launches (CLAMPS Sondes) -- one
     # vehicle, four families, and it should come back as one "LiDAR Truck" site.
     by_site = cat.platforms_by_site()
     lidar_truck = by_site["LiDAR Truck"]
-    assert len(lidar_truck) == 14
+    assert len(lidar_truck) == 10
     assert {p.family for p in lidar_truck} == {
         "FOFS Mobile Mesonet", "CLAMPS Raw Lidar", "CLAMPS Winds", "CLAMPS Sondes",
     }

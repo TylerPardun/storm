@@ -16,7 +16,7 @@ def render_noxp_to_png(volume, sweep, field, grid_size=768):
     source = RawLidarSource('NOXP', 'NOXP', '', '', 'ppi', False)
     rays = RawLidarRays(source, volume.time_epoch[idx],
         volume.range_m[idx] if volume.range_m.ndim == 2 else volume.range_m,
-        'range', volume.azimuth_deg[idx], volume.elevation_deg[idx],
+        volume.azimuth_deg[idx], volume.elevation_deg[idx],
         values(volume.latitude), values(volume.longitude), values(volume.altitude_m),
         np.full(n, np.nan), np.zeros(n),
         {field: {**volume.fields[field], 'data': volume.fields[field]['data'][idx]}},

@@ -42,31 +42,22 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
 
     assets_ready = pyqtSignal(dict)   # platform_id -> list[LidarAsset]
     sites_ready = pyqtSignal(dict)    # instrument -> {lat, lon, altitude_m, description} (trailers)
-    # load_instrument: one lidar's files for the session, loaded one by one
+    # survey() / load_files(): each lidar's PPI and CSM files, loaded one by one
     instrument_file_ready = pyqtSignal(str, object)       # instrument, RawLidarRays (with .scans)
     instrument_large_file = pyqtSignal(str, object, int)  # instrument, LidarAsset, bytes -- not loaded unasked
     instrument_loaded = pyqtSignal(str, int)              # instrument, files loaded
     survey_done = pyqtSignal()                            # survey(): every lidar's files looked at
 
-    # A lidar's files load by themselves when it's chosen, except ones this
-    # big (a trailer's day of vertical stares can be 355 MB), which wait for
-    # the user to ask -- unless already downloaded.
+    # The survey skips files this big unless already downloaded (a memory
+    # guard); they load once their lidar is chosen.
     AUTO_LOAD_MAX_BYTES = 150 * 1024 * 1024
-    # scan files first (small, and what the map shows), stares last
-    _LOAD_ORDER = {"ppi": 0, "other": 1, "csm": 2, "fp": 3}
-    rays_ready = pyqtSignal(str, object)  # platform_id, RawLidarRays
+    _LOAD_ORDER = {"ppi": 0, "csm": 1}
     error = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._lock = threading.Lock()
         self._busy = False             # discovery running
-        # loads: one runs, the latest request waits; older requests are
-        # replaced, and a superseded load's result is dropped, not shown
-        self._load_running = False
-        self._load_pending = None
-        self._load_seq = 0
-        self._latest_load = 0
 
     def fetch(self, archive_date: datetime) -> bool:
         with self._lock:
@@ -123,43 +114,6 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
         if sites:
             self.sites_ready.emit(sites)
 
-    def load_instrument(self, instrument: str, assets, force_urls=()) -> None:
-        """Load every file of one lidar (a replaced selection stops the old
-        one). Files over AUTO_LOAD_MAX_BYTES that aren't cached are reported
-        with instrument_large_file instead, unless their URL is in force_urls."""
-        with self._lock:
-            self._load_seq += 1
-            self._latest_load = seq = self._load_seq
-        ordered = sorted(assets, key=lambda a: (self._LOAD_ORDER.get(a.source.product, 9), a.filename))
-        threading.Thread(target=self._load_instrument, args=(instrument, ordered, set(force_urls), seq),
-                         daemon=True).start()
-
-    def _load_instrument(self, instrument, assets, force_urls, seq) -> None:
-        from core.lidar_scans import classify_scans
-        loaded = 0
-        for asset in assets:
-            if self._is_superseded(seq):
-                return
-            if asset.url not in force_urls and not self._cached(asset):
-                size = _remote_size(asset.url)
-                if size is not None and size > self.AUTO_LOAD_MAX_BYTES:
-                    self.instrument_large_file.emit(instrument, asset, size)
-                    continue
-            try:
-                rays = load_raw_lidar(asset, _RAW_LIDAR_CACHE_DIR)
-                rays.scans = classify_scans(rays)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Lidar %s: %s failed to load: %s", instrument, asset.filename, exc)
-                if not self._is_superseded(seq):
-                    self.error.emit(f"Lidar {asset.filename}: {exc}")
-                continue
-            if self._is_superseded(seq):
-                return
-            loaded += 1
-            self.instrument_file_ready.emit(instrument, rays)
-        if not self._is_superseded(seq):
-            self.instrument_loaded.emit(instrument, loaded)
-
     def survey(self, assets_by_instrument: dict) -> None:
         """Load every lidar's files for the session in the background (one
         lidar after another), so where and when each scanned is known before
@@ -201,55 +155,3 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
         key = hashlib.sha256(asset.url.encode()).hexdigest()
         path = _RAW_LIDAR_CACHE_DIR / (key + Path(asset.filename).suffix)
         return path.exists() and path.with_suffix(path.suffix + ".json").exists()
-
-    def load(self, platform_id: str, asset) -> bool:
-        """Load an asset's rays. While another load runs, this becomes the
-        next one (replacing any request still waiting). Always accepted."""
-        with self._lock:
-            self._load_seq += 1
-            self._latest_load = self._load_seq
-            request = (self._load_seq, platform_id, asset)
-            if self._load_running:
-                self._load_pending = request
-                return True
-            self._load_running = True
-        threading.Thread(target=self._load_loop, args=(request,), daemon=True).start()
-        return True
-
-    def _load_loop(self, request) -> None:
-        while request is not None:
-            seq, platform_id, asset = request
-            try:
-                self._do_load(platform_id, asset, seq)
-            finally:
-                with self._lock:
-                    request, self._load_pending = self._load_pending, None
-                    if request is None:
-                        self._load_running = False
-
-    def _is_superseded(self, seq) -> bool:
-        with self._lock:
-            return seq is not None and seq != self._latest_load
-
-    def _do_load(self, platform_id: str, asset, seq=None) -> None:
-        try:
-            rays = load_raw_lidar(asset, _RAW_LIDAR_CACHE_DIR)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("ArchiveRawLidarQuicklookFetcher: load failed for %s: %s", asset.filename, exc)
-            if not self._is_superseded(seq):
-                self.error.emit(f"Raw lidar load failed: {exc}")
-            return
-        if self._is_superseded(seq):
-            log.debug("ArchiveRawLidarQuicklookFetcher: dropping superseded load of %s", asset.filename)
-            return
-        from core.lidar_scans import classify_scans
-        try:
-            scans = classify_scans(rays)            # the scans the file holds, by geometry
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Lidar scans could not be classified for %s: %s", asset.filename, exc)
-            scans = []
-        try:
-            rays.scans = scans
-        except AttributeError:
-            pass
-        self.rays_ready.emit(platform_id, rays)

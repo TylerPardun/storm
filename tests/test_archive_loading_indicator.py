@@ -68,3 +68,22 @@ def test_status_override_clears_once_that_task_completes():
 def test_empty_task_list_starts_already_hidden():
     ind = ArchiveLoadingIndicator([])
     assert not ind.isVisible()
+
+
+def test_later_background_work_shows_after_startup_without_reopening_startup():
+    from ui.widgets.archive_loading_indicator import ArchiveLoadingIndicator
+    ind = ArchiveLoadingIndicator(["Radar"])
+    done = []
+    ind.all_done.connect(lambda: done.append(True))
+    ind.begin("lidar", "Loading Lidar…")
+    assert ind.text() == "Loading Radar…"           # startup comes first
+    ind.set_task_done("Radar")
+    assert done == [True] and not ind.startup_pending()
+    assert ind.text() == "Loading Lidar…" and not ind.isHidden()
+    ind.begin("stop", "Loading Lidar truck · stop 2 of 2…")
+    assert ind.text() == "Loading Lidar truck · stop 2 of 2…"     # the latest
+    ind.end("stop")
+    assert ind.text() == "Loading Lidar…"
+    ind.end("lidar")
+    assert ind.isHidden() and done == [True]         # all_done only once
+    ind.end("lidar")                                 # ending twice is harmless

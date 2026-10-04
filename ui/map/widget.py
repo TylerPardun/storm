@@ -316,13 +316,14 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         )
 
     def set_platform_marker(self, marker_id: str, lat: float, lon: float, color: str,
-                            icon: str, hover_text: str) -> None:
+                            icon: str, hover_text: str, selected: bool = False) -> None:
         """A clickable instrument marker (e.g. a CLAMPS trailer's lidar site);
-        clicking it emits platform_marker_clicked(marker_id)."""
+        clicking it emits platform_marker_clicked(marker_id). `selected` rings
+        it in white (the one whose data is shown)."""
         self.run_js(
             "stormAddPlatformMarker("
             f"{json.dumps(marker_id)}, {lat}, {lon}, {json.dumps(color)}, "
-            f"{json.dumps(icon)}, {json.dumps(hover_text)});"
+            f"{json.dumps(icon)}, {json.dumps(hover_text)}, {json.dumps(bool(selected))});"
         )
 
     def remove_platform_marker(self, marker_id: str) -> None:

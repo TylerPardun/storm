@@ -1,32 +1,30 @@
-"""LIDAR drawer. Lidar is chosen the way a radar is: on the map. While the
-drawer is open, every place a lidar scanned from during the session is marked
-(a CLAMPS trailer's site, or each stop of the lidar truck -- core/lidar_scans
-.locations); clicking one moves the clock to its first scan, and its scans
-show as the clock reaches them: PPI/VAD scans and fixed beams on the map,
-RHIs and vertical stares in the vertical viewer. This drawer says which
-location is chosen and what it holds, and has the field, the map/radar
-switches, the viewer, and scan-by-scan stepping.
+"""LIDAR drawer, laid out like the radar's: one row with the chosen lidar,
+the field and the radar switch. A lidar is chosen the way a radar station
+is, on the map: while the drawer is open, every place a lidar ran PPI scans
+from during the session is marked (a CLAMPS trailer's site, or each stop of
+the lidar truck -- core/lidar_scans.locations). Clicking one moves the clock
+to its first scan; its PPI and CSM sector sweeps are then drawn on the map as
+the clock reaches them, and when it scanned shows under the time slider.
+Only PPI scans exist in STORM (core/lidar_scans.py), from the lidars' PPI
+and CSM files (archive/fetchers/raw_lidar_archive_fetcher.PRODUCTS).
 
-Two kinds of instrument, kept apart and named plainly:
+Two kinds of instrument, named plainly:
   * the lidar truck (DLTRUCK1) -- a Doppler lidar on a truck that moves; its
     files carry no position, so it is placed from the truck's GPS, and its
-    heading is recorded or estimated (archive/fetchers/raw_lidar_archive_fetcher.py);
+    heading is recorded or estimated (a small amber warning says when);
   * the CLAMPS1 / CLAMPS2 trailers -- each with its own Doppler lidar, parked
-    at a site recorded in its files (often at home in Norman, not deployed).
+    at a site recorded in its files.
 """
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve
-from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget,
-)
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QToolButton, QWidget
 
 INSTRUMENT_NAMES = {
     "DLTRUCK1": "Lidar truck",
     "CLAMPS1": "CLAMPS1 trailer",
     "CLAMPS2": "CLAMPS2 trailer",
 }
-_PROMPT = "Click a lidar location on the map"
 
 
 def instrument_name(instrument: str) -> str:
@@ -37,29 +35,26 @@ class RawLidarControls(QWidget):
     """Signals
     -------
     field_selected(str)          field to show
-    map_toggled(bool)            draw PPI/VAD scans on the map (on by default)
     radar_visible_toggled(bool)  radar under the lidar on/off
-    viewer_requested()           open the vertical viewer (RHIs, stares)
-    scan_step_requested(int)     -1 / +1: previous / next scan here (moves the clock)
+    location_requested()         the chosen lidar's button: center the map on it
     availability_changed(bool)   any lidar data for this date
     """
 
     field_selected = pyqtSignal(str)
-    map_toggled = pyqtSignal(bool)
     radar_visible_toggled = pyqtSignal(bool)
-    viewer_requested = pyqtSignal()
-    scan_step_requested = pyqtSignal(int)
+    location_requested = pyqtSignal()
     availability_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._animation = None
-        self._availability_status = "Looking for lidar data for this date…"
+        self._status = "Looking for lidar data…"
+        self._chosen = False
         self._assets_by_source: dict[str, list] = {}
         self._sources_by_instrument: dict[str, list] = {}
         self._setup_ui()
 
-    # ---- layout -------------------------------------------------------
+    # ---- layout: one row, like the radar's ---------------------------------
     def _setup_ui(self) -> None:
         outer = QHBoxLayout(self)
         outer.setContentsMargins(8, 6, 8, 6)
@@ -69,92 +64,38 @@ class RawLidarControls(QWidget):
 
         self._drawer = QWidget()
         self._drawer.setObjectName("rawLidarDrawer")
-        col = QVBoxLayout(self._drawer)
-        col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(4)
+        row = QHBoxLayout(self._drawer)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
 
-        def button(text, tip, width=None):
-            b = QToolButton()
-            b.setText(text)
-            b.setToolTip(tip)
-            b.setFixedHeight(22)
-            if width:
-                b.setMinimumWidth(width)
-            return b
+        self._location_button = QToolButton()
+        self._location_button.setObjectName("lidarLocationButton")
+        self._location_button.setFixedHeight(22)
+        self._location_button.setMinimumWidth(140)
+        self._location_button.setText(self._status)
+        self._location_button.clicked.connect(self._on_location_clicked)
+        row.addWidget(self._location_button)
 
-        def check(text, tip):
-            c = QCheckBox(text)
-            c.setChecked(True)
-            c.setFixedHeight(22)
-            c.setToolTip(tip)
-            return c
+        self._heading_warning = QLabel("⚠")
+        self._heading_warning.setFixedHeight(22)
+        self._heading_warning.hide()
+        row.addWidget(self._heading_warning)
 
-        # ---- row 1: the chosen location, the field, how to show it ---------
-        row1 = QWidget()
-        r1 = QHBoxLayout(row1)
-        r1.setContentsMargins(0, 0, 0, 0)
-        r1.setSpacing(6)
-        self._location_label = QLabel(_PROMPT)
-        self._location_label.setObjectName("lidarLocationLabel")
-        self._location_label.setStyleSheet("color: #E3E8F2; font-size: 11px; font-weight: 600;")
-        self._location_label.setMinimumWidth(200)
-        r1.addWidget(self._location_label)
         self._field_combo = QComboBox()
         self._field_combo.setObjectName("lidarCombo")
         self._field_combo.setFixedHeight(22)
-        self._field_combo.setMinimumWidth(130)
+        self._field_combo.setMinimumWidth(128)
         self._field_combo.setEnabled(False)
         self._field_combo.currentIndexChanged.connect(self._on_field_changed)
-        r1.addWidget(self._field_combo)
-        self._chk_map = check("Map", "Draw the lidar's PPI/VAD scans and fixed beams on the map as the clock reaches them")
-        self._chk_map.toggled.connect(self._on_map_toggled)
-        r1.addWidget(self._chk_map)
-        self._chk_radar = check("Radar", "Show the radar under the lidar scans")
+        row.addWidget(self._field_combo)
+
+        self._chk_radar = QCheckBox("radar")
+        self._chk_radar.setChecked(True)
+        self._chk_radar.setFixedHeight(22)
+        self._chk_radar.setToolTip("Show the radar under the lidar")
         self._chk_radar.toggled.connect(self.radar_visible_toggled.emit)
-        r1.addWidget(self._chk_radar)
-        self._btn_viewer = button("VIEWER", "Open the vertical viewer: RHI cross-sections and vertical stares", 64)
-        self._btn_viewer.setEnabled(False)
-        self._btn_viewer.clicked.connect(self.viewer_requested.emit)
-        r1.addWidget(self._btn_viewer)
-        r1.addStretch()
-        col.addWidget(row1)
-
-        # ---- row 2: scan by scan at this location ----------------------------
-        self._scan_row = QWidget()
-        r2 = QHBoxLayout(self._scan_row)
-        r2.setContentsMargins(0, 0, 0, 0)
-        r2.setSpacing(4)
-        self._btn_prev = button("⏮", "Previous scan here (moves the clock to it)", 28)
-        self._btn_prev.clicked.connect(lambda: self.scan_step_requested.emit(-1))
-        r2.addWidget(self._btn_prev)
-        self._scan_label = QLabel("")
-        self._scan_label.setStyleSheet("color: #E3E8F2; font-size: 11px;")
-        r2.addWidget(self._scan_label)
-        self._btn_next = button("⏭", "Next scan here (moves the clock to it)", 28)
-        self._btn_next.clicked.connect(lambda: self.scan_step_requested.emit(1))
-        r2.addWidget(self._btn_next)
-        r2.addSpacing(8)
-        self._scale_label = QLabel("")
-        self._scale_label.setStyleSheet("color: #8E97AB; font-size: 10px;")
-        r2.addWidget(self._scale_label)
-        r2.addStretch()
-        self._scan_row.setVisible(False)
-        col.addWidget(self._scan_row)
-
-        self._coverage_label = QLabel("")
-        self._coverage_label.setWordWrap(True)
-        self._coverage_label.setStyleSheet("color: #00CFFF; font-size: 10px;")
-        self._coverage_label.hide()
-        col.addWidget(self._coverage_label)
-
-        self._status_label = QLabel(self._availability_status)
-        self._status_label.setWordWrap(True)
-        self._status_label.setStyleSheet("color: #8E97AB; font-size: 10px;")
-        col.addWidget(self._status_label)
-        self._orientation_label = QLabel()
-        self._orientation_label.setWordWrap(True)
-        self._orientation_label.hide()
-        col.addWidget(self._orientation_label)
+        row.addWidget(self._chk_radar)
+        row.addStretch()
 
         outer.addWidget(self._drawer)
 
@@ -195,14 +136,11 @@ class RawLidarControls(QWidget):
                       if any(s.platform_id in self._assets_by_source and self._assets_by_source[s.platform_id] is None
                              for s in sources)]
         if with_data:
-            message = "Lidar data this date: " + ", ".join(instrument_name(i) for i in with_data)
-            if unresolved:
-                message += " · some sources could not be checked"
+            message = "Finding lidar scans…"
         elif unresolved:
-            message = "Could not check every lidar for this date."
+            message = "Couldn't check the lidars"
         else:
-            message = "No lidar data for this date."
-        self._availability_status = message
+            message = "No lidar data this date"
         self.set_status(message)
         self.availability_changed.emit(bool(with_data))
 
@@ -217,18 +155,24 @@ class RawLidarControls(QWidget):
 
     # ---- the chosen location ------------------------------------------------
     def set_status(self, text: str) -> None:
-        self._status_label.setText(str(text or ""))
+        """Shown on the lidar button while no lidar is chosen."""
+        self._status = str(text or "")
+        if not self._chosen:
+            self._location_button.setText(self._status)
 
-    def set_location(self, title: str | None) -> None:
-        """What's chosen, e.g. 'Lidar truck · stop 2 of 4 · (41.438, -97.337)'; None: nothing."""
-        self._location_label.setText(title or _PROMPT)
+    def set_location(self, title: str | None, details: str = "") -> None:
+        """The chosen lidar, e.g. 'Lidar truck · stop 2 of 4', with its
+        position and scanning times on hover; None: nothing chosen."""
+        self._chosen = bool(title)
+        self._location_button.setText(title or self._status)
+        self._location_button.setToolTip(details if title else "")
         if not title:
             self._field_combo.setEnabled(False)
-            self._btn_viewer.setEnabled(False)
-            self._scan_row.setVisible(False)
-            self._coverage_label.hide()
-            self._scale_label.clear()
-            self.set_orientation_notice(None)
+            self.set_heading_notice(None)
+
+    def _on_location_clicked(self) -> None:
+        if self._chosen:
+            self.location_requested.emit()
 
     def set_fields(self, fields: dict) -> None:
         """Fields across the chosen location's files (name -> units); keeps the choice."""
@@ -247,56 +191,29 @@ class RawLidarControls(QWidget):
         if current != self._field_combo.currentData():
             self._on_field_changed()
 
-    def set_coverage(self, text: str, has_vertical: bool) -> None:
-        """What the location holds, e.g. 'Scanning 18:49–19:23Z · 12 VAD · 1 vertical stare'."""
-        self._coverage_label.setText(text)
-        self._coverage_label.setVisible(bool(text))
-        self._scan_row.setVisible(bool(text))
-        self._btn_viewer.setEnabled(has_vertical)
-
-    def set_scan_label(self, text: str, can_back: bool, can_forward: bool) -> None:
-        self._scan_label.setText(text)
-        self._btn_prev.setEnabled(can_back)
-        self._btn_next.setEnabled(can_forward)
-
-    def set_orientation_notice(self, provenance: dict | None) -> None:
-        """Amber when a missing truck heading was estimated, red when the
-        scans couldn't be oriented at all; hidden when the file's own
-        orientation is used."""
+    def set_heading_notice(self, provenance: dict | None) -> None:
+        """A small amber ⚠ when the truck's missing heading was estimated, red
+        when the scans couldn't be oriented; the explanation is on hover."""
         provenance = provenance or {}
         if provenance.get("heading_missing_in_file"):
-            color, text = "#F5B942", "⚠ " + provenance.get("azimuth_reference", "")
+            color = "#F5B942"
         elif provenance.get("north_referenced") is False:
-            color, text = "#F87171", "⚠ " + provenance.get("azimuth_reference", "")
+            color = "#F87171"
         else:
-            self._orientation_label.hide()
+            self._heading_warning.hide()
             return
-        self._orientation_label.setStyleSheet(f"color: {color}; font-size: 10px;")
-        self._orientation_label.setText(text)
-        self._orientation_label.show()
+        self._heading_warning.setStyleSheet(f"color: {color}; font-size: 13px; background: transparent;")
+        self._heading_warning.setToolTip(provenance.get("azimuth_reference", ""))
+        self._heading_warning.show()
 
     # ---- display switches ---------------------------------------------------
     def current_field(self) -> str | None:
         return self._field_combo.currentData()
 
-    def map_is_on(self) -> bool:
-        return self._chk_map.isChecked()
-
     def radar_is_on(self) -> bool:
         return self._chk_radar.isChecked()
 
-    def _on_map_toggled(self, checked: bool) -> None:
-        self._chk_radar.setVisible(checked)
-        if not checked and not self._chk_radar.isChecked():
-            self._chk_radar.setChecked(True)          # radar back on when the lidar leaves the map
-        self.map_toggled.emit(checked)
-
     def _on_field_changed(self, _index=None):
-        self._scale_label.clear()
         name = self._field_combo.currentData()
         if name:
             self.field_selected.emit(name)
-
-    def set_map_scale(self, metadata):
-        if metadata['field'] == self._field_combo.currentData():
-            self._scale_label.setText(f"{metadata['vmin']:.3g} … {metadata['vmax']:.3g} {metadata.get('units', '')}")

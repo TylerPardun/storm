@@ -79,7 +79,8 @@ QMainWindow, QWidget {
 
 #floatingToolbar[wide="true"] QComboBox#radarSiteCombo,
 #floatingToolbar[wide="true"] QComboBox#radarProductCombo,
-#floatingToolbar[wide="true"] QToolButton#radarStationsButton {
+#floatingToolbar[wide="true"] QToolButton#radarStationsButton,
+#floatingToolbar[wide="true"] QToolButton#lidarLocationButton {
     min-height: 24px;
 }
 
@@ -117,7 +118,8 @@ QMainWindow, QWidget {
 #floatingToolbar QComboBox#radarSiteCombo,
 #floatingToolbar QComboBox#radarProductCombo,
 #floatingToolbar QComboBox#lidarCombo,
-#floatingToolbar QToolButton#radarStationsButton {
+#floatingToolbar QToolButton#radarStationsButton,
+#floatingToolbar QToolButton#lidarLocationButton {
     background-color: rgba(32, 37, 58, 0.62);
     border: 1px solid rgba(74, 83, 108, 0.48);
 }
@@ -125,7 +127,8 @@ QMainWindow, QWidget {
 #floatingToolbar QComboBox#radarSiteCombo:hover,
 #floatingToolbar QComboBox#radarProductCombo:hover,
 #floatingToolbar QComboBox#lidarCombo:hover,
-#floatingToolbar QToolButton#radarStationsButton:hover {
+#floatingToolbar QToolButton#radarStationsButton:hover,
+#floatingToolbar QToolButton#lidarLocationButton:hover {
     border-color: rgba(120, 138, 178, 0.72);
 }
 
@@ -736,7 +739,8 @@ QPushButton#dangerButton:hover {
     color: #0A0A0F;
 }
 
-QComboBox#radarProductCombo, QComboBox#radarSiteCombo, QToolButton#radarStationsButton {
+QComboBox#radarProductCombo, QComboBox#radarSiteCombo, QToolButton#radarStationsButton,
+QToolButton#lidarLocationButton {
     padding: 4px 8px;
 }
 
@@ -984,7 +988,8 @@ QToolTip {
 #floatingToolbar QWidget#deployLocsDrawer QCheckBox,
 #floatingToolbar QWidget#routingDrawer QCheckBox,
 #floatingToolbar QWidget#soundingDrawer QCheckBox,
-#floatingToolbar QWidget#surfaceDrawer QCheckBox {
+#floatingToolbar QWidget#surfaceDrawer QCheckBox,
+#floatingToolbar QWidget#rawLidarDrawer QCheckBox {
     background: transparent;
 }
 #floatingToolbar QCheckBox::indicator {

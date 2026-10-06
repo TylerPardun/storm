@@ -9,11 +9,12 @@ THREDDS (data.nssl.noaa.gov) stalls under bursts of requests, so the tools
 that read it ask one thing at a time, with pauses, and stop if it goes quiet.
 Don't run them in a loop or several at once.
 
-## Checking that archive mode works
+## Checking that STORM works
 
 | Script | What it does |
 |---|---|
 | `check_archive_days.py` | Opens archive sessions for many dates (one process at a time, with a memory watchdog), steps each through its active hours, exercises radar, satellite, lidar, NOXP and the Video Studio, and writes `case_data/day_checks/<run>/report.md` with screenshots. `--preset` runs a spread of 11 dates, 2009–2026. |
+| `check_live_mode.py` | Opens STORM in viewer, monitor or vehicle mode, turns on radar, hazards and satellite as a user would, and reports what each live source delivered (`case_data/live_checks/`). Monitor and vehicle run with MQTT off so a check never appears on the team's live map; viewer (read-only) connects. |
 | `check_data_sources.py` | Asks every THREDDS folder (`archive/thredds_paths.py`) and every AWS bucket and web API (`data/endpoints.py`) whether it still answers; for a THREDDS folder that's gone, lists what its parent now holds. |
 | `verify_offline_case.py` | Builds a case package from a live session, then reopens it with the network blocked and reports what loaded. |
 | `stress_archive_sessions.py` | Opens and closes archive windows quickly, to catch crashes during startup and teardown. |

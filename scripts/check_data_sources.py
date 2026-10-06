@@ -135,24 +135,21 @@ _STILL_THERE = {400, 401, 403, 405, 422, 429}      # answers, but wants paramete
 
 
 def probe(url: str) -> tuple[int | None, str]:
-    import requests
+    """(HTTP status, note), or (None, reason) when there was no answer. The
+    NSSL API is asked the way STORM asks it: its key, and config's SSL
+    context with the bundled Sectigo intermediate (the server leaves it out)."""
+    nssl = url.startswith(config.NSSL_API_ROOT)
     headers = {"User-Agent": _USER_AGENT}
-    if url.startswith(config.NSSL_API_ROOT) and config.NSSL_API_KEY:
+    if nssl and config.NSSL_API_KEY:
         headers["X-API-Key"] = config.NSSL_API_KEY
     try:
-        with requests.get(url, headers=headers, timeout=TIMEOUT_S, stream=True) as r:
-            return r.status_code, ""
-    except requests.exceptions.SSLError:
-        # an invalid certificate: still find out whether the address exists
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        try:
-            with requests.get(url, headers=headers, timeout=TIMEOUT_S, stream=True, verify=False) as r:
-                return r.status_code, "bad certificate"
-        except requests.RequestException as exc:
-            return None, f"bad certificate, then {type(exc).__name__}"
-    except requests.RequestException as exc:
-        return None, type(exc).__name__
+        with urlopen(Request(url, headers=headers), timeout=TIMEOUT_S,
+                     context=config.NSSL_SSL_CONTEXT if nssl else None) as r:
+            return r.status, ""
+    except HTTPError as exc:
+        return exc.code, ""
+    except (URLError, TimeoutError, OSError) as exc:
+        return None, str(getattr(exc, "reason", exc))[:80]
 
 
 def check_endpoints(wanted: str) -> tuple[list[str], list[str]]:

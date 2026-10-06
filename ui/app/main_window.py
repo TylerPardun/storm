@@ -330,6 +330,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._disable_radar = runtime_flags.FLAGS.disable_radar
         self._disable_mqtt = runtime_flags.FLAGS.disable_mqtt
         self._disable_annotations = runtime_flags.FLAGS.disable_annotations
+        # storm-cone placement state, read by the radar status line too; set
+        # here so it exists when annotations (and so _init_storm_cone) are off
+        self._pending_cone_motion_fix = None
         self._disable_deploy_locs = runtime_flags.FLAGS.disable_deploy_locs
         self._disable_data_inputs = runtime_flags.FLAGS.disable_data_inputs
 
@@ -1032,7 +1035,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         The coarse MQTT vehicles topic (ArchiveMQTTReader) can genuinely
         have no history for a date STORM wasn't deployed/connected for --
         _start_archive_vehicle_obs already has its own fallback for this
-        exact case (admin-only dense/1-second observations, probing the
+        exact case (the dense one-second observations, probing the
         full FOFS roster directly), so before giving up to the home
         location this also waits for and checks that richer source rather
         than declaring "no vehicle positions" while it's simply still

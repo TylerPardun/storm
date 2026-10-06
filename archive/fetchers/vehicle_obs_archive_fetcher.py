@@ -1,4 +1,4 @@
-"""One-second FOFS mobile-mesonet observations for admin archive playback."""
+"""One-second FOFS mobile-mesonet observations for archive playback."""
 
 from __future__ import annotations
 

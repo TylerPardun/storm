@@ -10,10 +10,11 @@ from urllib.error import HTTPError, URLError
 import config
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
-_ORS_BASE        = "https://api.openrouteservice.org/v2/directions/driving-car"
-_NOMINATIM_BASE  = "https://nominatim.openstreetmap.org/search"
+_ORS_BASE        = endpoints.OPENROUTESERVICE_DRIVING
+_NOMINATIM_BASE  = endpoints.NOMINATIM_SEARCH
 _USER_AGENT      = "STORM-App/1.0 (storm-chasing field operations)"
 _REQUEST_TIMEOUT = 15  # seconds
 

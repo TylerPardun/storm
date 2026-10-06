@@ -17,21 +17,22 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 import config
 from core.observation import Observation
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
-OK_API_URL      = f"{config.NSSL_API_ROOT}/data/mesonet/ok_mesonet.json"
-OK_META_URL     = "https://www.mesonet.org/data/public/mesonet/current/current.csv.txt"
-WTM_API_URL     = f"{config.NSSL_API_ROOT}/data/mesonet/wtx_mesonet.json"
-WTM_SITES_URL   = "https://api.mesonet.ttu.edu/mesoweb/sites/"
-KS_API_URL      = f"{config.NSSL_API_ROOT}/data/mesonet/ks_mesonet.json"
-CO_API_URL      = f"{config.NSSL_API_ROOT}/data/mesonet/co_mesonet.json"
-CO_META_URL     = f"{config.NSSL_API_ROOT}/data/mesonet/co_metadata.json"
-NE_API_URL      = f"{config.NSSL_API_ROOT}/data/mesonet/ne_mesonet.json"
-SD_API_URL      = f"{config.NSSL_API_ROOT}/data/mesonet/sd_mesonet.json"
+OK_API_URL      = endpoints.nssl_api(endpoints.NSSL_MESONETS["ok"])
+OK_META_URL     = endpoints.OK_MESONET_CURRENT
+WTM_API_URL     = endpoints.nssl_api(endpoints.NSSL_MESONETS["wtx"])
+WTM_SITES_URL   = endpoints.WTM_SITES
+KS_API_URL      = endpoints.nssl_api(endpoints.NSSL_MESONETS["ks"])
+CO_API_URL      = endpoints.nssl_api(endpoints.NSSL_MESONETS["co"])
+CO_META_URL     = endpoints.nssl_api(endpoints.NSSL_CO_MESONET_METADATA)
+NE_API_URL      = endpoints.nssl_api(endpoints.NSSL_MESONETS["ne"])
+SD_API_URL      = endpoints.nssl_api(endpoints.NSSL_MESONETS["sd"])
 
 # iem endpoints for ASOS
-IEM_METAR_GEOJSON = "https://mesonet.agron.iastate.edu/geojson/metar.geojson"
-IEM_CURRENTS_URL  = "https://mesonet.agron.iastate.edu/api/1/currents.json"
+IEM_METAR_GEOJSON = endpoints.IEM_METAR_GEOJSON
+IEM_CURRENTS_URL  = endpoints.IEM_CURRENTS
 IEM_CURRENTS_BATCH = 100   # stations per IEM request
 MAX_ASOS_STATIONS  = 400   # cap to keep map rendering fast
 

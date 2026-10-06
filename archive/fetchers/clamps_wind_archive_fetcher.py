@@ -35,9 +35,10 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from core.vad import VADProfile, VADSet
 from core import package_sources
 
+from archive import thredds_paths as paths
 log = logging.getLogger(__name__)
 
-_FRDD_ROOT = "https://data.nssl.noaa.gov/thredds/fileServer/FRDD/CLAMPS"
+_FRDD_ROOT = paths.file_url(paths.CLAMPS)
 _USER_AGENT = "Mozilla/5.0 STORM/1.0"
 _REQUEST_TIMEOUT = 60  # these files run tens to ~100MB; slower than mesonet CSV/nc
 _RETRY_BACKOFF_S = (2.0, 5.0)
@@ -55,14 +56,8 @@ class ClampsWindSource:
 # campaign), 2026-09-08 -- see planning/source-and-pilot-register.md. Add
 # platforms here as NSSL adds instruments/units; this is instrument
 # identity, not per-campaign/date scoping.
-KNOWN_CLAMPS_WIND_SOURCES: tuple[ClampsWindSource, ...] = (
-    ClampsWindSource("DLTRUCK1-DL1-VAD", "dltruck/dltruck1", "dltruckdlvadDL1.c1"),
-    ClampsWindSource("DLTRUCK1-DL2-VAD", "dltruck/dltruck1", "dltruckdlvadDL2.c1"),
-    ClampsWindSource("DLTRUCK1-DL1-CSMWINDS", "dltruck/dltruck1", "dltruckdlcsmwindsDL1.c1"),
-    ClampsWindSource("DLTRUCK1-DL2-CSMWINDS", "dltruck/dltruck1", "dltruckdlcsmwindsDL2.c1"),
-    ClampsWindSource("CLAMPS1-VAD", "clamps/clamps1", "clampsdlvadC1.c1"),
-    ClampsWindSource("CLAMPS2-VAD", "clamps/clamps2", "clampsdlvadC2.c1"),
-)
+KNOWN_CLAMPS_WIND_SOURCES: tuple[ClampsWindSource, ...] = tuple(
+    ClampsWindSource(*row) for row in paths.CLAMPS_WIND_STREAMS)
 
 
 def wind_source_name(platform_id: str) -> str:
@@ -106,8 +101,8 @@ def _urlopen_with_retry(request: Request, *, timeout: int):
 
 def _source_url(source: ClampsWindSource, date_str: str) -> str:
     return (
-        f"{_FRDD_ROOT}/{source.platform_dir}/processed/{source.datastream}/"
-        f"{source.datastream}.{date_str}.000000.cdf"
+        paths.file_url(paths.clamps_processed(source.platform_dir, source.datastream))
+        + f"/{source.datastream}.{date_str}.000000.cdf"
     )
 
 

@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from config import ACCENT_COLOR
+from data import endpoints
 
 
 DEFAULT_LAT  = 35.22
@@ -24,7 +25,7 @@ _TEMPLATE_PATH = Path(__file__).with_name("map_template.html")
 # OpenFreeMap: the same OpenMapTiles schema (layers, classes, name fields)
 # the local file uses, so the style is unchanged. Free, no key; its TileJSON
 # carries the OpenStreetMap/OpenMapTiles attribution the map shows.
-ONLINE_TILEJSON = "https://tiles.openfreemap.org/planet"
+ONLINE_TILEJSON = endpoints.OPENFREEMAP_TILEJSON
 
 
 def basemap_source() -> str:

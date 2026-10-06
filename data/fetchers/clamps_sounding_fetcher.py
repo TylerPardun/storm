@@ -16,12 +16,13 @@ from PyQt6.QtCore import QObject, pyqtSignal
 import config
 from core.sounding import Sounding, SoundingSet
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT = 20
 _LOOKBACK_HOURS  = 12
 _RAW_HEADER_BYTES = 4096
-_API_INDEX_PATH = "data/sonde/index.json"
+_API_INDEX_PATH = endpoints.NSSL_SONDE_INDEX
 
 _TEST_FILE_URL = None
 

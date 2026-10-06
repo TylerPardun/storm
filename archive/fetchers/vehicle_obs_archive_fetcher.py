@@ -24,12 +24,10 @@ from archive.vehicle_aliases import thredds_vehicle_id
 from archive.vehicle_speed import VehicleSpeed, calculate_vehicle_speed
 from core.observation import Observation
 
+from archive import thredds_paths as paths
 log = logging.getLogger(__name__)
 
-_FILE_ROOT = (
-    "https://data.nssl.noaa.gov/thredds/fileServer/"
-    "FOFS/Mobile-Mesonet/data"
-)
+_FILE_ROOT = paths.file_url(paths.FOFS_MESONET_DATA)
 _USER_AGENT = "Mozilla/5.0 STORM/1.0"
 _FRESH_SECONDS = 60
 

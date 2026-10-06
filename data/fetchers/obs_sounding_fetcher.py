@@ -13,10 +13,11 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.sounding import Sounding, SoundingSet
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
-_IEM_BASE_URL    = "https://mesonet.agron.iastate.edu/json/raob.py"
-_SPC_BASE_URL    = "https://www.spc.noaa.gov/exper/soundings"
+_IEM_BASE_URL    = endpoints.IEM_RAOB
+_SPC_BASE_URL    = endpoints.SPC_SOUNDINGS
 _IEM_TIMEOUT     = 5    # seconds — fast path; fall back to SPC on timeout/empty
 _SPC_TIMEOUT     = 8    # seconds
 _KNOTS_TO_MS     = 0.51444

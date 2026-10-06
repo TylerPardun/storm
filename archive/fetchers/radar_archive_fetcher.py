@@ -21,9 +21,10 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.level2_radar_scan import Level2RadarScan, L2_PRODUCTS, DEFAULT_L2_PRODUCT
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
-_S3_BASE = "https://unidata-nexrad-level2.s3.amazonaws.com"
+_S3_BASE = endpoints.NEXRAD_LEVEL2_BUCKET
 _S3_NS   = "http://s3.amazonaws.com/doc/2006-03-01/"
 
 # maps L2_PRODUCTS keys → MetPy Level2File moment name (plain ASCII string).

@@ -44,10 +44,11 @@ from archive.positions import PositionTrack
 from data.fetchers.clamps_sounding_fetcher import _FILENAME_RE, _format_label, _parse_skewt
 from core import package_sources
 
+from archive import thredds_paths as paths
 log = logging.getLogger(__name__)
 
-_CATALOG_ROOT = "https://data.nssl.noaa.gov/thredds/catalog/FRDD/CLAMPS"
-_FILESERVER_ROOT = "https://data.nssl.noaa.gov/thredds/fileServer/FRDD/CLAMPS"
+_CATALOG_ROOT = f"{paths.catalog_root()}/{paths.CLAMPS}"
+_FILESERVER_ROOT = paths.file_url(paths.CLAMPS)
 _USER_AGENT = "Mozilla/5.0 STORM/1.0"
 _REQUEST_TIMEOUT = 30
 _RETRY_BACKOFF_S = (2.0, 5.0)
@@ -55,8 +56,8 @@ _RETRY_BACKOFF_S = (2.0, 5.0)
 # Discovered by browsing the THREDDS catalog directly, 2026-09-08 -- see
 # planning/source-and-pilot-register.md. Just one known source: see
 # module docstring for why clamps1/clamps2 aren't included.
-_SONDE_PLATFORM_DIR = "dltruck/dltruck1"
-_SONDE_DATASTREAM = "dltruckdlsonderawDL1.b1"
+_SONDE_PLATFORM_DIR = paths.SONDE_PLATFORM
+_SONDE_DATASTREAM = paths.SONDE_STREAM
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -90,7 +91,7 @@ def _list_catalog_filenames(platform_dir: str, datastream: str) -> list[str]:
     """Return every filename listed for one datastream's THREDDS catalog
     page. An empty list means no such datastream or a fetch failure --
     normal, not an error."""
-    url = f"{_CATALOG_ROOT}/{platform_dir}/ingested/{datastream}/catalog.html"
+    url = paths.catalog_url(paths.clamps_ingested(platform_dir, datastream))
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     try:
         html = package_sources.read_url("clamps profiles", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT).decode("utf-8", errors="replace")
@@ -98,7 +99,7 @@ def _list_catalog_filenames(platform_dir: str, datastream: str) -> list[str]:
         log.debug("CLAMPS sonde catalog listing failed for %s/%s: %s", platform_dir, datastream, exc)
         return []
 
-    prefix = re.escape(f"FRDD/CLAMPS/{platform_dir}/ingested/{datastream}/")
+    prefix = re.escape(f"{paths.clamps_ingested(platform_dir, datastream)}/")
     pattern = re.compile(rf'dataset={prefix}([^"]+\.skewT\.text)"')
     return pattern.findall(html)
 
@@ -123,7 +124,7 @@ def fetch_clamps_sonde_soundings(archive_date: datetime) -> "SoundingSet | None"
         except ValueError:
             continue
 
-        url = f"{_FILESERVER_ROOT}/{_SONDE_PLATFORM_DIR}/ingested/{_SONDE_DATASTREAM}/{filename}"
+        url = paths.file_url(f"{paths.clamps_ingested(_SONDE_PLATFORM_DIR, _SONDE_DATASTREAM)}/{filename}")
         request = Request(url, headers={"User-Agent": _USER_AGENT})
         try:
             text = package_sources.read_url("clamps profiles", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT).decode("utf-8", errors="replace")

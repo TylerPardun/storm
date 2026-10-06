@@ -13,11 +13,12 @@ from urllib.request import Request, urlopen
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SECONDS = 20
 USER_AGENT = "Mozilla/5.0 STORM/1.0"
-SATSQUATCH_BASE_URL = "https://tiledata.satsquatch.com/tilesdata"
+SATSQUATCH_BASE_URL = endpoints.SATSQUATCH_TILES
 _MBTILES_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "tiles", "storm.mbtiles")
 )

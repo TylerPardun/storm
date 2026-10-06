@@ -39,10 +39,11 @@ from urllib.request import Request, urlopen
 from core.sounding import Sounding, SoundingSet
 from core import package_sources
 
+from archive import thredds_paths as paths
 log = logging.getLogger(__name__)
 
-_CATALOG_ROOT = "https://data.nssl.noaa.gov/thredds/catalog/FRDD/CLAMPS"
-_FILESERVER_ROOT = "https://data.nssl.noaa.gov/thredds/fileServer/FRDD/CLAMPS"
+_CATALOG_ROOT = f"{paths.catalog_root()}/{paths.CLAMPS}"
+_FILESERVER_ROOT = paths.file_url(paths.CLAMPS)
 _USER_AGENT = "Mozilla/5.0 STORM/1.0"
 _REQUEST_TIMEOUT = 30
 _RETRY_BACKOFF_S = (2.0, 5.0)
@@ -52,9 +53,7 @@ _RETRY_BACKOFF_S = (2.0, 5.0)
 # over older. See archive/fetchers/clamps_wind_archive_fetcher.py for
 # why this can't be a single deterministic path per platform: not every
 # variant is populated for every platform/date.
-_VARIANT_PREFERENCE: tuple[str, ...] = (
-    "aeri_mwr.v2", "aeri_mwr.v1", "aeri.v2", "aeri.v1", "mwr.v2", "mwr.v1",
-)
+_VARIANT_PREFERENCE: tuple[str, ...] = paths.CLAMPS_TROPOE_VARIANTS
 
 
 @dataclass(frozen=True)
@@ -67,10 +66,8 @@ class ClampsTropoePlatform:
 # Discovered by browsing the THREDDS catalog directly, 2026-09-08 -- see
 # planning/source-and-pilot-register.md. TROPoe needs AERI+MWR, which are
 # on the clamps1/clamps2 trailers, not the dltruck scanning-lidar truck.
-KNOWN_CLAMPS_TROPOE_PLATFORMS: tuple[ClampsTropoePlatform, ...] = (
-    ClampsTropoePlatform("CLAMPS1", "clamps/clamps1", "C1"),
-    ClampsTropoePlatform("CLAMPS2", "clamps/clamps2", "C2"),
-)
+KNOWN_CLAMPS_TROPOE_PLATFORMS: tuple[ClampsTropoePlatform, ...] = tuple(
+    ClampsTropoePlatform(*row) for row in paths.CLAMPS_TROPOE_PLATFORMS)
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -117,7 +114,7 @@ def _list_catalog_filenames(platform_dir: str, datastream: str) -> list[str]:
         log.warning("CLAMPS TROPoe catalog listing failed for %s/%s: %s", platform_dir, datastream, exc)
         return []
 
-    prefix = re.escape(f"FRDD/CLAMPS/{platform_dir}/processed/{datastream}/{datastream}.")
+    prefix = re.escape(f"{paths.clamps_processed(platform_dir, datastream)}/{datastream}.")
     pattern = re.compile(rf'dataset={prefix}([0-9.]+\.(?:nc|cdf))"')
     return [f"{datastream}.{m}" for m in pattern.findall(html)]
 
@@ -127,7 +124,7 @@ def _find_file_for_date(platform: ClampsTropoePlatform, date_str: str) -> "tuple
     platform/date. Returns (datastream, filename) for the first variant
     that has a file, or None if none do."""
     for variant in _VARIANT_PREFERENCE:
-        datastream = f"clampstropoe10.{variant}.{platform.unit_suffix}"
+        datastream = paths.clamps_tropoe_stream(variant, platform.unit_suffix)
         filenames = _list_catalog_filenames(platform.platform_dir, datastream)
         prefix = f"{datastream}.{date_str}."
         matches = sorted(f for f in filenames if f.startswith(prefix))
@@ -202,7 +199,7 @@ def fetch_clamps_tropoe_soundings(archive_date: datetime) -> "SoundingSet | None
         if found is None:
             continue
         datastream, filename = found
-        url = f"{_FILESERVER_ROOT}/{platform.platform_dir}/processed/{datastream}/{filename}"
+        url = paths.file_url(f"{paths.clamps_processed(platform.platform_dir, datastream)}/{filename}")
         request = Request(url, headers={"User-Agent": _USER_AGENT})
         try:
             data = package_sources.read_url("clamps profiles", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT)

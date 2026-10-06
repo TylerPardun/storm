@@ -12,15 +12,16 @@ from metpy.io import Level3File
 
 from core.vad import VADProfile, VADSet
 
+from archive import thredds_paths as paths
 log = logging.getLogger(__name__)
 
 # thredds base for Level 3 NVW products
-THREDDS_BASE = "https://thredds.ucar.edu/thredds"
-THREDDS_CATALOG = f"{THREDDS_BASE}/catalog/nexrad/level3/NVW"
-THREDDS_FILE = f"{THREDDS_BASE}/fileServer/nexrad/level3/NVW"
+THREDDS_BASE = paths.UCAR
+THREDDS_CATALOG = f"{paths.catalog_root(paths.UCAR)}/{paths.UCAR_NEXRAD_LEVEL3}/NVW"
+THREDDS_FILE = f"{paths.file_root(paths.UCAR)}/{paths.UCAR_NEXRAD_LEVEL3}/NVW"
 
 # thredds catalog XML namespace
-_NS = {"thredds": "http://www.unidata.ucar.edu/namespaces/thredds/InvCatalog/v1.0"}
+_NS = {"thredds": paths.THREDDS_NS}
 
 # regex to extract HHMM from NVW filenames
 _FNAME_RE = re.compile(r"Level3_\w+_NVW_\d{8}_(\d{4})\.nids")

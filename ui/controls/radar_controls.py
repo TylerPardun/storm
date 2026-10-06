@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QSlider, QSizePolicy,
 )
 from PyQt6.QtCore import pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer, Qt
+from archive import thredds_paths as paths
 
 
 NEXRAD_SITES = [
@@ -80,7 +81,7 @@ NEXRAD_SITES = [
 PRODUCTS = [("N0B", "REFLECTIVITY (SR)"), ("N0U", "VELOCITY")]
 OPTIONAL_PRODUCTS = [("N0C", "CORR COEFF"), ("N0K", "SPEC DIFF PHASE")]
 ALL_PRODUCTS = PRODUCTS + OPTIONAL_PRODUCTS
-THREDDS_CATALOG_ROOT = "https://thredds.ucar.edu/thredds/catalog/nexrad/level3"
+THREDDS_CATALOG_ROOT = f"{paths.catalog_root(paths.UCAR)}/{paths.UCAR_NEXRAD_LEVEL3}"
 
 # The mobile NOXP radar's site-picker/"Stations" entry -- not a real NEXRAD
 # ID, so set_selected_site short-circuits before any WSR-88D-specific
@@ -536,7 +537,7 @@ class RadarControls(QWidget):
             with urlopen(url, timeout=6) as resp:
                 xml_text = resp.read().decode("utf-8", errors="replace")
             root = ET.fromstring(xml_text)
-            ns = {"cat": "http://www.unidata.ucar.edu/namespaces/thredds/InvCatalog/v1.0"}
+            ns = {"cat": paths.THREDDS_NS}
             # site catalogs typically contain day subcatalog refs, not dataset
             for ds in root.findall(".//cat:dataset", ns):
                 if ds.attrib.get("urlPath"):

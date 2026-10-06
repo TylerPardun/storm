@@ -38,9 +38,10 @@ from core.observation import Observation
 from data.fetchers.surface_fetcher import MAX_ASOS_STATIONS, load_asos_station_roster
 from core import package_sources
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
-_ASOS_HISTORY_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
+_ASOS_HISTORY_URL = endpoints.IEM_ASOS_HISTORY
 _REQUEST_FIELDS = ("tmpf", "dwpf", "sknt", "drct", "alti", "mslp")
 _BATCH_SIZE = 50  # smaller than live's 100/request (IEM_CURRENTS_BATCH) -- this
 # endpoint returns a full day of rows per station, not one current snapshot.

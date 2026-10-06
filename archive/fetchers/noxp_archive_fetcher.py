@@ -23,10 +23,11 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 
+from archive import thredds_paths as paths
 log = logging.getLogger(__name__)
 
-ROOT = 'https://data.nssl.noaa.gov/thredds/catalog/RRDD/NOXP/'
-DATA_ROOT = 'https://data.nssl.noaa.gov/thredds/fileServer/RRDD/NOXP/'
+ROOT = f'{paths.catalog_root()}/{paths.NOXP}/'
+DATA_ROOT = f'{paths.file_root()}/{paths.NOXP}/'
 _HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
 # Per-(catalog root, date) resolved-asset cache -- one full THREDDS crawl for
 # a known past date is *usually* a fixed answer (published field-campaign

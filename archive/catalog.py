@@ -31,7 +31,9 @@ from archive.fetchers.coptersonde_archive_fetcher import KNOWN_PERILS_IOPS
 from archive.fetchers.raw_lidar_archive_fetcher import KNOWN_RAW_LIDAR_SOURCES
 from archive.fetchers.noxp_archive_fetcher import NoxpArchive
 
-_CATALOG_ROOT = "https://data.nssl.noaa.gov/thredds/catalog/"
+from archive import thredds_paths as paths
+
+_CATALOG_ROOT = paths.catalog_root() + "/"
 _REQUEST_TIMEOUT = 8
 _MAX_CATALOG_BYTES = 16 * 1024 * 1024
 _DATE_RE = re.compile(r"(\d{8})")
@@ -91,18 +93,7 @@ _LATEST_OBSERVED_YEAR = {
 # `_excluded` filter). Each entry is its own bounded crawl root so one
 # campaign's discovery can never block another's, and so a partial crawl of
 # one root doesn't imply anything about the rest.
-_NOXP_CAMPAIGN_ROOTS: dict[str, str] = {
-    "2010": "RRDD/NOXP/2010",
-    "2011": "RRDD/NOXP/2011",
-    "2013": "RRDD/NOXP/2013",
-    "2015": "RRDD/NOXP/2015",
-    "2022": "RRDD/NOXP/2022",
-    "Colorado": "RRDD/NOXP/Colorado",
-    "Netcdf": "RRDD/NOXP/Netcdf",
-    "Reeves": "RRDD/NOXP/Reeves",
-    "VORTEX2 2009": "RRDD/NOXP/Vortex/2009",
-    "VORTEX2 2010": "RRDD/NOXP/Vortex/2010",
-}
+_NOXP_CAMPAIGN_ROOTS: dict[str, str] = paths.NOXP_CAMPAIGNS
 
 # Catalog pages already fetched are memoized on this NoxpArchive instance
 # and reused across date selections. Explicit refresh invalidates both the
@@ -245,7 +236,7 @@ class FofsIndexSpec:
 
     @property
     def url(self):
-        return f"{_CATALOG_ROOT}FOFS/Mobile-Mesonet/catalog.html#{self.vehicle or 'other-vehicles'}"
+        return f"{_CATALOG_ROOT}{paths.FOFS_MESONET}/catalog.html#{self.vehicle or 'other-vehicles'}"
 
 
 class _CatalogLinks(HTMLParser):
@@ -281,21 +272,20 @@ class _CatalogLinks(HTMLParser):
 
 def catalogs_for_platform(platform: KnownPlatform) -> tuple[CatalogSpec | RecursiveCatalogSpec, ...]:
     key = platform.key
-    root = "FRDD/CLAMPS"
     if platform.family == "FOFS Mobile Mesonet":
         return (FofsIndexSpec(key),)
     if platform.family == "CLAMPS Raw Lidar":
         return (CatalogSpec(key.path, ".cdf"),)
     if platform.family == "CLAMPS Winds":
-        return (CatalogSpec(f"{root}/{key.platform_dir}/processed/{key.datastream}", ".cdf"),)
+        return (CatalogSpec(paths.clamps_processed(key.platform_dir, key.datastream), ".cdf"),)
     if platform.family == "CLAMPS TROPoe":
-        return tuple(CatalogSpec(f"{root}/{key.platform_dir}/processed/clampstropoe10.{v}.{key.unit_suffix}", (".nc", ".cdf")) for v in _TROPOE_VARIANTS)
+        return tuple(CatalogSpec(paths.clamps_processed(key.platform_dir, paths.clamps_tropoe_stream(v, key.unit_suffix)), (".nc", ".cdf")) for v in _TROPOE_VARIANTS)
     if platform.family == "CLAMPS Surface":
-        return (CatalogSpec(f"{root}/{key.platform_dir}/ingested/{key.datastream}", ".cdf"),)
+        return (CatalogSpec(paths.clamps_ingested(key.platform_dir, key.datastream), ".cdf"),)
     if platform.family == "CLAMPS Sondes":
-        return (CatalogSpec(f"{root}/{_SONDE_PLATFORM_DIR}/ingested/{_SONDE_DATASTREAM}", ".skewT.text"),)
+        return (CatalogSpec(paths.clamps_ingested(_SONDE_PLATFORM_DIR, _SONDE_DATASTREAM), ".skewT.text"),)
     if platform.family == "PERiLS UAS":
-        return tuple(CatalogSpec(f"{root}/campaigns/PERiLS/{y}/CopterSonde/v1/{iop}", ".cdf", year=int(y)) for y, iop in KNOWN_PERILS_IOPS)
+        return tuple(CatalogSpec(paths.coptersonde_iop(y, iop), ".cdf", year=int(y)) for y, iop in KNOWN_PERILS_IOPS)
     if platform.family == "NOXP Radar":
         return (RecursiveCatalogSpec(key),)
     raise ValueError(f"Unregistered source family: {platform.family}")

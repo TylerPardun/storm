@@ -69,6 +69,7 @@ from data.fetchers.sfcoa_overlay_fetcher import SfcoaOverlayFetcher
 from data.fetchers.surface_fetcher import SurfaceFetcher
 from data.radar.radar_decoder import decode_nexrad_l3
 import config
+from data import endpoints
 from core.annotation import Annotation, ANNOTATION_TYPE_MAP
 from core.storm_cone import StormCone, motion_from_fixes
 from core.scan_sector import ScanSector, feature_collection
@@ -1556,7 +1557,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         """One-shot background fetch of current.json to pre-populate annotations on launch."""
         from urllib.request import urlopen, Request
 
-        url = f"{config.NSSL_API_ROOT}/current.json"
+        url = endpoints.nssl_api(endpoints.NSSL_CURRENT_OBS)
         try:
             headers = {"User-Agent": "Mozilla/5.0 STORM/1.0"}
             if config.NSSL_API_KEY:
@@ -4675,15 +4676,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                     # iem AFOS ignores after/before in ISO format; sdate/edate (date-only)
                     sdate = ts.strftime("%Y-%m-%d")
                     edate = (ts + _td2(days=1)).strftime("%Y-%m-%d")
-                    url = (
-                        "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py"
-                        f"?pil={pil}&limit=1&fmt=text&sdate={sdate}&edate={edate}"
-                    )
+                    url = f"{endpoints.IEM_AFOS}?pil={pil}&limit=1&fmt=text&sdate={sdate}&edate={edate}"
                 else:
-                    url = f"https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil={pil}&limit=1&fmt=text"
+                    url = f"{endpoints.IEM_AFOS}?pil={pil}&limit=1&fmt=text"
                 text = _fetch(url)
             elif kind == "mcd":
-                url = f"https://www.spc.noaa.gov/products/md/md{identifier}.txt"
+                url = endpoints.spc_md_text(identifier)
                 text = _fetch(url)
             elif kind == "watch":
                 # identifier is "NNNN" in live mode or "NNNN|ISO_TS" in archive mode.
@@ -4697,12 +4695,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                     ts = _dt2.strptime(archive_ts, "%Y-%m-%dT%H:%M:%SZ")
                     sdate = (ts - _td2(days=1)).strftime("%Y-%m-%d")
                     edate = (ts + _td2(days=1)).strftime("%Y-%m-%d")
-                    url = (
-                        "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py"
-                        f"?pil=SEL{sel_digit}&limit=1&fmt=text&sdate={sdate}&edate={edate}"
-                    )
+                    url = f"{endpoints.IEM_AFOS}?pil=SEL{sel_digit}&limit=1&fmt=text&sdate={sdate}&edate={edate}"
                 else:
-                    url = f"https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py?pil=SEL{sel_digit}&limit=1&fmt=text"
+                    url = f"{endpoints.IEM_AFOS}?pil=SEL{sel_digit}&limit=1&fmt=text"
                 text = _fetch(url)
             elif kind == "warning":
                 if not identifier:
@@ -4721,7 +4716,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                     if year and wfo and phenom and sig and etn_raw:
                         etn_int = int(etn_raw.lstrip("0") or "0")
                         api_url = (
-                            "https://mesonet.agron.iastate.edu/json/vtec_event.py"
+                            f"{endpoints.IEM_VTEC_EVENT}"
                             f"?wfo={wfo}&year={year}&phenomena={phenom}"
                             f"&significance={sig}&etn={etn_int}"
                         )

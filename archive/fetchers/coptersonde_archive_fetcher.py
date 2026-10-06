@@ -56,10 +56,11 @@ from urllib.request import Request, urlopen
 from core.sounding import Sounding, SoundingSet
 from core import package_sources
 
+from archive import thredds_paths as paths
 log = logging.getLogger(__name__)
 
-_CATALOG_ROOT = "https://data.nssl.noaa.gov/thredds/catalog/FRDD/CLAMPS/campaigns/PERiLS"
-_FILESERVER_ROOT = "https://data.nssl.noaa.gov/thredds/fileServer/FRDD/CLAMPS/campaigns/PERiLS"
+_CATALOG_ROOT = f"{paths.catalog_root()}/{paths.PERILS}"
+_FILESERVER_ROOT = paths.file_url(paths.PERILS)
 _USER_AGENT = "Mozilla/5.0 STORM/1.0"
 _REQUEST_TIMEOUT = 30
 _RETRY_BACKOFF_S = (2.0, 5.0)
@@ -68,10 +69,7 @@ _FILL_MAGNITUDE_MAX = 1.0e6  # comfortably below the ~9.97e36 sentinel, well abo
 # Discovered by browsing the THREDDS catalog directly, 2026-09-08 -- see
 # planning/source-and-pilot-register.md "6". IOP3 is absent from 2022
 # (not a gap in this list -- it wasn't flown/published).
-KNOWN_PERILS_IOPS: tuple[tuple[str, str], ...] = (
-    ("2022", "IOP1"), ("2022", "IOP2"), ("2022", "IOP4"),
-    ("2023", "IOP1"), ("2023", "IOP2"), ("2023", "IOP3"), ("2023", "IOP4"), ("2023", "IOP5"),
-)
+KNOWN_PERILS_IOPS: tuple[tuple[str, str], ...] = paths.PERILS_IOPS
 
 _FILENAME_RE = re.compile(r"^(?P<site>.+)\.c1\.(?P<date>\d{8})\.(?P<time>\d{6})\.cdf$")
 
@@ -107,7 +105,7 @@ def _list_catalog_filenames(year: str, iop: str) -> list[str]:
     """Return every ascent filename listed for one IOP's THREDDS catalog
     page. An empty list means no data for that IOP or a fetch failure --
     normal, not an error."""
-    url = f"{_CATALOG_ROOT}/{year}/CopterSonde/v1/{iop}/catalog.html"
+    url = paths.catalog_url(paths.coptersonde_iop(year, iop))
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     try:
         html = package_sources.read_url("coptersonde", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT).decode("utf-8", errors="replace")
@@ -115,7 +113,7 @@ def _list_catalog_filenames(year: str, iop: str) -> list[str]:
         log.debug("CopterSonde catalog listing failed for %s/%s: %s", year, iop, exc)
         return []
 
-    prefix = re.escape(f"FRDD/CLAMPS/campaigns/PERiLS/{year}/CopterSonde/v1/{iop}/")
+    prefix = re.escape(f"{paths.coptersonde_iop(year, iop)}/")
     pattern = re.compile(rf'dataset={prefix}([^"/]+\.cdf)"')
     return pattern.findall(html)
 
@@ -198,7 +196,7 @@ def fetch_coptersonde_soundings(archive_date: datetime) -> "dict[str, SoundingSe
                 continue
             site_id = m.group("site")
 
-            url = f"{_FILESERVER_ROOT}/{year}/CopterSonde/v1/{iop}/{filename}"
+            url = paths.file_url(f"{paths.coptersonde_iop(year, iop)}/{filename}")
             request = Request(url, headers={"User-Agent": _USER_AGENT})
             try:
                 data = package_sources.read_url("coptersonde", request, _urlopen_with_retry, timeout=_REQUEST_TIMEOUT)

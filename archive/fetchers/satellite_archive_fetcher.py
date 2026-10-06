@@ -16,10 +16,9 @@ import requests
 from PyQt6.QtCore import QObject, pyqtSignal
 from core import package_sources
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
-_S3_URL_TEMPLATE = "https://{bucket}.s3.amazonaws.com"
-_GOES19_EAST_START = datetime(2025, 4, 4, 15, 0, tzinfo=timezone.utc)
 _TIME_RE = re.compile(r"_s(?P<year>\d{4})(?P<jday>\d{3})(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})")
 
 _MODE_CONFIG = {
@@ -177,7 +176,7 @@ class ArchiveSatelliteFetcher(QObject):
 
     def _list_day_refs(self, mode: str, product: str) -> list[_FrameRef]:
         refs: list[_FrameRef] = []
-        base_url = _S3_URL_TEMPLATE.format(bucket=self._bucket)
+        base_url = endpoints.s3_bucket_url(self._bucket)
         sector_token = _MODE_CONFIG[mode].get("sector_token")
 
         # the session's UTC day plus the next morning up to its cap
@@ -256,7 +255,7 @@ class ArchiveSatelliteFetcher(QObject):
     def _fetch_frame(self, mode: str, ref: _FrameRef) -> None:
         cache_key = (mode, ref.timestamp)
         try:
-            url = f"{_S3_URL_TEMPLATE.format(bucket=self._bucket)}/{ref.key}"
+            url = f"{endpoints.s3_bucket_url(self._bucket)}/{ref.key}"
             resp = package_sources.requests_get("satellite", url, timeout=_REQUEST_TIMEOUT)
             resp.raise_for_status()
             png_bytes, bbox = _render_goes_png(resp.content, mode, _MODE_CONFIG[mode].get("fixed_bbox"))
@@ -293,7 +292,7 @@ class ArchiveSatelliteFetcher(QObject):
 
     def _read_bbox_for_key(self, mode: str, key: str) -> Optional[dict]:
         try:
-            url = f"{_S3_URL_TEMPLATE.format(bucket=self._bucket)}/{key}"
+            url = f"{endpoints.s3_bucket_url(self._bucket)}/{key}"
             resp = package_sources.requests_get("satellite", url, timeout=_REQUEST_TIMEOUT)
             resp.raise_for_status()
             _, bbox = _render_goes_png(resp.content, mode, _MODE_CONFIG[mode].get("fixed_bbox"), image_only=False)
@@ -310,7 +309,7 @@ def _ensure_utc(dt: datetime) -> datetime:
 
 
 def _bucket_for_date(dt: datetime) -> str:
-    return "noaa-goes19" if dt >= _GOES19_EAST_START else "noaa-goes16"
+    return endpoints.goes_east_bucket(dt)
 
 
 def _timestamp_from_key(key: str) -> Optional[datetime]:

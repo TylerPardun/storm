@@ -18,9 +18,11 @@ from core.scan_sector import ScanSector
 from network.vehicle_sync import _observation_from_payload
 from archive.vehicle_speed import VehicleSpeed, calculate_vehicle_speed
 
+from archive import thredds_paths as paths
+from data import endpoints
 log = logging.getLogger(__name__)
 
-_ANNOTATIONS_PATH = "annotations"
+_ANNOTATIONS_PATH = endpoints.NSSL_ANNOTATIONS
 _TOPICS = ("vehicles", "annotations", "cones", "drawings", "scan_sectors")
 
 # THREDDS mirror of the same storm.<topic>.<date> files as the API below --
@@ -36,7 +38,7 @@ _TOPICS = ("vehicles", "annotations", "cones", "drawings", "scan_sectors")
 # THREDDS's retention here is a rolling ~5 months, not permanent, so the
 # API is still tried as a fallback -- for older dates, and in case it
 # comes back for dates THREDDS doesn't have.
-_THREDDS_ANNOTATIONS_ROOT = "https://data.nssl.noaa.gov/thredds/fileServer/FOFS/Storm/annotations"
+_THREDDS_ANNOTATIONS_ROOT = paths.file_url(paths.FOFS_ANNOTATIONS)
 
 
 def _fetch_text(url: str, *, api_key: bool = False) -> Optional[str]:

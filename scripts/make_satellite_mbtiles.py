@@ -12,7 +12,12 @@ import os
 import sqlite3
 import time
 import urllib.request
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data import endpoints  # noqa: E402
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 WEST     = -116.0
@@ -29,10 +34,7 @@ RETRIES  = 3
 TIMEOUT  = 20     # seconds per request
 
 # ArcGIS REST tile URL — note {z}/{y}/{x} order (row before column)
-TILE_URL = (
-    "https://basemap.nationalmap.gov/arcgis/rest/services"
-    "/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}"
-)
+TILE_URL = endpoints.NATIONALMAP_SERVICES + "/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}"
 HEADERS = {"User-Agent": "Mozilla/5.0 STORM/1.0"}
 # ──────────────────────────────────────────────────────────────────────────────
 

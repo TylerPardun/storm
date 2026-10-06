@@ -32,12 +32,13 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+from archive import thredds_paths as paths
 log = logging.getLogger(__name__)
 
-_CATALOG_BASE = "https://data.nssl.noaa.gov/thredds/catalog"
-_FILE_BASE = "https://data.nssl.noaa.gov/thredds/fileServer"
-ROOT = "FOFS/Mobile-Mesonet"
-_NS = "{http://www.unidata.ucar.edu/namespaces/thredds/InvCatalog/v1.0}"
+_CATALOG_BASE = paths.catalog_root()
+_FILE_BASE = paths.file_root()
+ROOT = paths.FOFS_MESONET
+_NS = "{" + paths.THREDDS_NS + "}"
 _DATE_IN_NAME = re.compile(r"(?<!\d)((?:19|20)\d{6})(?!\d)")
 # Folder names that group files rather than name a vehicle.
 _CONTAINERS = {"raw", "processed", "data", "_legacy_data", "legacy", "csv", "txt", "qc", "files",

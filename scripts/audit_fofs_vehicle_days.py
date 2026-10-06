@@ -67,6 +67,7 @@ _STORM_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_STORM_ROOT))
 
 from archive.fetchers import vehicle_obs_archive_fetcher as vof  # noqa: E402
+from archive import thredds_paths as paths  # noqa: E402
 from core.observation import Observation  # noqa: E402
 
 _REQUEST_PACING_S = 0.3
@@ -182,7 +183,7 @@ class ThreddsCache:
 
     def urlopen(self, request, *, timeout):
         url = request.full_url
-        if "/fileServer/FOFS/Mobile-Mesonet/" not in url or not url.endswith(".txt"):
+        if f"/fileServer/{paths.FOFS_MESONET}/" not in url or not url.endswith(".txt"):
             return self._network(request, timeout=timeout)
         self.index  # noqa: B018 - builds the URL map
         entry = self._by_url.get(url)
@@ -190,7 +191,7 @@ class ThreddsCache:
             raise HTTPError(url, 404, "Not in the THREDDS catalog", {}, None)
         stamp = "".join(ch for ch in entry.modified if ch.isalnum())
         name = entry.path.rsplit("/", 1)[-1][:-4]
-        if entry.path == f"FOFS/Mobile-Mesonet/data/{entry.vehicle}/raw/{name}.txt":
+        if entry.path == f"{paths.FOFS_MESONET_DATA}/{entry.vehicle}/raw/{name}.txt":
             folder = self._dir / entry.vehicle              # the original cache layout
         else:
             folder = self._dir / "_other" / entry.path.rsplit("/", 1)[0]

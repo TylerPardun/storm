@@ -11,12 +11,13 @@ from urllib.error import HTTPError, URLError
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
-IEM_WMS       = "https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi"
+IEM_WMS       = endpoints.IEM_GOES_EAST_WMS
 IEM_CAPS_URL  = IEM_WMS + "?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetCapabilities"
 
-NOWCOAST_WMS      = "https://nowcoast.noaa.gov/geoserver/satellite/wms"
+NOWCOAST_WMS      = endpoints.NOWCOAST_SATELLITE_WMS
 NOWCOAST_CAPS_URL = NOWCOAST_WMS + "?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities"
 
 CAPS_POLL_MS = 5 * 60 * 1000   # 5 min — matches CONUS scan cadence

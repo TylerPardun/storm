@@ -18,17 +18,18 @@ from data.fetchers.hazard_fetcher import (
     _nws_color_for_phenom,
 )
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
-_IEM_SBW_URL   = "https://mesonet.agron.iastate.edu/geojson/sbw.geojson"
+_IEM_SBW_URL   = endpoints.IEM_STORM_BASED_WARNINGS
 # these endpoints require a 12-digit YYYYMMDDHHmm timestamp via ?ts=
-_IEM_WATCH_URL = "https://mesonet.agron.iastate.edu/json/spcwatch.py"
+_IEM_WATCH_URL = endpoints.IEM_SPC_WATCHES
 # iem GIS shapefile endpoint for MCDs — returns a zip with .shp/.dbf/.prj
-_IEM_MCD_GIS_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/gis/spc_mcd.py"
+_IEM_MCD_GIS_URL = endpoints.IEM_SPC_MD_GIS
 
 # spc direct archive — same GeoJSON schema as the live endpoint (LABEL, DN, etc.).
-_SPC_OUTLOOK_ARCHIVE = "https://www.spc.noaa.gov/products/outlook/archive"
-_SPC_EXTENDED_OUTLOOK_ARCHIVE = "https://www.spc.noaa.gov/products/exper/day4-8/archive"
+_SPC_OUTLOOK_ARCHIVE = endpoints.SPC_OUTLOOK_ARCHIVE
+_SPC_EXTENDED_OUTLOOK_ARCHIVE = endpoints.SPC_EXTENDED_OUTLOOK_ARCHIVE
 
 # SPC only started publishing day1/2 outlooks as .lyr.geojson on 2020-01-01;
 # before that the archive only has the shapefile zip (day{N}otlk_..._-shp.zip,

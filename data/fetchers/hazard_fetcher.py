@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SECONDS = 20
@@ -21,7 +22,7 @@ POLL_INTERVAL_ACTIVE  = 120   # watches / MDs / NWS warnings — change througho
 POLL_INTERVAL_OUTLOOK = 900   # SPC categorical + probability — updates on a fixed schedule
 SPC_CACHE_TTL         = 900   # in-memory cache TTL (aligned with outlook poll interval)
 
-_SPC_WX_BASE = "https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/SPC_wx_outlks/MapServer"
+_SPC_WX_BASE = endpoints.NWS_SPC_OUTLOOK_LAYERS
 _SPC_QUERY_SUFFIX = "where=1%3D1&outFields=*&returnGeometry=true&f=geojson&outSR=4326"
 SPC_URLS = {
     "cat":  f"{_SPC_WX_BASE}/1/query?{_SPC_QUERY_SUFFIX}",
@@ -63,15 +64,13 @@ def _empty_spc_payload() -> tuple[str, str, str, str, str, str]:
     )
 
 SPC_MD_URL = (
-    "https://mapservices.weather.noaa.gov/vector/rest/services/outlooks"
-    "/spc_mesoscale_discussion/MapServer/0/query"
+    f"{endpoints.NWS_SPC_MD_LAYERS}/0/query"
     "?where=1%3D1&outFields=*&returnGeometry=true&f=geojson&outSR=4326"
 )
 
 # wwa MapServer — active NWS warnings (sig='W').  Layer 0 serves storm-based polygon geometry
 WWA_WARNINGS_URL = (
-    "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA"
-    "/watch_warn_adv/MapServer/0/query"
+    f"{endpoints.NWS_WWA_LAYERS}/0/query"
     "?where=sig%3D%27W%27"
     "&outFields=prod_type,phenom,event,wfo,onset,ends,expiration,url"
     "&returnGeometry=true&f=geojson&outSR=4326"
@@ -79,8 +78,7 @@ WWA_WARNINGS_URL = (
 
 # wwa MapServer — county-level polygons for active SPC watches (TO=tornado, SV=severe tstorm).
 WWA_WATCHES_URL = (
-    "https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA"
-    "/watch_warn_adv/MapServer/1/query"
+    f"{endpoints.NWS_WWA_LAYERS}/1/query"
     "?where=sig%3D%27A%27%20AND%20(phenom%3D%27TO%27%20OR%20phenom%3D%27SV%27)"
     "&outFields=prod_type,phenom,event,wfo,onset,ends,expiration,url"
     "&returnGeometry=true&f=geojson&outSR=4326"

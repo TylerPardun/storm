@@ -10,11 +10,12 @@ from urllib.error import HTTPError, URLError
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from archive import thredds_paths as paths
 log = logging.getLogger(__name__)
 
 # unidata THREDDS Level 3 catalog — public, no token required
-THREDDS_CATALOG_ROOT    = "https://thredds.ucar.edu/thredds/catalog/nexrad/level3"
-THREDDS_FILESERVER_ROOT = "https://thredds.ucar.edu/thredds/fileServer"
+THREDDS_CATALOG_ROOT    = f"{paths.catalog_root(paths.UCAR)}/{paths.UCAR_NEXRAD_LEVEL3}"
+THREDDS_FILESERVER_ROOT = paths.file_root(paths.UCAR)
 REQUEST_TIMEOUT_SECONDS = 20
 
 # poll every 2 minutes — Level 3 scans update on a 5-6 minute cycle
@@ -305,7 +306,7 @@ def _thredds_site_token(site: str) -> str:
 
 def _extract_day_catalog_urls(root: ET.Element, base_url: str) -> list[str]:
     ns = {
-        "cat":   "http://www.unidata.ucar.edu/namespaces/thredds/InvCatalog/v1.0",
+        "cat":   paths.THREDDS_NS,
         "xlink": "http://www.w3.org/1999/xlink",
     }
     out: list[str] = []
@@ -319,7 +320,7 @@ def _extract_day_catalog_urls(root: ET.Element, base_url: str) -> list[str]:
 
 
 def _extract_dataset_entries(root: ET.Element) -> list[tuple[str, str]]:
-    ns = {"cat": "http://www.unidata.ucar.edu/namespaces/thredds/InvCatalog/v1.0"}
+    ns = {"cat": paths.THREDDS_NS}
     datasets: list[tuple[str, str]] = []
     for ds in root.findall(".//cat:dataset", ns):
         url_path = ds.attrib.get("urlPath", "")

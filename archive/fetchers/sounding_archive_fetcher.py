@@ -16,10 +16,11 @@ from data.fetchers.obs_sounding_fetcher import (
     _parse_profile,
 )
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
-_OPEN_METEO_ARCHIVE_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
-_IEM_RAOB_URL     = "https://mesonet.agron.iastate.edu/json/raob.py"
+_OPEN_METEO_ARCHIVE_URL = endpoints.OPEN_METEO_HISTORICAL
+_IEM_RAOB_URL     = endpoints.IEM_RAOB
 _ARCHIVE_MODEL = "ncep_hrrr_conus"
 _REQUEST_TIMEOUT = 30
 _LEVEL_VARS = (

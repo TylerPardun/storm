@@ -13,10 +13,11 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.sounding import Sounding, SoundingSet, PRESSURE_LEVELS, SOUNDING_SLOTS
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
-_BASE_URL          = "https://api.open-meteo.com/v1/forecast"
-_ARCHIVE_URL       = "https://historical-forecast-api.open-meteo.com/v1/forecast"
+_BASE_URL          = endpoints.OPEN_METEO_FORECAST
+_ARCHIVE_URL       = endpoints.OPEN_METEO_HISTORICAL
 _MODEL             = "ncep_hrrr_conus"
 _REQUEST_TIMEOUT   = 20   # seconds
 

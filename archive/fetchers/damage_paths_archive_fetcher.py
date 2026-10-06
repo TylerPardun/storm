@@ -34,13 +34,11 @@ from PyQt6.QtCore import QObject, pyqtSignal
 import config
 from core import package_sources
 
+from data import endpoints
 log = logging.getLogger(__name__)
 
-DAT_DAMAGE_LINES_URL = (
-    "https://services.dat.noaa.gov/arcgis/rest/services/"
-    "nws_damageassessmenttoolkit/DamageViewer/FeatureServer/1"
-)
-NCEI_EVENT_CSV_BASE_URL = "https://www.ncei.noaa.gov/pub/data/swdi/stormevents/csvfiles"
+DAT_DAMAGE_LINES_URL = endpoints.DAT_DAMAGE_LINES
+NCEI_EVENT_CSV_BASE_URL = endpoints.NCEI_STORM_EVENTS_CSV
 
 # +/- one day around the session date: survey times are approximate, and
 # this also spans the whole archive session, which runs into the next UTC

@@ -14,6 +14,7 @@ import numpy as np
 
 from archive.positions import PositionTrack
 from archive.fetchers.noxp_archive_fetcher import download_asset
+from archive import thredds_paths as paths
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,7 @@ class RawLidarSource:
 
     @property
     def path(self):
-        return f'FRDD/CLAMPS/{self.platform_dir}/ingested/{self.datastream}'
+        return paths.clamps_ingested(self.platform_dir, self.datastream)
 
     @property
     def stream(self) -> str:
@@ -43,15 +44,11 @@ class RawLidarSource:
 # 2026-09-25): DL2 files exist only 2022-05-13..06-16. On those days both
 # streams can have a file for the same scan mode, and they differ, so both
 # are kept and offered, labeled by stream -- nothing is deduplicated.
-PRODUCTS = ('csm', 'ppi')     # the PPI-type scan files; nothing else is read
+PRODUCTS = paths.RAW_LIDAR_PRODUCTS     # the PPI-type scan files; nothing else is read
 KNOWN_RAW_LIDAR_SOURCES = tuple(
-    RawLidarSource(f'{platform}-{product.upper()}', instrument, directory, f'{prefix}dl{product}{unit}.b1', product, mobile)
-    for platform, instrument, directory, prefix, unit, mobile in (
-        ('DLTRUCK1-DL1', 'DLTRUCK1', 'dltruck/dltruck1', 'dltruck', 'DL1', True),
-        ('DLTRUCK1-DL2', 'DLTRUCK1', 'dltruck/dltruck1', 'dltruck', 'DL2', True),
-        ('CLAMPS1', 'CLAMPS1', 'clamps/clamps1', 'clamps', 'C1', False),
-        ('CLAMPS2', 'CLAMPS2', 'clamps/clamps2', 'clamps', 'C2', False),
-    )
+    RawLidarSource(f'{platform}-{product.upper()}', instrument, directory,
+                   paths.raw_lidar_stream(prefix, product, unit), product, mobile)
+    for platform, instrument, directory, prefix, unit, mobile in paths.RAW_LIDAR_PLATFORMS
     for product in PRODUCTS
 )
 
@@ -64,7 +61,7 @@ class LidarAsset:
 
     @property
     def url(self):
-        return f'https://data.nssl.noaa.gov/thredds/fileServer/{self.source.path}/{self.filename}'
+        return paths.file_url(f'{self.source.path}/{self.filename}')
 
 
 def discover_raw_lidar(source: RawLidarSource, day: date, *, cancel=None, fetch_catalog=None):

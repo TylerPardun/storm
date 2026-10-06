@@ -57,10 +57,11 @@ from urllib.request import Request, urlopen
 from core.observation import Observation
 from core import package_sources
 
+from archive import thredds_paths as paths
 log = logging.getLogger(__name__)
 
-_CATALOG_ROOT = "https://data.nssl.noaa.gov/thredds/catalog/FRDD/CLAMPS"
-_FRDD_ROOT = "https://data.nssl.noaa.gov/thredds/fileServer/FRDD/CLAMPS"
+_CATALOG_ROOT = f"{paths.catalog_root()}/{paths.CLAMPS}"
+_FRDD_ROOT = paths.file_url(paths.CLAMPS)
 _USER_AGENT = "Mozilla/5.0 STORM/1.0"
 _REQUEST_TIMEOUT = 60
 _RETRY_BACKOFF_S = (2.0, 5.0)
@@ -81,11 +82,8 @@ class ClampsSurfaceSource:
 # see module docstring. Order within each platform is preference order --
 # fetch_clamps_surface_observations tries them in order and uses the
 # first with data for the requested date.
-KNOWN_CLAMPS_SURFACE_SOURCES: tuple[ClampsSurfaceSource, ...] = (
-    ClampsSurfaceSource("CLAMPS2", "clamps/clamps2", "clampsmetC2.a1", "met_tower", False),
-    ClampsSurfaceSource("CLAMPS1", "clamps/clamps1", "clampsmwrC1.a1", "mwr", True),
-    ClampsSurfaceSource("CLAMPS2", "clamps/clamps2", "clampsmwrC2.a1", "mwr", True),
-)
+KNOWN_CLAMPS_SURFACE_SOURCES: tuple[ClampsSurfaceSource, ...] = tuple(
+    ClampsSurfaceSource(*row) for row in paths.CLAMPS_SURFACE_STREAMS)
 # Files are found through the catalog, never by guessing names: a file's
 # time suffix is when that day's recording started, and 658 of CLAMPS1's
 # 1,256 MWR days (checked 2026-09-25) have no .000000 file. The MWR streams
@@ -132,7 +130,7 @@ def _list_catalog_filenames(platform_dir: str, datastream: str) -> list[str]:
         log.debug("CLAMPS surface catalog listing failed for %s/%s: %s", platform_dir, datastream, exc)
         return []
 
-    prefix = re.escape(f"FRDD/CLAMPS/{platform_dir}/ingested/{datastream}/{datastream}.")
+    prefix = re.escape(f"{paths.clamps_ingested(platform_dir, datastream)}/{datastream}.")
     pattern = re.compile(rf'dataset={prefix}([0-9.]+\.(?:nc|cdf))"')
     return [f"{datastream}.{m}" for m in pattern.findall(html)]
 
@@ -147,7 +145,7 @@ def _find_files(source: ClampsSurfaceSource, date_str: str) -> list[str]:
         if filenames:                      # an empty answer may be a failed fetch; ask again next time
             _LISTING_CACHE[key] = filenames
     prefix = f"{source.datastream}.{date_str}."
-    return [f"{_FRDD_ROOT}/{source.platform_dir}/ingested/{source.datastream}/{name}"
+    return [paths.file_url(f"{paths.clamps_ingested(source.platform_dir, source.datastream)}/{name}")
             for name in sorted(f for f in filenames if f.startswith(prefix))]
 
 

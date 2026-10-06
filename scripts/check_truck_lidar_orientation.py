@@ -27,6 +27,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from data import endpoints  # noqa: E402
 
 MIN_INTENSITY = 1.01          # SNR + 1; ~ -20 dB, a common Halo lidar threshold
 HEIGHT_BAND_M = (150.0, 450.0)
@@ -60,7 +61,7 @@ def direction_from(u, v):
 def hrrr_80m(lat, lon, when, cache):
     key = (round(lat, 2), round(lon, 2), when.strftime("%Y-%m-%d"))
     if key not in cache:
-        url = ("https://historical-forecast-api.open-meteo.com/v1/forecast"
+        url = (endpoints.OPEN_METEO_HISTORICAL +
                f"?latitude={lat:.4f}&longitude={lon:.4f}&start_date={key[2]}&end_date={key[2]}"
                "&hourly=wind_speed_80m,wind_direction_80m&models=ncep_hrrr_conus"
                "&wind_speed_unit=ms&timezone=UTC")

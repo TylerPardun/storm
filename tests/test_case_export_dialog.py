@@ -64,3 +64,16 @@ def test_files_not_loaded_yet_can_be_added():
     assert d._details["radar"].text().startswith("2 files") and "Raw lidar scans" in d._boxes["raw lidar"].text()
     d._listed_box.setChecked(False)
     assert not d.include_listed() and d._details["radar"].text().startswith("1 file")
+
+
+def test_a_long_session_opens_quickly(monkeypatch):
+    """Thousands of listed scans: the time frame is worked out once per
+    update, not once per file (it once took five minutes to open)."""
+    import ui.dialogs.case_export_dialog as ced
+    calls = []
+    real = ced.in_time_frame
+    monkeypatch.setattr(ced, "in_time_frame", lambda s, f: (calls.append(1), real(s, f))[1])
+    listed = [{"kind": "radar", "url": f"{B}KFDR20240427_{h:02d}{m:02d}00_V06", "bytes": 1, "listed": True}
+              for h in range(12, 24) for m in range(0, 60, 2)]
+    CaseExportDialog(SOURCES, tracks=0, session=SESSION, default_frame=SESSION, listed=listed)
+    assert len(calls) <= 6

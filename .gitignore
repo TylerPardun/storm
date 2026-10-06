@@ -57,3 +57,6 @@ data/storm_tracks/*
 # case packages users export (data/case_packages/<session date>/*.zip)
 data/case_packages/
 *.log.[0-9]*
+
+# Video Studio projects and exports (data/studio/<session date>/)
+data/studio/

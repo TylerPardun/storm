@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import functools
 import re
 import subprocess
 import zipfile
@@ -60,6 +61,7 @@ _STAMP = re.compile(r"(?<!\d)(\d{8})[._-]?(\d{4})(\d{2})?(?!\d)")       # 202404
 _GOES_STAMP = re.compile(r"_s(\d{4})(\d{3})(\d{2})(\d{2})(\d{2})")     # _s20241182031171 (year, day of year)
 
 
+@functools.lru_cache(maxsize=65536)
 def file_start(url: str) -> datetime | None:
     """The start time in a data file's name, or None if it has none."""
     name = PurePosixPath(url.split("?", 1)[0]).name
@@ -77,6 +79,7 @@ def file_start(url: str) -> datetime | None:
     return None
 
 
+@functools.lru_cache(maxsize=65536)
 def _stream(url: str) -> str:
     """A file's series: its URL with the time stamps blanked out."""
     base, _, name = url.split("?", 1)[0].rpartition("/")

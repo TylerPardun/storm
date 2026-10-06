@@ -696,6 +696,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._archive_superres_timer.timeout.connect(self._on_archive_superres_timer_fired)
         self._archive_superres_ready.connect(self._on_archive_superres_ready)
         self._archive_superres_pending = None
+        self._radar_settled_scan = None      # the scan whose full-resolution image is on the map
 
         # wire time controller to archive fetchers.
         self._time_ctrl.time_changed.connect(self._archive_mqtt.on_time_changed)
@@ -1142,6 +1143,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 pass
 
             self._archive_radar.shutdown()
+            self._archive_radar.deleteLater()            # a child of the window: freed only when deleted
+            self._archive_radar = None
+            self._current_radar_scan = None               # the old station's volume goes with it
 
         self._radar_overlay.clear()
         self._archive_controls.set_rendered_radar(None)
@@ -1293,6 +1297,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if cached is not None:
             png, bounds = cached
             self._radar_overlay.inject(png, bounds)
+            self._radar_settled_scan = scan
             return
 
         self._archive_superres_executor.submit(
@@ -1330,6 +1335,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         self._archive_superres_cache.put(result["key"], result["png"], result["bounds"])
         self._radar_overlay.inject(result["png"], result["bounds"])
+        self._radar_settled_scan = result["scan"]
 
     def _on_archive_satellite_frame(self, frame) -> None:
         """Update the archive satellite frame; only show if the user has toggled it on."""
@@ -2336,6 +2342,84 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         else:
             self.trail_controls.set_status(f"No {QUANTITIES[quantity].label.lower()} in the last {minutes} min")
 
+    # ---- Video Studio: is the map finished drawing the clock's moment? ------
+    def studio_frame_pending(self) -> str | None:
+        """What the map is still drawing for the archive clock's current time
+        (None when everything is in), so a movie frame is only captured once
+        complete: the radar's full-resolution image of the scan for this time,
+        the chosen lidar's sweep, the observation trails, satellite frames."""
+        t = self._time_ctrl.current_time
+        radar = getattr(self, "_archive_radar", None)
+        # (the radar panel's "show data" box is a live-mode switch, hidden and
+        # unchecked in archive mode, where the radar always loads)
+        if radar is not None and not self._noxp_active:
+            if getattr(radar, "index_loading", False):
+                return "radar index"                      # e.g. the station was just (re)chosen
+            if getattr(self, "_package_radar_view", None):
+                return "radar product"                    # a station switch, product/tilt still to apply
+            wanted = radar._nearest_scan_before(t)
+            scan = self._current_radar_scan
+            if wanted is not None:
+                if scan is None or scan.scan_time != wanted:
+                    return "radar scan"
+                if not self._scan_matches_radar(scan, radar):
+                    return "radar product"
+                if self._archive_render_in_flight or self._archive_pending_render_scan is not None:
+                    return "radar image"
+                if self._radar_settled_scan is not scan:
+                    return "radar full resolution"
+        if getattr(self, "_lidar_overlay_render_in_flight", False) or getattr(self, "_lidar_overlay_pending", False):
+            return "lidar sweep"
+        if self._lidar_scans and hasattr(self, "raw_lidar_controls") and self.raw_lidar_controls.data_is_on():
+            from core.lidar_scans import scan_at
+            sweep = scan_at(self._lidar_scans, t)
+            if self._lidar_overlay_key != (id(sweep) if sweep is not None else None,
+                                           self._lidar_overlay_field or "velocity"):
+                return "lidar sweep"
+        if hasattr(self, "_trails_timer") and self._trails_timer.isActive():
+            return "trails"
+        sat = getattr(self, "_archive_satellite", None)
+        if sat is not None and getattr(sat, "_pending", None):
+            return "satellite"
+        return None
+
+    @staticmethod
+    def _scan_matches_radar(scan, radar) -> bool:
+        """The scan on screen is the station and product the radar was last
+        asked for. (Its tilt index counts within the product's own tilts, so
+        it isn't compared here; a new tilt arrives as a new scan anyway.)"""
+        return (getattr(scan, "site", radar.station) == radar.station
+                and getattr(scan, "pyart_field", radar._product) == radar._product)
+
+    # ---- Video Studio: the radar a keyframe shows ------------------------------
+    def studio_radar_state(self) -> dict | None:
+        """The radar on screen: station (or NOXP), product and tilt."""
+        if self._noxp_active:
+            station = NOXP_SITE_ID
+        elif getattr(self, "_archive_radar", None) is not None:
+            station = self._archive_radar.station
+        else:
+            return None
+        return {"station": station, "product": self.radar_controls.current_product(),
+                "tilt": self.radar_controls.current_tilt_index()}
+
+    def studio_apply_radar(self, state: dict | None) -> None:
+        """Show the radar a keyframe recorded, if it isn't already showing."""
+        if not state or self.studio_radar_state() == state:
+            return
+        station, product, tilt = state.get("station"), state.get("product"), state.get("tilt")
+        current = self.studio_radar_state() or {}
+        if station and station != current.get("station"):
+            # the product and tilt are applied when the new station's first scan arrives
+            self._package_radar_view = {"product": product, "tilt_index": tilt}
+            self._on_radar_station_clicked(station)
+            return
+        if product and product != current.get("product"):
+            self.radar_controls.set_current_product(product)
+        if tilt is not None and tilt != self.radar_controls.current_tilt_index() \
+                and 0 <= tilt < self.radar_controls._tilt_combo.count():
+            self.radar_controls._tilt_combo.setCurrentIndex(tilt)
+
     # ---- menu bar -----------------------------------------------------------
     def _init_menu_bar(self) -> None:
         """File: cases, screenshot, ending the session. Edit: undo/redo (track
@@ -2363,6 +2447,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         ]
         file_menu.addSeparator()
         action(file_menu, "Save Map Screenshot…", self._menu_screenshot, "Ctrl+Shift+S")
+        self._studio_action = action(file_menu, "Video Studio", self._toggle_studio, "Ctrl+Shift+V")
+        self._studio_action.setCheckable(True)
+        self._menu_archive_actions.append(self._studio_action)
         file_menu.addSeparator()
         self._menu_archive_actions.append(
             action(file_menu, "Exit Session and Change Day…", self._menu_exit_session))
@@ -2389,14 +2476,103 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _menu_undo(self, *, redo: bool) -> None:
         # a text field being typed in keeps its own undo
         focus = QApplication.focusWidget()
+        studio = getattr(self, "_studio", None)
         if focus is not None and hasattr(focus, "undo") and hasattr(focus, "redo"):
             focus.redo() if redo else focus.undo()
+        elif studio is not None and studio.isVisible():
+            studio.redo() if redo else studio.undo()
         elif hasattr(self, "_track_points"):
             self._redo_track_edit() if redo else self._undo_track_edit()
 
     def _menu_screenshot(self) -> None:
         if hasattr(self, "btn_screenshot"):
             self._on_screenshot_clicked()
+
+    # ---- Video Studio (ui/studio/) ---------------------------------------------
+    def _studio_open(self) -> bool:
+        studio = getattr(self, "_studio", None)
+        return studio is not None and studio.isVisible()
+
+    def _toggle_studio(self) -> None:
+        self._close_studio() if self._studio_open() else self._open_studio()
+
+    def _open_studio(self) -> None:
+        """The studio takes the archive bar's place, and its keys (Space,
+        arrows, Home / End, Delete, , .) while open."""
+        if not hasattr(self, "_archive_controls"):
+            return
+        if getattr(self, "_studio", None) is None:
+            from ui.studio.panel import StudioPanel
+            self._studio = StudioPanel(self, self._map_container)
+            self._studio.closed.connect(self._close_studio)
+            self._studio.export_requested.connect(self._export_studio)
+        self._archive_controls.set_shortcuts_enabled(False)
+        for shortcut in getattr(self, "_track_delete_shortcuts", ()):
+            shortcut.setEnabled(False)
+        if hasattr(self, "_track_marker_point_shortcut"):
+            self._track_marker_point_shortcut.setEnabled(False)
+        self._archive_controls.hide()
+        self._studio.show()
+        self._studio_action.setChecked(True)
+        self._layout_overlays()
+
+    def _close_studio(self) -> None:
+        studio = getattr(self, "_studio", None)
+        if studio is None:
+            return
+        studio.hide()
+        self._archive_controls.show()
+        self._archive_controls.set_shortcuts_enabled(True)
+        for shortcut in getattr(self, "_track_delete_shortcuts", ())[1:]:     # Delete, Backspace
+            shortcut.setEnabled(True)
+        if hasattr(self, "_track_delete_shortcuts"):
+            self._set_track_letter_keys(hasattr(self, "btn_track") and self.btn_track.isChecked())
+        self._studio_action.setChecked(False)
+        self._layout_overlays()
+
+    def _export_studio(self) -> None:
+        """Render the studio's movie frame by frame, with progress and Cancel."""
+        from ui.dialogs.task_progress_dialog import TaskProgressDialog
+        from ui.studio.exporter import StudioExporter
+        project = self._studio.project
+        folder = self._studio.folder()
+        folder.mkdir(parents=True, exist_ok=True)
+        ext = {"mp4": ".mp4", "gif": ".gif", "png": ""}[project.format]
+        if project.format == "png":
+            path = QFileDialog.getExistingDirectory(self, "Folder for the PNG frames", str(folder))
+            if not path:
+                return
+            path = Path(path) / project.name
+        else:
+            path, _ = QFileDialog.getSaveFileName(self, "Export Video", str(folder / f"{project.name}{ext}"),
+                                                  f"{project.format.upper()} (*{ext})")
+            if not path:
+                return
+            path = Path(path)
+        exporter = StudioExporter(self, project, path, self)
+        bar = TaskProgressDialog("Export Video", f"Rendering {path.name}", self)
+        bar.canceled.connect(exporter.cancel)
+        exporter.progress.connect(lambda done, total, detail: bar.set_progress(done, total, detail))
+
+        def finished(ok, message):
+            bar.finish()
+            self._studio_exporter = None
+            if ok:
+                self.status_msg_label.setText(f"Video saved: {message}")
+                if self._studio_open():
+                    self._studio.flash(f"Saved {message}", 10)
+                self._notify_saved(path, "Video saved", f"{message}\n\nFolder: {path.parent}")
+            elif message != "Export canceled":
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Export Video", message)
+            else:
+                self.status_msg_label.setText("Video export canceled")
+                if self._studio_open():
+                    self._studio.flash("Export canceled")
+        exporter.finished.connect(finished)
+        self._studio_exporter = exporter
+        bar.show()
+        exporter.start()
 
     def _menu_exit_session(self) -> None:
         if hasattr(self, "_archive_controls"):
@@ -2517,7 +2693,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             bar.set_progress(state["done"], state["total"], state["label"])
             QApplication.processEvents()
             threading.Event().wait(0.05)
-        bar.close()
+        bar.finish()
         if isinstance(state["error"], InterruptedError):
             self.status_msg_label.setText("Case export canceled")
             return
@@ -2532,8 +2708,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                      if manifest.get("data_changed_since_viewed") else "") + ".")
         self.status_msg_label.setText(f"Case package saved: {path.name}")
         self._notify_saved(path, "Case package saved",
-                           f"{detail}\n\nFolder: {path.parent}\n\nCase packages are kept in "
-                           f"{CASE_PACKAGES_ROOT}\norganized by session date.")
+                           f"{detail}\n\nFolder: {path.parent}")
 
     def _open_case_package(self) -> None:
         folder = CASE_PACKAGES_ROOT
@@ -2598,17 +2773,16 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         clock = datetime.fromisoformat(case["clock_time"].replace("Z", "+00:00"))
         self._later(1500 if at_start else 0, lambda: (self._time_ctrl.pause(), self._time_ctrl.set_time(clock)))
         from core import package_sources
-        from core.case_package import DATA_TYPES
         if not at_start and manifest.get("data"):
             package_sources.activate(path, manifest["data"])
-        packed = sorted({d["kind"] for d in manifest.get("data", [])})
-        fetched = sorted({s["kind"] for s in manifest.get("sources", []) if not s.get("included")})
-        made = manifest.get("storm", {})
-        summary = (f"Made with STORM {made.get('version', '?')}. {len(imported)} storm track(s) imported into "
-                   f"workspace '{self._track_workspace().name if hasattr(self, '_track_points') else '—'}'."
-                   + (f"\n\nLoaded from the package: {', '.join(DATA_TYPES.get(k, k) for k in packed)}." if packed else "")
-                   + (f"\n\nNot in the package, downloaded from the source: "
-                      f"{', '.join(DATA_TYPES.get(k, k) for k in fetched)}." if fetched else ""))
+        n = len(imported)
+        frame = manifest.get("time_frame")
+        summary = (f"{n} storm track{'s' if n != 1 else ''} imported into "
+                   f"'{self._track_workspace().name}'." if n and hasattr(self, "_track_points") else "")
+        if frame:
+            summary += (" " if summary else "") + (
+                f"Data packed for {frame['start'][11:16]}–{frame['end'][11:16]}Z; "
+                "other times download from the source when online.")
         self.status_msg_label.setText(f"Opened case package {path.name}")
         self._notify_saved(path, "Case package opened", summary)
 
@@ -2871,11 +3045,13 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             op.raise_()
 
         # archive bar — full width, pinned to the bottom; the map's own bottom
-        # controls (zoom, scale, legend) are lifted above it
+        # controls (zoom, scale, legend) are lifted above it. The Video Studio
+        # panel takes its place while open.
         arc_bar_h = 0
         archive_rect = None
         if hasattr(self, "_archive_controls"):
-            ac = self._archive_controls
+            studio = getattr(self, "_studio", None)
+            ac = studio if studio is not None and studio.isVisible() else self._archive_controls
             ac_w = r.width() - 2 * MARGIN
             ac.setFixedWidth(ac_w)
             ac.adjustSize()
@@ -7042,6 +7218,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _on_escape_pressed(self):
         if not getattr(self, "_active_drawing_type", ""):
+            if self._studio_open():
+                self._close_studio()
             return
         self._cancel_drawing()
         if hasattr(self, "annotation_tools"):
@@ -7797,6 +7975,43 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._deactivate_local_scan("Scan stopped: vehicle moved away from the collection point")
 
     def _on_screenshot_clicked(self) -> None:
+        """Archive mode: the map alone, captured once complete, with the
+        studio's captions (ui/studio/capture.py). Live mode: the window."""
+        if self._archive and hasattr(self, "_archive_controls"):
+            self._archive_screenshot()
+            return
+        self._window_screenshot()
+
+    def _archive_screenshot(self) -> None:
+        from core.studio import Overlays
+        from ui.studio.capture import MapCapture
+        studio = getattr(self, "_studio", None)
+        overlays = studio.project.overlays if studio is not None else Overlays()
+        capture = MapCapture(self, self)
+        t = self._time_ctrl.current_time
+        default = studio.folder() if studio is not None else Path.home() / "Pictures"
+
+        def got(image):
+            capture.end()
+            default.mkdir(parents=True, exist_ok=True)
+            path, _ = QFileDialog.getSaveFileName(self, "Save Map Screenshot",
+                                                  str(default / f"storm_{t:%Y%m%d_%H%M%S}Z.png"), "PNG Image (*.png)")
+            if not path:
+                return
+            path = path if path.lower().endswith(".png") else path + ".png"
+            if image.save(path, "PNG"):
+                self.status_msg_label.setText(f"Screenshot saved: {Path(path).name}")
+                if self._studio_open():
+                    self._studio.flash(f"Frame saved: {Path(path).name}")
+            else:
+                log.warning("Screenshot: failed to save to %s", path)
+        capture.frame_ready.connect(got)
+        self.status_msg_label.setText("Screenshot: waiting for the map to finish drawing…")
+        if self._studio_open():
+            studio.flash("Saving frame…", 30)
+        capture.begin(None, overlays, capture.capture_when_ready)
+
+    def _window_screenshot(self) -> None:
         """Hide the floating toolbar, capture the window, then prompt to save."""
         to_hide = [self.btn_screenshot]
         if hasattr(self, "_floating_toolbar"):

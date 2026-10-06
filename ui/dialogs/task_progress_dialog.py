@@ -15,6 +15,7 @@ class TaskProgressDialog(QDialog):
 
     def __init__(self, title: str, heading: str, parent=None):
         super().__init__(parent)
+        self._finished = False
         self.setWindowTitle(title)
         self.setModal(True)
         self.setFixedWidth(440)
@@ -65,10 +66,21 @@ class TaskProgressDialog(QDialog):
         width = max(60, self._detail.width())
         self._detail.setText(self._detail.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideMiddle, width))
 
+    def finish(self) -> None:
+        """The job is over (done, failed or canceled): close without canceling.
+        (close() would go through reject(), which means Cancel here.)"""
+        self._finished = True
+        super().reject()
+
     def _on_cancel(self) -> None:
+        if self._finished or not self._cancel.isEnabled():
+            return
         self._cancel.setEnabled(False)
         self._heading.setText("Canceling…")
         self.canceled.emit()
 
     def reject(self) -> None:          # Esc / the close button cancel too
-        self._on_cancel()
+        if self._finished:
+            super().reject()
+        else:
+            self._on_cancel()

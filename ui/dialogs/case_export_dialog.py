@@ -53,12 +53,8 @@ class CaseExportDialog(QDialog):
         v = QVBoxLayout(self)
         v.setContentsMargins(14, 12, 14, 12)
         v.setSpacing(8)
-        intro = QLabel("Choose what to include. The case settings and the list of every source file "
-                       "(with its checksum) are always included. Anything you leave out is downloaded "
-                       "from its source when the package is opened.")
-        intro.setWordWrap(True)
-        intro.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
-        v.addWidget(intro)
+        self.setToolTip("The case settings and the list of every source file (with its checksum) are always "
+                        "included.\nAnything left out is downloaded from its source when the package is opened.")
 
         # time frame (UTC)
         frame_title = QLabel("TIME FRAME (UTC)")
@@ -78,11 +74,8 @@ class CaseExportDialog(QDialog):
         frame_row.addStretch(1)
         frame_row.addWidget(whole)
         v.addLayout(frame_row)
-        frame_note = QLabel("Radar, lidar and satellite scans are kept for this span; "
-                            "daily files and everything else are packed whole.")
-        frame_note.setWordWrap(True)
-        frame_note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
-        v.addWidget(frame_note)
+        frame_title.setToolTip("Radar, lidar and satellite scans are kept for this span;\n"
+                               "daily files and everything else are packed whole.")
         self._listed_box = QCheckBox()
         self._listed_box.setChecked(True)
         self._listed_box.setToolTip("Files the session's catalogs list for this time frame but that weren't "
@@ -156,8 +149,9 @@ class CaseExportDialog(QDialog):
 
     def _update_counts(self, *_args) -> None:
         frame = self.time_frame()
-        listed = [e for e in self._listed if e["url"] in in_time_frame([*self._sources, *self._listed], frame)]
-        self._listed_box.setText(f"Also pack files listed for this span that weren't loaded yet "
+        listed_in_frame = in_time_frame([*self._sources, *self._listed], frame)      # once, not per file
+        listed = [e for e in self._listed if e["url"] in listed_in_frame]
+        self._listed_box.setText(f"Include scans not yet loaded "
                                  f"({len(listed)} file{'s' if len(listed) != 1 else ''} · "
                                  f"{_size(sum(e.get('bytes') or 0 for e in listed))})")
         sources = self._sources + (self._listed if self.include_listed() else [])

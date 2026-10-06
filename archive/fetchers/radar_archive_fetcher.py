@@ -132,6 +132,7 @@ class ArchiveRadarFetcher(QObject):
         self._decoded_cache: dict[tuple, Level2RadarScan] = {}
         # sorted list of all known scan times for the date.
         self._index: list[datetime] = []
+        self.index_loading = False          # True from load_index() until the listing is in (or failed)
         self._index_lock = threading.Lock()
 
         self._current_archive_time: Optional[datetime] = None
@@ -199,6 +200,13 @@ class ArchiveRadarFetcher(QObject):
                 return
             self._closed.set()
         self._fetch_executor.shutdown(wait=False, cancel_futures=True)
+        # Let go of the volumes now: a parsed volume is ~465 MB, and a station
+        # switch (the RADAR picker, or a movie changing radars) would otherwise
+        # keep the old station's alive alongside the new one's.
+        self._parsed_cache.clear()
+        self._decoded_cache.clear()
+        self._pending_decodes.clear()
+        self._pending_fetches.clear()
         # Running downloads may still own these files. Finish cleanup off the
         # GUI thread, after the executor releases them.
         def finish():
@@ -252,6 +260,7 @@ class ArchiveRadarFetcher(QObject):
         """Fetch the list of available scans from AWS (background thread)."""
         if self._closed.is_set():
             return
+        self.index_loading = True
         t = threading.Thread(target=self._fetch_index, daemon=True)
         t.start()
 
@@ -320,6 +329,8 @@ class ArchiveRadarFetcher(QObject):
         except Exception as exc:
             log.error("ArchiveRadarFetcher: index fetch failed: %s", exc)
             self._emit(self.error, f"Radar index failed for {self._station}: {exc}")
+        finally:
+            self.index_loading = False
 
     def _parse_s3_listing(self, xml_text: str) -> list:
         """Parse S3 XML listing and extract scan datetimes."""

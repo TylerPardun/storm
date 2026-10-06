@@ -207,6 +207,7 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         self.channel = QWebChannel()
         self.channel.registerObject("bridge", self.bridge)
         self.page().setWebChannel(self.channel)
+        self._map_page = self.page()
 
         self.bridge.map_clicked.connect(self.map_clicked)
         self.bridge.map_moved.connect(self.map_moved)
@@ -280,7 +281,7 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
             return
         self._map_ready = True
         for script in self._js_queue:
-            self.page().runJavaScript(_no_result(script))
+            self.map_page().runJavaScript(_no_result(script))
         self._js_queue.clear()
         self.map_ready.emit()
 
@@ -293,11 +294,17 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         self._js_queue.clear()
         self.map_ready.emit()
 
+    def map_page(self):
+        """The map's page -- also while the Video Studio has moved it into an
+        off-screen view to render at export size (ui/studio/capture.py), when
+        this view's own page() is a blank placeholder."""
+        return getattr(self, "_map_page", None) or self.page()
+
     def run_js(self, script: str):
         if SAFE_MAP_MODE:
             return
         if self._map_ready:
-            self.page().runJavaScript(_no_result(script))
+            self.map_page().runJavaScript(_no_result(script))
         else:
             self._js_queue.append(script)
 

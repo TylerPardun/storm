@@ -40,12 +40,23 @@
     }
     .maplibregl-ctrl-group button:last-child { border-bottom: none !important; }
     .maplibregl-ctrl-icon { filter: invert(0.7); }
+    /* A scale bracket (MapLibre sets its width to the distance shown):
+       the label centered inside, never wider than the box. */
     .maplibregl-ctrl-scale {
-      background: rgba(15,15,26,0.9) !important;
-      border: 1px solid #49536F !important;
-      color: #C1C9D8 !important;
+      background: rgba(15,15,26,0.82) !important;
+      border: 2px solid #C1C9D8 !important;
+      border-top: none !important;
+      border-radius: 0 0 2px 2px !important;
+      color: #E8EAF0 !important;
       font-size: 10px !important;
-      padding: 1px 4px !important;
+      font-weight: 600 !important;
+      line-height: 15px !important;
+      height: 17px !important;
+      padding: 0 4px !important;
+      box-sizing: border-box !important;
+      text-align: center !important;
+      white-space: nowrap !important;
+      min-width: max-content !important;
     }
 
     /* Scale bar: float it to the left of the legend along the same bottom baseline. */

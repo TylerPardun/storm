@@ -60,13 +60,14 @@ class _CoverageStrip(QWidget):
 
 
 class _HourAxis(QWidget):
-    """Hour labels under the time slider (12Z, 15Z, ...), aligned with the
-    slider's groove."""
+    """Hour ticks and labels under the time slider (a tick every hour; a
+    label every hour, or every 2 or 3 when the bar is narrow), aligned with
+    the slider's groove."""
 
     def __init__(self, controller, parent=None):
         super().__init__(parent)
         self._tc = controller
-        self.setFixedHeight(13)
+        self.setFixedHeight(17)
 
     def paintEvent(self, _event) -> None:
         from PyQt6.QtGui import QColor, QFont, QPainter
@@ -74,24 +75,28 @@ class _HourAxis(QWidget):
         total = (end - start).total_seconds()
         if total <= 0:
             return
-        hours = total / 3600
-        step = 1 if hours <= 8 else 3 if hours <= 30 else 6
         painter = QPainter(self)
         font = QFont(self.font())
         font.setPixelSize(10)
         painter.setFont(font)
-        painter.setPen(QColor("#5B6480"))
+        metrics = painter.fontMetrics()
         inset, width = 8, max(1, self.width() - 16)
+        per_hour = width * 3600 / total
+        room = metrics.horizontalAdvance("00Z") + 12
+        step = next((n for n in (1, 2, 3, 6) if per_hour * n >= room), 6)
         t = start.replace(minute=0, second=0, microsecond=0)
         if t < start:
             t += timedelta(hours=1)
-        metrics = painter.fontMetrics()
         while t <= end:
-            if t.hour % step == 0:
-                x = inset + width * (t - start).total_seconds() / total
+            x = inset + width * (t - start).total_seconds() / total
+            labeled = t.hour % step == 0
+            painter.setPen(QColor("#49536F") if labeled else QColor("#323A50"))
+            painter.drawLine(int(x), 0, int(x), 4 if labeled else 3)
+            if labeled:
                 label = f"{t:%H}Z"
                 w = metrics.horizontalAdvance(label)
-                painter.drawText(int(min(max(0, x - w / 2), self.width() - w)), 10, label)
+                painter.setPen(QColor("#6B7493") if t.hour == 0 else QColor("#5B6480"))
+                painter.drawText(int(min(max(0, x - w / 2), self.width() - w)), 15, label)
             t += timedelta(hours=1)
 
 
@@ -319,6 +324,7 @@ class ArchiveControls(QWidget):
 
         # keyboard shortcuts — these require a parent window to be set.
         self._shortcuts_installed = False
+        self._shortcuts_enabled = True
         self._letter_step_keys_enabled = True
 
     def showEvent(self, event):
@@ -331,25 +337,35 @@ class ArchiveControls(QWidget):
         if win is None:
             return
         self._shortcuts_installed = True
-        QShortcut(QKeySequence(Qt.Key.Key_Space),  win).activated.connect(self._tc.toggle_play)
-        QShortcut(QKeySequence(Qt.Key.Key_Left),   win).activated.connect(self._on_step_back)
-        QShortcut(QKeySequence(Qt.Key.Key_Right),  win).activated.connect(self._on_step_forward)
-        self._letter_step_shortcuts = [
-            QShortcut(QKeySequence(Qt.Key.Key_A), win),
-            QShortcut(QKeySequence(Qt.Key.Key_D), win),
-        ]
-        self._letter_step_shortcuts[0].activated.connect(self._on_step_back)
-        self._letter_step_shortcuts[1].activated.connect(self._on_step_forward)
-        self.set_letter_step_keys_enabled(self._letter_step_keys_enabled)
+        self._shortcuts: list[QShortcut] = []
+
+        def key(seq, slot):
+            sc = QShortcut(QKeySequence(seq), win)
+            sc.activated.connect(slot)
+            self._shortcuts.append(sc)
+            return sc
+        key(Qt.Key.Key_Space, self._tc.toggle_play)
+        key(Qt.Key.Key_Left, self._on_step_back)
+        key(Qt.Key.Key_Right, self._on_step_forward)
+        self._letter_step_shortcuts = [key(Qt.Key.Key_A, self._on_step_back),
+                                       key(Qt.Key.Key_D, self._on_step_forward)]
         # , and < step back a radar frame, . and > forward (as in MESO-VIEW).
         # "<" arrives as "<" on some keyboards and Shift+"," on others.
         for seq in (",", "<", "Shift+<", "Shift+,"):
-            QShortcut(QKeySequence(seq), win).activated.connect(self._on_step_back)
+            key(seq, self._on_step_back)
         for seq in (".", ">", "Shift+>", "Shift+."):
-            QShortcut(QKeySequence(seq), win).activated.connect(self._on_step_forward)
-        QShortcut(QKeySequence(Qt.Key.Key_Home),   win).activated.connect(self._on_skip_start)
-        QShortcut(QKeySequence(Qt.Key.Key_End),    win).activated.connect(self._on_skip_end)
+            key(seq, self._on_step_forward)
+        key(Qt.Key.Key_Home, self._on_skip_start)
+        key(Qt.Key.Key_End, self._on_skip_end)
+        self.set_shortcuts_enabled(self._shortcuts_enabled)
 
+    def set_shortcuts_enabled(self, enabled: bool) -> None:
+        """All of the bar's keys on or off (off while the Video Studio, which
+        has its own, is open)."""
+        self._shortcuts_enabled = enabled
+        for shortcut in getattr(self, "_shortcuts", ()):
+            shortcut.setEnabled(enabled)
+        self.set_letter_step_keys_enabled(self._letter_step_keys_enabled)
 
     def _on_time_changed(self, t: datetime) -> None:
         self._update_time_display(t)
@@ -411,7 +427,7 @@ class ArchiveControls(QWidget):
         them over; the arrows and , . < > always step."""
         self._letter_step_keys_enabled = enabled
         for shortcut in getattr(self, "_letter_step_shortcuts", ()):
-            shortcut.setEnabled(enabled)
+            shortcut.setEnabled(enabled and self._shortcuts_enabled)
 
     def _on_step_back(self) -> None:
         self._jump_to_scan(-1)

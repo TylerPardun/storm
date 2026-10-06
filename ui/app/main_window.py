@@ -976,6 +976,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _on_archive_vehicle_obs_loaded(self, vehicle_ids: set[str]) -> None:
         self._archive_vehicle_obs_loaded = True
+        # the lidar truck's track is already here: its lidar files use it too
+        from archive.vehicle_aliases import mqtt_vehicle_id
+        from archive.fetchers.vehicle_obs_archive_fetcher import remember_dltruck_track
+        truck = (self._archive_vehicle_obs._observations or {}).get(mqtt_vehicle_id("dltruck"))
+        if truck:
+            remember_dltruck_track(truck)
         self._schedule_trails()
         self._update_archive_session_end()
         if self._radar_station_awaiting_dense_obs:
@@ -1472,7 +1478,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _on_archive_satellite_error(self, msg: str) -> None:
         if hasattr(self, "_archive_controls"):
-            self._archive_controls.set_satellite_status("Sat: error", error=True)
+            if msg.startswith("No GOES"):          # nothing for this date: not a fault
+                self._archive_controls.set_satellite_status(f"Sat: none -- {msg}")
+            else:
+                self._archive_controls.set_satellite_status("Sat: error", error=True)
         self.status_msg_label.setText(f"Satellite: {msg}")
         self._layout_overlays()
 
@@ -3915,7 +3924,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
     def _on_satellite_toggled(self, checked: bool):
         self._set_layer_active("satellite", checked)
         if self._archive:
-            # archive mode: simply show/hide the overlay the archive fetcher is updating.
+            # archive mode: frames are fetched only while the layer is on
+            if getattr(self, "_archive_satellite", None) is not None:
+                self._archive_satellite.set_active(checked)
             has_data = getattr(self, "_archive_sat_has_data", False)
             self.map_widget.set_satellite_visible(checked and has_data)
             return
@@ -5284,6 +5295,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._on_noxp_render_requested(
             self.radar_controls.current_tilt_index(), self.radar_controls.current_product()
         )
+        # the volume loaded at startup placed NOXP's marker; the clock may be
+        # hours from it, so go to the volume nearest the clock now (not on the
+        # next clock change)
+        self._on_time_changed_update_noxp_overlay(self._time_ctrl.current_time)
 
     def _deactivate_noxp_radar(self) -> None:
         self._noxp_generation += 1
@@ -5361,8 +5376,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         scan = result['scan']
         meta = result['metadata']
         if hasattr(self, "_archive_controls"):
+            self._archive_controls.set_rendered_radar(scan)           # "NOXP · 23:20:53Z"
             self._archive_controls.set_radar_status(
-                f"NOXP: {scan.native_field} · {meta['vmin']:g} … {meta['vmax']:g} {meta['units']} · {scan.scan_time:%H:%M:%S}Z"
+                f"{scan.native_field} · {meta['vmin']:g} … {meta['vmax']:g} {meta['units']}"
             )
 
     # -- Doppler lidar: the lidar truck and the CLAMPS trailers (archive) --
@@ -5387,7 +5403,20 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         found = self.raw_lidar_controls.assets_by_instrument()
         if found:
             self._lidar_activity_begin("lidar-survey", "Loading Lidar…")
-            self._archive_raw_lidar.survey(found)
+            self._start_lidar_survey(found, time.monotonic())
+
+    def _start_lidar_survey(self, found: dict, since: float) -> None:
+        """Survey the lidars once the session's startup has settled -- the
+        first radar image drawn and the vehicle tracks loaded -- so their big
+        files don't load on top of the first radar decode (together they
+        passed 2.5 GB on an 8 GB machine). After 3 minutes it goes anyway."""
+        startup = hasattr(self, "_archive_loading") and self._archive_loading.startup_pending()
+        tracks = getattr(self, "_archive_vehicle_obs_started", False) and not getattr(
+            self, "_archive_vehicle_obs_loaded", False)
+        if (startup or tracks) and time.monotonic() - since < 180:
+            self._later(1000, lambda: self._start_lidar_survey(found, since))
+            return
+        self._archive_raw_lidar.survey(found)
 
     def _case_radar_site(self):
         station = getattr(getattr(self, "_archive_radar", None), "station", None)

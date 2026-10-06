@@ -95,6 +95,13 @@ class ArchiveSatelliteFetcher(QObject):
         self._pending: set[tuple[str, datetime]] = set()
         self._fetch_lock = threading.Lock()
         self._current_archive_time: Optional[datetime] = None
+        # Frames are fetched only while the satellite layer is on: each is an
+        # S3 download plus a few hundred MB to warp into the map's projection,
+        # and they were being made on every clock change for a hidden layer.
+        self._active = False
+        # one frame at a time; a request the clock has already moved past is skipped
+        from concurrent.futures import ThreadPoolExecutor
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="goes-frame")
         self._meso_bboxes: dict[int, Optional[dict]] = {1: None, 2: None}
 
 
@@ -113,8 +120,16 @@ class ArchiveSatelliteFetcher(QObject):
         if self._current_archive_time is not None:
             self.on_time_changed(self._current_archive_time)
 
+    def set_active(self, active: bool) -> None:
+        """The satellite layer is on (fetch frames) or off (don't)."""
+        self._active = active
+        if active and self._current_archive_time is not None:
+            self.on_time_changed(self._current_archive_time)
+
     def on_time_changed(self, archive_time: datetime) -> None:
         self._current_archive_time = _ensure_utc(archive_time)
+        if not self._active:
+            return
         ref = self._nearest_ref(self._mode, self._current_archive_time)
         if ref is None:
             return
@@ -151,7 +166,9 @@ class ArchiveSatelliteFetcher(QObject):
 
             if not refs and mode == "conus":
                 self.error.emit(
-                    f"No GOES-East archive imagery available for {self._date.strftime('%Y-%m-%d')}"
+                    f"No GOES-East imagery for {self._date:%Y-%m-%d}: the GOES-16 archive begins in 2017"
+                    if self._date.year < 2017 else
+                    f"No GOES-East archive imagery available for {self._date:%Y-%m-%d}"
                 )
                 self.capabilities_loaded.emit([])
                 return
@@ -250,10 +267,16 @@ class ArchiveSatelliteFetcher(QObject):
                 return
             self._pending.add(cache_key)
         self.loading_changed.emit(True)
-        threading.Thread(target=self._fetch_frame, args=(self._mode, ref), daemon=True).start()
+        self._executor.submit(self._fetch_frame, self._mode, ref)
 
     def _fetch_frame(self, mode: str, ref: _FrameRef) -> None:
         cache_key = (mode, ref.timestamp)
+        if (not self._active or mode != self._mode or self._current_archive_time is None
+                or self._nearest_ref(mode, self._current_archive_time) != ref):
+            with self._fetch_lock:                   # the clock moved on (or the layer went off) while queued
+                self._pending.discard(cache_key)
+            self.loading_changed.emit(bool(self._pending))
+            return
         try:
             url = f"{endpoints.s3_bucket_url(self._bucket)}/{ref.key}"
             resp = package_sources.requests_get("satellite", url, timeout=_REQUEST_TIMEOUT)
@@ -335,6 +358,66 @@ def _bbox_to_dict(bbox: list[float]) -> dict:
     }
 
 
+# GOES Cloud and Moisture Imagery: the infrared bands (7-16) are brightness
+# temperature in kelvin, the visible/near-IR ones (1-6) reflectance (0-1).
+IR_COLD_K, IR_WARM_K = 190.0, 310.0          # cold cloud tops white, warm ground dark
+
+
+def _goes_gray(data, units: str):
+    """0..1 brightness for display (NaN where there's no data). Treating band
+    13's kelvins as 0..1 reflectance had clipped every pixel to 1."""
+    import numpy as np
+    if units.strip().upper() == "K":
+        return np.clip((IR_WARM_K - data) / (IR_WARM_K - IR_COLD_K), 0.0, 1.0)
+    return np.power(np.clip(data, 0.0, 1.0), 0.5)          # visible: gamma, as before
+
+
+def _goes_to_map_image(gray, x_rad, y_rad, *, lon0, sat_height, semi_major, semi_minor, sweep,
+                       bbox, width_px, height_px):
+    """The scan (fixed-grid scan angles x_rad, y_rad) resampled onto the map
+    image STORM shows: bbox [w, s, e, n], rows even in Web Mercator (how the
+    map stretches an image between its corners), nearest scan pixel. Uses the
+    GOES-R fixed-grid formulas (PUG vol. 3, 4.2.8) directly, so it needs only
+    output-sized arrays (cartopy's warp took ~750 MB a frame)."""
+    import numpy as np
+    west, south, east, north = bbox
+    lon = np.deg2rad(np.linspace(west, east, width_px, endpoint=False) + (east - west) / width_px / 2)
+
+    def merc(lat_deg):
+        return np.log(np.tan(np.pi / 4 + np.deg2rad(lat_deg) / 2))
+    ym = np.linspace(merc(north), merc(south), height_px, endpoint=False) + (merc(south) - merc(north)) / height_px / 2
+    lat = 2 * np.arctan(np.exp(ym)) - np.pi / 2
+
+    r_eq, r_pol = semi_major, semi_minor
+    H = sat_height + r_eq
+    lat_c = np.arctan((r_pol ** 2 / r_eq ** 2) * np.tan(lat))[:, None]          # (rows, 1)
+    e2 = (r_eq ** 2 - r_pol ** 2) / r_eq ** 2
+    r_c = r_pol / np.sqrt(1 - e2 * np.cos(lat_c) ** 2)
+    dlon = (lon - np.deg2rad(lon0))[None, :]                                      # (1, cols)
+    sx = H - r_c * np.cos(lat_c) * np.cos(dlon)
+    sy = -r_c * np.cos(lat_c) * np.sin(dlon)
+    sz = r_c * np.sin(lat_c) * np.ones_like(dlon)
+    visible = H * (H - sx) >= sy ** 2 + (r_eq ** 2 / r_pol ** 2) * sz ** 2
+    if sweep == "x":
+        xs = np.arcsin(-sy / np.sqrt(sx ** 2 + sy ** 2 + sz ** 2))
+        ys = np.arctan(sz / sx)
+    else:                                                    # sweep "y" (Himawari-style)
+        xs = np.arctan(-sy / sx)
+        ys = np.arcsin(sz / np.sqrt(sx ** 2 + sy ** 2 + sz ** 2))
+    del sx, sy, sz
+    col = np.rint((xs - x_rad[0]) / (x_rad[1] - x_rad[0])).astype(np.int64)
+    row = np.rint((ys - y_rad[0]) / (y_rad[1] - y_rad[0])).astype(np.int64)
+    inside = visible & (col >= 0) & (col < gray.shape[1]) & (row >= 0) & (row < gray.shape[0])
+    value = np.full((height_px, width_px), np.nan, dtype=np.float32)
+    value[inside] = gray[row[inside], col[inside]]
+    rgba = np.zeros((height_px, width_px, 4), dtype=np.uint8)
+    good = np.isfinite(value)
+    level = np.rint(value[good] * 255).astype(np.uint8)
+    rgba[good, 0] = rgba[good, 1] = rgba[good, 2] = level
+    rgba[good, 3] = 255
+    return rgba
+
+
 def _render_goes_png(
     nc_bytes: bytes,
     mode: str,
@@ -342,18 +425,10 @@ def _render_goes_png(
     image_only: bool = True,
 ) -> tuple[bytes, list[float]] | tuple[None, list[float]]:
     try:
-        import cartopy.crs as ccrs
-        import matplotlib
-        matplotlib.use("Agg")
         import numpy as np
         import xarray as xr
-        from matplotlib.backends.backend_agg import FigureCanvasAgg
-        from matplotlib.figure import Figure
-        from matplotlib import colormaps
     except ImportError as exc:
-        raise RuntimeError(
-            "Archive GOES rendering requires xarray, matplotlib, and cartopy in the STORM environment"
-        ) from exc
+        raise RuntimeError("Archive GOES rendering requires numpy and xarray in the STORM environment") from exc
 
     tmp_path = None
     ds = None
@@ -372,9 +447,7 @@ def _render_goes_png(
         if fill is not None:
             data[data == fill] = np.nan
         data[~np.isfinite(data)] = np.nan
-        data = np.clip(data, 0.0, 1.0)
-        # apply gamma correction to match the visual brightness of live WMS tiles.
-        data = np.where(np.isfinite(data), np.power(data, 0.5), np.nan)
+        data = _goes_gray(data, str(ds["CMI"].attrs.get("units", "")))
 
         proj_var = ds["goes_imager_projection"]
         sat_height = float(proj_var.attrs["perspective_point_height"])
@@ -382,9 +455,6 @@ def _render_goes_png(
         sweep = str(proj_var.attrs.get("sweep_angle_axis", "x"))
         semi_major = float(proj_var.attrs["semi_major_axis"])
         semi_minor = float(proj_var.attrs["semi_minor_axis"])
-        x = np.asarray(ds["x"], dtype="float64") * sat_height
-        y = np.asarray(ds["y"], dtype="float64") * sat_height
-
         bbox = _dataset_bbox(ds, fallback_bbox)
         if not image_only:
             return None, bbox
@@ -394,41 +464,13 @@ def _render_goes_png(
         lat_span = max(1.0, north - south)
         width_px = 1500 if mode == "conus" else 1100
         height_px = max(700, int(width_px * (lat_span / lon_span)))
-        dpi = 100
-
-        fig = Figure(figsize=(width_px / dpi, height_px / dpi), dpi=dpi)
-        fig.patch.set_alpha(0.0)
-        canvas = FigureCanvasAgg(fig)
-        ax = fig.add_axes([0, 0, 1, 1], projection=ccrs.PlateCarree())
-        ax.set_extent([west, east, south, north], crs=ccrs.PlateCarree())
-        ax.set_axis_off()
-
-        cmap = colormaps["gray"].copy()
-        cmap.set_bad((0, 0, 0, 0))
-        globe = ccrs.Globe(
-            semimajor_axis=semi_major,
-            semiminor_axis=semi_minor,
-            ellipse=None,
-        )
-        geos = ccrs.Geostationary(
-            central_longitude=lon0,
-            satellite_height=sat_height,
-            sweep_axis=sweep,
-            globe=globe,
-        )
-        ax.imshow(
-            data,
-            origin="upper",
-            extent=[x.min(), x.max(), y.min(), y.max()],
-            transform=geos,
-            cmap=cmap,
-            vmin=0.0,
-            vmax=1.0,
-            interpolation="bilinear",
-        )
-
+        rgba = _goes_to_map_image(
+            data, np.asarray(ds["x"], dtype="float64"), np.asarray(ds["y"], dtype="float64"),
+            lon0=lon0, sat_height=sat_height, semi_major=semi_major, semi_minor=semi_minor, sweep=sweep,
+            bbox=bbox, width_px=width_px, height_px=height_px)
+        from PIL import Image
         buf = io.BytesIO()
-        canvas.print_png(buf)
+        Image.fromarray(rgba, "RGBA").save(buf, format="PNG", optimize=False)
         return buf.getvalue(), bbox
     finally:
         if ds is not None:

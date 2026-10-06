@@ -145,6 +145,11 @@ class ArchiveRawLidarQuicklookFetcher(QObject):
                 log.warning("Lidar %s: %s failed to load: %s", instrument, asset.filename, exc)
                 self.error.emit(f"Lidar {asset.filename}: {exc}")
                 continue
+            if not rays.scans:
+                # only wind-profile (VAD) rings or other non-PPI rays: nothing to
+                # draw, so don't keep it (a day of these held hundreds of MB)
+                log.info("Lidar %s: %s has no PPI scans; not kept", instrument, asset.filename)
+                continue
             loaded += 1
             self.instrument_file_ready.emit(instrument, rays)
         self.instrument_loaded.emit(instrument, loaded)

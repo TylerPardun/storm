@@ -221,6 +221,15 @@ def _values(variable):
     return values
 
 
+def _field_values(variable, valid):
+    """A (time, range) field for the valid rays, in float32 (as the files
+    store it) and masked where missing. Done in place: a lidar truck's day of
+    CSM rays is large, and float64 copies of every field took ~0.5 GB."""
+    values = np.asarray(variable.values)[valid].astype(np.float32, copy=False)
+    values[~np.isfinite(values) | (values == -999) | (np.abs(values) > 1e30)] = np.nan
+    return np.ma.masked_invalid(values, copy=False)
+
+
 def parse_raw_lidar(path, source: RawLidarSource):
     import xarray as xr
     with Path(path).open('rb') as stream:
@@ -237,6 +246,9 @@ def parse_raw_lidar(path, source: RawLidarSource):
         dimension = 'range'
         axis = _values(ds[dimension])
         units = ds[dimension].attrs.get('units', '').lower().strip()
+        # 2017-2020 CLAMPS files label it "km AGL", though it is slant range
+        # ("Range from lidar ... height = range x sin(elevation)"); the unit is the first word
+        units = units.split()[0] if units else units
         if units in ('km', 'kilometers', 'kilometres'):   # both spellings occur in files
             axis *= 1000
         elif units not in ('m', 'meters', 'metres'):
@@ -259,7 +271,7 @@ def parse_raw_lidar(path, source: RawLidarSource):
         fields, housekeeping = {}, {}
         for name, variable in ds.data_vars.items():
             if variable.dims == ('time', dimension):
-                fields[name] = {**variable.attrs, 'data': np.ma.masked_invalid(_values(variable)[valid])}
+                fields[name] = {**variable.attrs, 'data': _field_values(variable, valid)}
             elif variable.dims == ('time',) and name not in ('time_offset', 'lat', 'lon', 'alt', 'heading', 'azimuth', 'elevation', 'snum'):
                 housekeeping[name] = {**variable.attrs, 'data': _values(variable)[valid]}
         if 'velocity' not in fields:

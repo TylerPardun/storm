@@ -340,25 +340,14 @@ def _haversine_inverse_polar(
 
 
 
-def _sample_scan_to_grid(
-    sample_scan: RadarScan,
-    lat_grid: np.ndarray,
-    lon_grid: np.ndarray,
-) -> np.ndarray:
-    """Sample a scan onto an arbitrary lat/lon grid using nearest-neighbor.
-
-    Polar lookup is spherical (haversine distance + true bearing) so it
-    matches the spherical forward formula in data/radar_decoder.py.  Gate
-    width and first-gate offset are recovered from the scan's own lat/lon
-    arrays so the index mapping is consistent with the gate-center
-    convention used by the decoder.
-    """
+def _scan_sampler(sample_scan: RadarScan):
+    """A function (lat_grid, lon_grid) -> values, sampling the scan by nearest
+    gate. The scan's gate geometry is worked out once here, so a big image
+    can be sampled a strip at a time."""
     num_az, num_rng = sample_scan.data.shape
 
     radar_lat = float(sample_scan.lats[:, 0].mean())
     radar_lon = float(sample_scan.lons[:, 0].mean())
-
-    range_m, az_deg = _haversine_inverse_polar(radar_lat, radar_lon, lat_grid, lon_grid)
 
     # recover gate-center spacing from the scan's own polar grid (spherical
     gate_range_m, _ = _haversine_inverse_polar(
@@ -372,22 +361,47 @@ def _sample_scan_to_grid(
         gate_width_m = float(np.nanmax(gate_range_m) or 1.0)
     if not np.isfinite(gate_width_m) or gate_width_m <= 0:
         gate_width_m = float(np.nanmax(gate_range_m)) / max(num_rng, 1)
-
-    az_idx  = ((az_deg - sample_scan.az_offset) % 360.0) * num_az / 360.0
-    rng_idx = (range_m - first_gate_m) / gate_width_m
+    del gate_range_m
 
     far_edge_m = first_gate_m + (num_rng - 0.5) * gate_width_m
     near_edge_m = max(0.0, first_gate_m - 0.5 * gate_width_m)
-    outside = (range_m > far_edge_m) | (range_m < near_edge_m)
-
     sentinel = sample_scan.vmin - 999.0
     data_filled = np.where(np.isnan(sample_scan.data), sentinel, sample_scan.data)
-    coords = np.array([az_idx.ravel(), rng_idx.ravel()])
-    sampled = map_coordinates(
-        data_filled, coords, order=0, prefilter=False, mode="constant", cval=sentinel
-    ).reshape(lat_grid.shape)
-    sampled[outside | (sampled <= sentinel + 1.0)] = np.nan
-    return sampled
+
+    def sample(lat_grid: np.ndarray, lon_grid: np.ndarray) -> np.ndarray:
+        range_m, az_deg = _haversine_inverse_polar(radar_lat, radar_lon, lat_grid, lon_grid)
+        az_idx  = ((az_deg - sample_scan.az_offset) % 360.0) * num_az / 360.0
+        rng_idx = (range_m - first_gate_m) / gate_width_m
+        outside = (range_m > far_edge_m) | (range_m < near_edge_m)
+        coords = np.array([az_idx.ravel(), rng_idx.ravel()])
+        sampled = map_coordinates(
+            data_filled, coords, order=0, prefilter=False, mode="constant", cval=sentinel
+        ).reshape(lat_grid.shape)
+        sampled[outside | (sampled <= sentinel + 1.0)] = np.nan
+        return sampled
+    return sample
+
+
+def _sample_scan_to_grid(
+    sample_scan: RadarScan,
+    lat_grid: np.ndarray,
+    lon_grid: np.ndarray,
+) -> np.ndarray:
+    """Sample a scan onto an arbitrary lat/lon grid using nearest-neighbor.
+
+    Polar lookup is spherical (haversine distance + true bearing) so it
+    matches the spherical forward formula in data/radar_decoder.py.  Gate
+    width and first-gate offset are recovered from the scan's own lat/lon
+    arrays so the index mapping is consistent with the gate-center
+    convention used by the decoder.
+    """
+    return _scan_sampler(sample_scan)(lat_grid, lon_grid)
+
+
+# Rows per strip when rendering: the image is built a strip at a time so a
+# 4096 px render needs tens of MB at once instead of most of a GB (whole-grid
+# float64 coordinates, samples and RGBA). The result is identical.
+RENDER_STRIP_ROWS = 256
 
 
 def render_scan_to_png(
@@ -451,22 +465,29 @@ def render_scan_to_png(
 
     out_x = np.linspace(x_min, x_max, IMG)
     out_y = np.linspace(y_max, y_min, IMG)   # rows top→bottom
-    x_grid, y_grid = np.meshgrid(out_x, out_y)
-    lon_grid, lat_grid = _merc_to_lonlat(x_grid, y_grid)
-
-    data_out = _sample_scan_to_grid(scan, lat_grid, lon_grid)
-    if scan.colormap == "nws_ref":
-        data_out[~np.isnan(data_out) & (data_out < 8.0)] = np.nan
-    elif scan.colormap in ("nws_vel", "nws_cc", "nws_kdp") and mask_scan is not None:
-        ref_out = _sample_scan_to_grid(mask_scan, lat_grid, lon_grid)
-        data_out[np.isnan(ref_out) | (ref_out < 8.0)] = np.nan
 
     cmap   = COLORMAPS.get(scan.colormap, NWS_REF_CMAP)
     norm   = mcolors.Normalize(vmin=scan.vmin, vmax=scan.vmax, clip=False)
     mapper = mcm.ScalarMappable(norm=norm, cmap=cmap)
+    sample = _scan_sampler(scan)
+    sample_mask = (_scan_sampler(mask_scan)
+                   if scan.colormap in ("nws_vel", "nws_cc", "nws_kdp") and mask_scan is not None else None)
 
-    rgba = mapper.to_rgba(data_out, bytes=True)
-    rgba[np.isnan(data_out), 3] = 0
+    rgba = np.empty((IMG, IMG, 4), dtype=np.uint8)
+    for r0 in range(0, IMG, RENDER_STRIP_ROWS):
+        r1 = min(IMG, r0 + RENDER_STRIP_ROWS)
+        x_grid, y_grid = np.meshgrid(out_x, out_y[r0:r1])
+        lon_grid, lat_grid = _merc_to_lonlat(x_grid, y_grid)
+        del x_grid, y_grid
+        data_out = sample(lat_grid, lon_grid)
+        if scan.colormap == "nws_ref":
+            data_out[~np.isnan(data_out) & (data_out < 8.0)] = np.nan
+        elif sample_mask is not None:
+            ref_out = sample_mask(lat_grid, lon_grid)
+            data_out[np.isnan(ref_out) | (ref_out < 8.0)] = np.nan
+        strip = mapper.to_rgba(data_out, bytes=True)
+        strip[np.isnan(data_out), 3] = 0
+        rgba[r0:r1] = strip
 
     buf = io.BytesIO()
     mimg.imsave(buf, rgba, format="png")

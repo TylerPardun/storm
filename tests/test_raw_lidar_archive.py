@@ -13,7 +13,7 @@ def _source(product='ppi', mobile=False):
     return next(s for s in raw.KNOWN_RAW_LIDAR_SOURCES if s.product == product and s.mobile == mobile)
 
 
-def _file(path, source, bad_time=False, trailer_heading=None):
+def _file(path, source, bad_time=False, trailer_heading=None, range_units='km'):
     dimension = 'range'
     ds = xr.Dataset({
         'base_time': ((), 1782001159.),
@@ -27,7 +27,7 @@ def _file(path, source, bad_time=False, trailer_heading=None):
         'heading': ('time', [-999.] * 3), 'snum': ('time', [9., 20., 4.]),
     }, attrs={'Site_latitude': -999. if source.mobile else 35.,
               'Site_longitude': -999. if source.mobile else -97.})
-    ds[dimension].attrs['units'] = 'km'
+    ds[dimension].attrs['units'] = range_units
     ds['velocity'].attrs['units'] = 'm/s'
     ds['azimuth'].attrs['comment'] = '0 degrees is north'
     if trailer_heading is not None:
@@ -188,3 +188,19 @@ def test_a_file_without_slant_range_is_refused(tmp_path):
                 'height': ('height', [.015]), 'velocity': (('time', 'height'), [[1.]])}).to_netcdf(path, engine='h5netcdf')
     with pytest.raises(ValueError, match='no slant range'):
         raw.parse_raw_lidar(path, source)
+
+
+@pytest.mark.parametrize('units', ['km AGL', 'KM', 'kilometers'])
+def test_2017_2020_files_labeled_km_agl_are_read_as_slant_range_in_km(units, tmp_path):
+    # older CLAMPS files call the range "km AGL" though it is slant range
+    # (their comment: height = range x sin(elevation))
+    path = tmp_path / 'r.cdf'
+    _file(path, _source(), range_units=units)
+    np.testing.assert_allclose(raw.parse_raw_lidar(path, _source()).distance_m, [15., 45.])
+
+
+def test_unknown_range_units_are_still_refused(tmp_path):
+    path = tmp_path / 'r.cdf'
+    _file(path, _source(), range_units='furlongs')
+    with pytest.raises(ValueError, match='range units'):
+        raw.parse_raw_lidar(path, _source())

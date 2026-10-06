@@ -227,6 +227,12 @@ class ArchiveHazardFetcher(QObject):
             }
             resp = package_sources.requests_get("hazards", _IEM_MCD_GIS_URL, params=params, timeout=30)
             resp.raise_for_status()
+            if not resp.content.startswith(b"PK"):
+                # IEM answers a burst of requests with a short non-zip reply; that
+                # isn't "no MDs", so don't cache it -- the next clock change asks again
+                log.info("ArchiveHazardFetcher: MCD reply for %s wasn't a zip (%r); will retry",
+                         rounded_time, resp.content[:80])
+                return
 
             features = _parse_mcd_shapefile_zip(resp.content, rounded_time)
             geojson_str = _normalize_mcd_geojson(

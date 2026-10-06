@@ -970,6 +970,22 @@ class TruckFix:
         self.timestamp, self.lat, self.lon, self.heading_deg = timestamp, lat, lon, heading_deg
 
 
+def remember_dltruck_track(observations) -> None:
+    """Keep the truck's track from observations the session has already
+    loaded (its own vehicle display fetches them with _fetch_vehicle too), so
+    placing its lidar files doesn't download and parse the same day again."""
+    by_day: dict = {}
+    for o in observations:
+        by_day.setdefault(o.timestamp.date(), []).append(
+            TruckFix(o.timestamp, o.lat, o.lon, getattr(o, "heading_deg", None)))
+    with _DLTRUCK_TRACKS_LOCK:
+        for day in sorted(by_day)[-2:]:
+            if day not in _DLTRUCK_TRACKS:
+                while len(_DLTRUCK_TRACKS) >= 2:
+                    _DLTRUCK_TRACKS.pop(next(iter(_DLTRUCK_TRACKS)))
+                _DLTRUCK_TRACKS[day] = by_day[day]
+
+
 def load_dltruck_track(archive_date: datetime) -> list[TruckFix]:
     """The truck's measured FOFS track for one day, for placing and orienting
     its lidar files and sondes. Every truck lidar file needs the same one or

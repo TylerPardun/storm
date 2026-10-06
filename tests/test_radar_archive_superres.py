@@ -179,3 +179,58 @@ def test_only_the_scan_on_screen_keeps_its_parse(monkeypatch):
     fetcher._target_scan = times[3]
     fetcher._get_parsed(times[3], b"x")
     assert list(fetcher._parsed_cache) == [times[3]]
+
+
+def _polar_scan(field="reflectivity", colormap="nws_ref", seed=1):
+    """A realistic polar scan: 360 radials x 200 gates of 250 m around KTLX."""
+    import math
+    lat0, lon0 = 35.333, -97.278
+    az = np.deg2rad(np.arange(360) + 0.5)[:, None]
+    rng = (2125.0 + 250.0 * np.arange(200))[None, :]
+    d = rng / 6371000.0
+    p1, l1 = math.radians(lat0), math.radians(lon0)
+    lat = np.arcsin(np.sin(p1) * np.cos(d) + np.cos(p1) * np.sin(d) * np.cos(az))
+    lon = l1 + np.arctan2(np.sin(az) * np.sin(d) * np.cos(p1), np.cos(d) - np.sin(p1) * np.sin(lat))
+    data = np.random.default_rng(seed).uniform(-20, 60, size=(360, 200))
+    data[::7, ::5] = np.nan
+    return Level2RadarScan(site="KTLX", product="X", scan_time=datetime(2013, 5, 31, 23, tzinfo=timezone.utc),
+                           data=data, lats=np.rad2deg(lat), lons=np.rad2deg(lon), vmin=-32.0, vmax=90.0,
+                           units="", colormap=colormap, tilt_deg=0.5, available_tilts=[0.5],
+                           available_products=[field], pyart_field=field)
+
+
+@pytest.mark.parametrize("colormap,mask", [("nws_ref", False), ("nws_vel", True)])
+def test_rendering_in_strips_gives_the_same_image(monkeypatch, colormap, mask):
+    # the render is built a strip of rows at a time to bound its memory;
+    # the picture must be exactly what one pass gives
+    import ui.map.radar_overlay as ro
+    scan = _polar_scan(colormap=colormap)
+    mask_scan = _polar_scan(seed=2) if mask else None
+    monkeypatch.setattr(ro, "RENDER_STRIP_ROWS", 10_000)
+    whole, bounds_whole, _ = ro.render_scan_to_png(scan, grid_size=300, mask_scan=mask_scan, crop_radius_m=60_000.0)
+    monkeypatch.setattr(ro, "RENDER_STRIP_ROWS", 37)
+    strips, bounds_strips, _ = ro.render_scan_to_png(scan, grid_size=300, mask_scan=mask_scan, crop_radius_m=60_000.0)
+    assert strips == whole and bounds_strips == bounds_whole
+
+
+def test_the_kept_parse_is_let_go_when_idle(monkeypatch):
+    """A kept parse is 465-840 MB: it goes once unused for PARSED_IDLE_S."""
+    import threading
+    import archive.fetchers.radar_archive_fetcher as raf
+    fetcher = raf.ArchiveRadarFetcher.__new__(raf.ArchiveRadarFetcher)
+    fetcher._parse_lock = threading.Lock()
+    fetcher._parsed_cache = raf.OrderedDict(x=object())
+
+    class OneTick:                          # _closed.wait(): one pass of the loop, then stop
+        n = 0
+        def wait(self, _t):
+            self.n += 1
+            return self.n > 1
+    fetcher._closed = OneTick()
+    fetcher._parsed_used = raf._time.monotonic()
+    fetcher._release_idle_parse()
+    assert fetcher._parsed_cache                          # just used: kept
+    fetcher._closed = OneTick()
+    fetcher._parsed_used = raf._time.monotonic() - raf.PARSED_IDLE_S - 1
+    fetcher._release_idle_parse()
+    assert not fetcher._parsed_cache                      # idle: let go

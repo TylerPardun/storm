@@ -277,7 +277,7 @@ class ArchiveControls(QWidget):
 
     def set_satellite_status(self, text: str, error: bool = False) -> None:
         state = str(text).removeprefix("Sat:").strip()
-        color = "#FF8F8F" if error else ("#5B6480" if state in ("--", "waiting", "") else "#39D98A")
+        color = "#FF8F8F" if error else ("#5B6480" if state in ("--", "waiting", "") or state.startswith("none") else "#39D98A")
         self._sat_status.setText(self._dot("Sat", color))
         self._sat_status.setToolTip(f"Satellite: {state}")
         self._sat_status.setStyleSheet("color: #8E97AB; font-size: 11px; font-weight: 600;")

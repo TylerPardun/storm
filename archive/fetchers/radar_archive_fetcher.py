@@ -1,6 +1,7 @@
 
 import atexit
 import gzip
+import gc
 import io
 import logging
 import os
@@ -65,6 +66,11 @@ BUFFER_AFTER  = 4
 # prefetched neighbors are decoded for the current product and their parse
 # dropped, and re-parsed from the raw file on disk if ever needed again.
 PARSED_KEEP = 1
+# The kept parse makes a product/tilt switch on the scan on screen instant,
+# but it is big -- 465 MB to 840 MB depending on the radar and VCP -- so it
+# is let go once it hasn't been used for this long (a later switch re-parses
+# the scan, 1-4 s).
+PARSED_IDLE_S = 45.0
 
 
 class ArchiveRadarFetcher(QObject):
@@ -103,6 +109,9 @@ class ArchiveRadarFetcher(QObject):
         self._closed = threading.Event()
         self._signal_lock = threading.Lock()
         self._parse_lock = threading.Lock()
+        self._decode_lock = threading.Lock()
+        self._parsed_used = _time.monotonic()
+        threading.Thread(target=self._release_idle_parse, daemon=True, name="radar-parse-reaper").start()
         self._station     = station.upper()
         self._date        = session_date
         self._product     = DEFAULT_L2_PRODUCT
@@ -451,8 +460,14 @@ class ArchiveRadarFetcher(QObject):
         try:
             if self._closed.is_set():
                 return
-            scan = self._decode(scan_time, file_bytes, product=cache_key[1], tilt_idx=cache_key[2],
-                                velocity=cache_key[3])
+            # one volume parsed and decoded at a time: a parse is ~465 MB, and two
+            # workers decoding at once doubled the peak (the downloads still overlap)
+            with self._decode_lock:
+                if self._closed.is_set():
+                    return
+                scan = self._decode(scan_time, file_bytes, product=cache_key[1], tilt_idx=cache_key[2],
+                                    velocity=cache_key[3])
+                gc.collect()                 # MetPy's parse holds reference cycles; free it now, not later
             if self._closed.is_set():
                 return
             self._decoded_cache[cache_key] = scan
@@ -518,6 +533,15 @@ class ArchiveRadarFetcher(QObject):
         log.warning("ArchiveRadarFetcher: could not download scan %s", scan_time)
         return None
 
+    def _release_idle_parse(self) -> None:
+        """Drop the kept parse once it has sat unused for PARSED_IDLE_S."""
+        while not self._closed.wait(5.0):
+            if self._parsed_cache and _time.monotonic() - self._parsed_used > PARSED_IDLE_S:
+                with self._parse_lock:
+                    if _time.monotonic() - self._parsed_used > PARSED_IDLE_S:
+                        self._parsed_cache.clear()
+                gc.collect()
+
     def _get_parsed(self, scan_time: datetime, file_bytes: bytes):
         """Parse the raw Level-2 bytes with MetPy, reusing a cached parse.
 
@@ -526,6 +550,7 @@ class ArchiveRadarFetcher(QObject):
         switches products or tilts repeatedly.
         """
         with self._parse_lock:
+            self._parsed_used = _time.monotonic()
             f = self._parsed_cache.get(scan_time)
             if f is not None:
                 self._parsed_cache.move_to_end(scan_time)
@@ -719,8 +744,11 @@ class ArchiveRadarFetcher(QObject):
                     except OSError:
                         pass
                 self._parsed_cache.pop(t, None)
-                for key in [k for k in self._decoded_cache if k[0] == t]:
-                    del self._decoded_cache[key]
+        # decoded scans by time, too: ones whose raw file had already gone
+        # (an earlier seek) were never reached above and piled up, ~16 MB each
+        keep = set(idx[evict_lo:evict_hi + 1])
+        for key in [k for k in list(self._decoded_cache) if k[0] not in keep]:
+            self._decoded_cache.pop(key, None)
 
 
 

@@ -50,14 +50,6 @@ def deactivate() -> None:
         _served.clear()
 
 
-def active_package() -> Path | None:
-    return _package
-
-
-def packaged_kinds() -> Counter:
-    with _lock:
-        return Counter(e.get("kind", "") for e in _entries.values())
-
 
 def served() -> Counter:
     """Files served from the package so far, by kind."""

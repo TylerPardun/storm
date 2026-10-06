@@ -1,6 +1,5 @@
 """Tests for core.annotation — Annotation model and type lookups."""
 
-from datetime import datetime, timezone
 
 from core.annotation import (
     Annotation, ANNOTATION_TYPES, ANNOTATION_TYPE_MAP,

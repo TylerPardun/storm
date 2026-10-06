@@ -166,9 +166,6 @@ class FofsIndex:
     def vehicles(self) -> set[str]:
         return {f.vehicle for f in self.files}
 
-    def vehicles_with_files(self, days) -> set[str]:
-        days = set(days)
-        return {f.vehicle for f in self.files if f.date in days}
 
     def dates(self, vehicle: str | None = None) -> set[date]:
         return {f.date for f in self.files if vehicle is None or f.vehicle == vehicle}

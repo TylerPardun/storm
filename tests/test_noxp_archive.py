@@ -7,7 +7,11 @@ import xarray as xr
 
 from archive.catalog import ScanCanceled
 from archive.fetchers.noxp_archive_fetcher import (
-    ROOT, DATA_ROOT, NoxpArchive, asset_from_url, parse_catalog, read_noxp,
+    ROOT,
+    DATA_ROOT,
+    NoxpArchive,
+    asset_from_url,
+    read_noxp,
     _DISCOVERY_CACHE_TTL_SECONDS,
 )
 

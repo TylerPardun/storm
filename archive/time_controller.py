@@ -12,8 +12,6 @@ _TICK_MS = 500
 # available playback speed multipliers.
 SPEED_OPTIONS = [1, 5, 10, 30, 60, 120, 300]
 
-# Legacy default step retained for callers outside ArchiveControls.
-STEP_SECONDS = 30
 
 
 class TimeController(QObject):
@@ -52,7 +50,6 @@ class TimeController(QObject):
         self._playing: bool = False
 
         # accumulator: wall-clock ms that have elapsed toward the next archive
-        self._accum_ms: float = 0.0
 
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_MS)
@@ -99,16 +96,8 @@ class TimeController(QObject):
         else:
             dt = dt.astimezone(timezone.utc)
         self._current_time = self._clamp(dt)
-        self._accum_ms = 0.0
         self.time_changed.emit(self._current_time)
 
-    def step_forward(self) -> None:
-        """Advance by STEP_SECONDS and pause."""
-        self.step(STEP_SECONDS)
-
-    def step_backward(self) -> None:
-        """Rewind by STEP_SECONDS and pause."""
-        self.step(-STEP_SECONDS)
 
     def step(self, seconds: int) -> None:
         """Pause and move by an arbitrary number of archive seconds."""
@@ -119,7 +108,6 @@ class TimeController(QObject):
         if self._playing:
             return
         self._playing = True
-        self._accum_ms = 0.0
         self._timer.start()
         self.playing_changed.emit(True)
         log.debug("Archive play started at speed=%dx", self.speed)
@@ -174,9 +162,6 @@ class TimeController(QObject):
         self.set_time(self._window_start + timedelta(seconds=secs))
 
 
-    def _ms_per_archive_second(self) -> float:
-        """Wall-clock ms required to advance one archive second at current speed."""
-        return self._timer.interval() / self.speed
 
     def _on_tick(self) -> None:
         """Called every _TICK_MS wall-clock ms while playing."""

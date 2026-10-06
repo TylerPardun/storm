@@ -12,7 +12,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
-import requests
 from PyQt6.QtCore import QObject, pyqtSignal
 from core import package_sources
 
@@ -88,7 +87,6 @@ class ArchiveSatelliteFetcher(QObject):
         self._bucket = _bucket_for_date(self._date)
         self._mode = ""   # no mode until user explicitly selects one
         self._indexes: dict[str, list[_FrameRef]] = {mode: [] for mode in _MODE_CONFIG}
-        self._indexes_ready = False
         self._indexed_modes: set[str] = set()
         self._indexing_modes: set[str] = set()
         self._cache: dict[tuple[str, datetime], Optional[SatFrame]] = {}
@@ -153,7 +151,6 @@ class ArchiveSatelliteFetcher(QObject):
             refs = self._list_day_refs(mode, cfg["product"])
             self._indexes[mode] = refs
             self._indexed_modes.add(mode)
-            self._indexes_ready = bool(self._indexed_modes)
 
             if refs and mode in ("meso1", "meso2"):
                 # emit now (bbox still None) so the UI immediately enables the buttons.

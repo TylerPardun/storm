@@ -12,18 +12,30 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget,
-    QLabel, QDockWidget, QVBoxLayout, QHBoxLayout,
-    QToolButton, QFrame, QCheckBox, QPushButton, QGridLayout,
-    QFileDialog, QSizePolicy, QLineEdit, QTextEdit, QComboBox,
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QLabel,
+    QVBoxLayout,
+    QHBoxLayout,
+    QToolButton,
+    QFrame,
+    QCheckBox,
+    QPushButton,
+    QGridLayout,
+    QFileDialog,
+    QSizePolicy,
+    QLineEdit,
+    QTextEdit,
+    QComboBox,
 )
 from PyQt6.QtCore import Qt, QTimer, QSettings, QObject, pyqtSignal, QSize
-from PyQt6.QtGui import QFont, QKeySequence, QShortcut, QIcon, QPixmap, QPainter
+from PyQt6.QtGui import QKeySequence, QShortcut, QIcon, QPixmap, QPainter
 from PyQt6.QtSvg import QSvgRenderer
 
 from ui.theme import DARK_THEME, ACCENT
-from ui.map.widget import MapWidget, TILES_PATH
-from ui.controls.radar_controls import RadarControls, NEXRAD_SITES, NOXP_SITE_ID
+from ui.map.widget import MapWidget
+from ui.controls.radar_controls import RadarControls, NOXP_SITE_ID
 from ui.controls.hazard_controls import HazardControls
 from ui.controls.routing_controls import RoutingControls, _make_loc_icon
 from ui.widgets.nav_pill import NavPill
@@ -263,7 +275,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._sfcoa_times = []
         self._sfcoa_variables_by_time: dict[str, list] = {}
         self._sfcoa_overlay_cache: dict[tuple[str, str], dict] = {}
-        self._sfcoa_status_text = ""
 
         self.setWindowTitle(
             f"STORM  v{config.VERSION}"
@@ -1082,7 +1093,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 "Could not determine radar station — select one on the map"
             )
             return
-        self._archive_session.radar_station = site
         self._center_map_on_case(site)
         self._start_archive_radar(site)
 
@@ -3105,7 +3115,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         # layer order pill — sits directly above the status pill
         if hasattr(self, "_layer_pill"):
-            lp_w = self._layer_pill.width()
             lp_h = self._layer_pill.height()
             # anchor bottom of pill to just above the status pill
             lp_bottom = _status_y - 4
@@ -3549,13 +3558,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._hazard_error_clear_timer = QTimer()
         self._hazard_error_clear_timer.setSingleShot(True)
         self._hazard_error_clear_timer.timeout.connect(self._clear_hazard_error)
-
-        # seed NWS bbox from MBTiles domain extent so warnings are filtered
-        from core import mbtiles
-        from ui.map.widget import TILES_PATH as _TILES_PATH
-        _bounds = mbtiles.bounds(_TILES_PATH)     # None with online map tiles
-        if _bounds:
-            self._hazard_fetcher.set_nws_bbox(*_bounds)
 
         # load persisted NWS filter selections from QSettings and apply.
         try:
@@ -4198,7 +4200,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if product_id and time_id:
             self._sfcoa_overlay_cache[(product_id, time_id)] = metadata
         summary = self._sfcoa_status_summary(metadata)
-        self._sfcoa_status_text = summary
         self.sfcoa_controls.set_status(summary.replace("SFCOA ", "", 1))
         self.status_msg_label.setText(summary)
         if self._sfcoa_visible:
@@ -4872,7 +4873,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if getattr(self, '_site_change_from_map_click', False):
             # js click handler already set raster-opacity to 0 — just sync
             self._radar_overlay._hidden = True
-            self._radar_overlay._current_scan = None
         else:
             # non-click path (auto-site, etc.) — safe to send JS
             self._radar_overlay.hide()
@@ -4909,7 +4909,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         site = self.radar_controls.current_site()
         avail = self._radar_product_availability.get(product, True)
         cur = self.status_msg_label.text()
-        prefix = "Radar:"
         if not avail:
             name_map = {"N0C": "Correlation Coefficient", "N0K": "Specific Diff. Phase"}
             name = name_map.get(product, product)
@@ -5109,7 +5108,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             lon = meta.get("lon", 0.0)
             if lat == 0.0 and lon == 0.0:
                 return
-            self.status_msg_label.setText(f"Fetching HRRR comparison sounding…")
+            self.status_msg_label.setText("Fetching HRRR comparison sounding…")
             self._comp_hrrr_fetcher.fetch(lat, lon)
         elif source == "obs":
             sid  = meta.get("station_id", "")
@@ -6540,7 +6539,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             if self._noxp_active:
                 self._deactivate_noxp_radar()
             # in archive mode, start fetching from the selected station.
-            self._archive_session.radar_station = site
             self._start_archive_radar(site)
             return
         self._site_change_from_map_click = True
@@ -6968,7 +6966,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         # annotation marker click → edit/delete dialog
         self.map_widget.annotation_clicked.connect(self._on_annotation_clicked)
         self.map_widget.annotation_drag_ended.connect(self._on_annotation_drag_end)
-        self._moving_annotation_id = None
 
         # remote annotations arriving over MQTT — update map without re-publishing
         self._annotation_sync.annotation_received.connect(self._recv_remote_annotation)
@@ -6980,7 +6977,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._drawings: dict[str, DrawingAnnotation] = {}
         self._active_drawing_type: str = ""
         self._drawing_points: list = []
-        self._moving_drawing_id: str | None = None
         self._moving_drawing_original_coordinates: list | None = None
         self._drawing_sync = DrawingSync(self._mqtt_client, read_only=self._viewer, parent=self)
 
@@ -7104,7 +7100,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 annotation.label = dlg.result_label()
                 self._update_annotation(annotation)
             elif dlg.action() == "move":
-                self._moving_annotation_id = annotation_id
                 self.map_widget.set_annotation_draggable(annotation_id, True)
                 self.status_msg_label.setText("  ▶  Drag the annotation to its new location")
                 self.status_msg_label.setStyleSheet(
@@ -7116,7 +7111,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if annotation is None:
             return
         self.map_widget.set_annotation_draggable(annotation_id, False)
-        self._moving_annotation_id = None
         self.status_msg_label.setText("")
 
         dlg = AnnotationMoveConfirmDialog(annotation, lat, lon, parent=self)
@@ -7266,7 +7260,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             drawing.flipped = not drawing.flipped
             self._update_drawing(drawing)
         elif action == "move":
-            self._moving_drawing_id = drawing_id
             self._moving_drawing_original_coordinates = [pt[:] for pt in drawing.coordinates]
             self.map_widget.set_drawing_draggable(drawing_id, True)
             self._set_placement_prompt("drag the drawing to its new location", needs_click=False)
@@ -7281,7 +7274,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if drawing is None:
             return
         self.map_widget.set_drawing_draggable(drawing_id, False)
-        self._moving_drawing_id = None
         try:
             new_coordinates = json.loads(coordinates_json)
         except json.JSONDecodeError:
@@ -7338,7 +7330,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._storm_cones: dict[str, StormCone] = {}
         self._pending_cone_params: dict | None = None
         self._pending_cone_motion_fix: dict | None = None
-        self._moving_cone_id: str | None = None
         self._moving_cone_original_location: tuple[float, float] | None = None
 
         # cone placed via ANNOTATE drawer — map cone-click → edit dialog
@@ -7470,7 +7461,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 cone.created_at = datetime.now(timezone.utc)
                 self._update_storm_cone(cone)
             elif dlg.action() == "move":
-                self._moving_cone_id = cone_id
                 self._moving_cone_original_location = (cone.lat, cone.lon)
                 self.map_widget.set_storm_cone_draggable(cone_id, True)
                 self._set_placement_prompt("drag the storm cone to its new location", needs_click=False)
@@ -7480,7 +7470,6 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if cone is None:
             return
         self.map_widget.set_storm_cone_draggable(cone_id, False)
-        self._moving_cone_id = None
         dlg = StormConeMoveConfirmDialog(
             self._moving_cone_original_location[0] if self._moving_cone_original_location else cone.lat,
             self._moving_cone_original_location[1] if self._moving_cone_original_location else cone.lon,

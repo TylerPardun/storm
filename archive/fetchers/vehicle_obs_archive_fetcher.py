@@ -60,7 +60,7 @@ def _urlopen_with_retry(request: Request, *, timeout: int):
         except HTTPError as exc:
             if exc.code not in _RETRYABLE_HTTP_CODES or attempt == attempts - 1:
                 raise
-        except URLError as exc:
+        except URLError:
             if attempt == attempts - 1:
                 raise
         time.sleep(_RETRY_BACKOFF_S[attempt])
@@ -702,13 +702,6 @@ class ArchiveVehicleObsFetcher(QObject):
             average_seconds=15,
         )
 
-    def first_vehicle_positions(self) -> list[tuple[str, float, float]]:
-        result = []
-        for vehicle_id, observations in self._observations.items():
-            if observations:
-                first = observations[0]
-                result.append((vehicle_id, first.lat, first.lon))
-        return result
 
     def vehicle_positions_near(self, target_time: datetime) -> list[tuple[str, float, float]]:
         """Same reasoning as ArchiveMQTTReader.vehicle_positions_near: the

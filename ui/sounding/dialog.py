@@ -481,7 +481,6 @@ class SoundingDialog(QDialog):
         self._comp_strip_widget.setVisible(False)
 
     def _update_comp_strip(self, src: str, params: dict):
-        _A = Qt.AlignmentFlag.AlignLeft
         color = _SOURCE_COLORS[src]
         glyph = _SOURCE_GLYPHS[src]
         label_name = _SOURCE_LABELS[src]
@@ -1191,10 +1190,7 @@ class SoundingDialog(QDialog):
         pres    = snd.pressure    * units.hPa
         temp    = snd.temperature * units.degC
         dewp    = snd.dewpoint    * units.degC
-        u_ms    = snd.u_wind      * units("m/s")
-        v_ms    = snd.v_wind      * units("m/s")
         hgt     = snd.height      * units.m
-        hgt_agl = (snd.height - snd.height[0]) * units.m
         wind_valid = (
             np.isfinite(snd.pressure)
             & np.isfinite(snd.height)
@@ -1393,20 +1389,14 @@ class SoundingDialog(QDialog):
         try:
             if wind_valid.sum() < 4:
                 raise ValueError("not enough finite wind levels for storm motion")
-            rm, lm, _ = mpcalc.bunkers_storm_motion(
+            rm, _, _ = mpcalc.bunkers_storm_motion(
                 wind_pres, wind_u_ms, wind_v_ms, wind_hgt
             )
             rm_u = rm[0].to("m/s")
             rm_v = rm[1].to("m/s")
-            lm_u = lm[0].to("m/s")
-            lm_v = lm[1].to("m/s")
             rm_u_ms_f = float(rm_u.m)
             rm_v_ms_f = float(rm_v.m)
 
-            rm_spd = float(np.sqrt(rm_u**2 + rm_v**2).to("knots").m)
-            rm_dir = float(np.degrees(np.arctan2(-rm_u.m, -rm_v.m)) % 360)
-            lm_spd = float(np.sqrt(lm_u**2 + lm_v**2).to("knots").m)
-            lm_dir = float(np.degrees(np.arctan2(-lm_u.m, -lm_v.m)) % 360)
 
 
             srh01, _, _ = mpcalc.storm_relative_helicity(

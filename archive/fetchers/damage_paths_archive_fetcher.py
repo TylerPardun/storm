@@ -26,7 +26,6 @@ import re
 import threading
 import urllib.parse
 from datetime import date, datetime, timedelta, timezone
-from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from PyQt6.QtCore import QObject, pyqtSignal

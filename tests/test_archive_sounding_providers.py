@@ -58,7 +58,8 @@ def test_hrrr_retains_actual_hour_and_unknown_run_and_lead(monkeypatch):
     class Response:
         def raise_for_status(self): pass
         def json(self): return payload
-    monkeypatch.setattr(archive.requests, 'get', lambda *a, **k: Response())
+    import requests
+    monkeypatch.setattr(requests, 'get', lambda *a, **k: Response())
     fetcher = archive.ArchiveSoundingFetcher()
     values = []
     fetcher.sounding_ready.connect(values.append)

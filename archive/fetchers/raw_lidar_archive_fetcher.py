@@ -303,7 +303,7 @@ def _truck_azimuth(azimuth, trailer_heading):
     ahead of it), although the azimuth comment says "0 degrees is north"; the
     truck's heading is recorded in the Trailer_heading attribute but not
     applied, so true azimuth = stored + heading. Verified 2026-09-26
-    (scripts/check_truck_lidar_orientation.py, planning evidence): VAD wind
+    (a one-off check against HRRR, in the planning evidence): VAD wind
     directions from the truck's PPI scans vs HRRR 80 m over 23 days / 62 scans
     had a median error of 75.7 deg as stored and 10 deg once rotated by the
     heading (85 % within 30 deg), while the CLAMPS trailers need no rotation.

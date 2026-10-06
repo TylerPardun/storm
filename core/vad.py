@@ -66,20 +66,6 @@ class VADProfile:
         """Calculate V (northward) wind component in m/s."""
         return self.v_component() * KNOT_TO_MS
     
-    def interpolate_to_height(self, target_height_m: float) -> tuple[float, float]:
-        """Interpolate wind direction and speed to a specific height.
-
-        Interpolation is performed through U/V components so 350→010 degree
-        crossings do not produce an artificial southerly wind at the midpoint.
-        
-        Returns:
-            (wind_dir, wind_spd) at target_height_m, or (nan, nan) if out of range
-        """
-        u, v = self.interpolate_components_to_height(target_height_m, unit="kt")
-        if np.isnan(u) or np.isnan(v):
-            return (np.nan, np.nan)
-
-        return _wind_dir_speed_from_components(float(u), float(v))
 
     def interpolate_components_to_height(self, target_height_m: float, unit: str = "m/s") -> tuple[float, float]:
         """Interpolate U/V wind components to a height.
@@ -133,9 +119,6 @@ class VADParameters:
     srw_0_1: float | None
     srw_0_3: float | None
     srw_0_6: float | None
-
-    def as_dict(self) -> dict[str, float | None]:
-        return self.__dict__.copy()
 
 
 def _layer_components(profile: VADProfile, z_bottom: float, z_top: float) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:

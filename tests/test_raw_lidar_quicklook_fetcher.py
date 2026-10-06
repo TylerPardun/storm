@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from datetime import date, datetime, timezone
 
 from archive.fetchers import raw_lidar_quicklook_fetcher as rlq

@@ -1,9 +1,8 @@
 """Tests for core.storm_cone — StormCone geometry and serialization."""
 
-import math
 from datetime import datetime, timedelta, timezone
 
-from core.storm_cone import StormCone, _project, R_NM, motion_from_fixes
+from core.storm_cone import StormCone, _project, motion_from_fixes
 
 
 class TestProject:

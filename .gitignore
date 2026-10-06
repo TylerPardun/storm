@@ -60,3 +60,6 @@ data/case_packages/
 
 # Video Studio projects and exports (data/studio/<session date>/)
 data/studio/
+
+# Linux launcher: generated per machine by scripts/create_desktop_entry.sh
+scripts/launch_storm_linux.sh

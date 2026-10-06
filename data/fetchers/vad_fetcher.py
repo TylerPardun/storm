@@ -16,7 +16,6 @@ from archive import thredds_paths as paths
 log = logging.getLogger(__name__)
 
 # thredds base for Level 3 NVW products
-THREDDS_BASE = paths.UCAR
 THREDDS_CATALOG = f"{paths.catalog_root(paths.UCAR)}/{paths.UCAR_NEXRAD_LEVEL3}/NVW"
 THREDDS_FILE = f"{paths.file_root(paths.UCAR)}/{paths.UCAR_NEXRAD_LEVEL3}/NVW"
 

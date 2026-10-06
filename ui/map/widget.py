@@ -321,18 +321,6 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
     def remove_vehicle(self, vehicle_id: str):
         self.run_js(f"stormRemoveVehicle('{vehicle_id}');")
 
-    def set_lidar_site(self, site: dict | None):
-        """Selected raw-lidar origin, separate from surface-observation
-        vehicles. Uses the same clickable icon marker as vehicles/NOXP
-        (_vIcons["lidar"]) for visual consistency across instrument types."""
-        if site is None:
-            self.run_js("stormRemovePlatformMarker('raw-lidar-site');")
-            return
-        self.run_js(
-            "stormAddPlatformMarker("
-            f"{json.dumps('raw-lidar-site')}, {site['lat']}, {site['lon']}, "
-            f"{json.dumps('#00CFFF')}, {json.dumps('lidar')}, {json.dumps(site['instrument'])});"
-        )
 
     def set_platform_marker(self, marker_id: str, lat: float, lon: float, color: str,
                             icon: str, hover_text: str, selected: bool = False) -> None:
@@ -498,11 +486,6 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
             f"stormSetSatelliteBasemapVisible({'true' if visible else 'false'});"
         )
 
-    def set_satellite_basemap_opacity(self, opacity: float) -> None:
-        self.run_js(
-            f"if(window.stormSetSatelliteBasemapOpacity) "
-            f"stormSetSatelliteBasemapOpacity({opacity:.3f});"
-        )
 
     def set_meso_sectors(self, sectors: dict):
         features = []
@@ -901,11 +884,6 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         flag = 'true' if active else 'false'
         self.run_js(f"if(window.stormSetAsosBoxMode) stormSetAsosBoxMode({flag});")
 
-    def fit_bounds(self, west: float, south: float, east: float, north: float, padding: int = 40) -> None:
-        """Fly the map to fit the given bounding box with optional padding (px)."""
-        self.run_js(
-            f"map.fitBounds([[{west},{south}],[{east},{north}]], {{padding:{padding}}});"
-        )
 
     def add_station_plot(self, vehicle_id: str, lat: float, lon: float, png_bytes: bytes) -> None:
         import base64
@@ -990,8 +968,6 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         """Drawings (fronts, boundaries...), annotation markers and storm cones."""
         self.run_js(f"if(window.stormSetAnnotationsVisible) stormSetAnnotationsVisible({'true' if visible else 'false'});")
 
-    def set_scan_sectors_visible(self, visible: bool) -> None:
-        self.run_js(f"if(window.stormSetScanSectorsVisible) stormSetScanSectorsVisible({'true' if visible else 'false'});")
 
     def set_spc_geojson(
         self,

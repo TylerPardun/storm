@@ -129,7 +129,6 @@ class RadarControls(QWidget):
         self._archive_mode       = False
         self._product_availability: dict[tuple[str, str], bool] = {}
         self._site               = "KTLX"
-        self._all_sites          = list(NEXRAD_SITES)
         self._animation          = None   # hold ref to prevent GC during animation
         self._expanded_height    = 0
         self._setup_ui()

@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import io
 import logging
-import math
 import re
 import ssl
 from datetime import datetime, timezone
@@ -94,7 +93,7 @@ def _urlopen_with_retry(request: Request, *, timeout: int):
         except HTTPError as exc:
             if exc.code not in (429, 500, 502, 503, 504) or attempt == attempts - 1:
                 raise
-        except URLError as exc:
+        except URLError:
             if attempt == attempts - 1:
                 raise
         _time.sleep(_RETRY_BACKOFF_S[attempt])

@@ -21,7 +21,6 @@ def load_truck_observations(path: str | Path) -> list[Observation]:
         raise FileNotFoundError(f"truck replay file not found: {p}")
 
     observations: list[Observation] = []
-    source_name = p.stem
     with p.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for i, row in enumerate(reader, start=2):

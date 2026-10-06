@@ -86,7 +86,7 @@ def test_sea_level_pressure_platforms_get_no_pressure_based_values():
 
 
 def test_wind_barbs_along_a_trail_only_when_asked():
-    from core.trails import BARBS_PER_TRAIL, barb_image
+    from core.trails import BARBS_PER_TRAIL
     obs = [_obs("p1", s, 35 + s * 1e-4, -98, spd=12.9, wdir=225.0) for s in range(0, 1800, 2)]   # 25 kt from SW
     start, end = T0, T0 + timedelta(minutes=30)
     fc, _, _ = TrailBuilder().build({"p1": obs}, "temperature", start, end)

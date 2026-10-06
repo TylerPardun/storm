@@ -1,11 +1,9 @@
 
 import io
-import base64
 import logging
 import math
 from time import perf_counter
 import numpy as np
-from typing import Optional
 
 from PyQt6.QtCore import QObject
 import matplotlib
@@ -548,7 +546,6 @@ class RadarOverlay(QObject):
         self._use_scheme_handler = use_scheme_handler
         self._active = False
         self._hidden = False
-        self._current_scan: Optional[RadarScan] = None
         self._grid_size = int(RENDER_GRID_SIZE)
         self._adaptive_grid = ADAPTIVE_RENDER_GRID
         self._fast_render_streak = 0
@@ -560,7 +557,6 @@ class RadarOverlay(QObject):
 
     def update(self, scan: RadarScan, mask_scan: RadarScan | None = None):
         """render and display a new radar scan (synchronous, for loop playback)."""
-        self._current_scan = scan
 
         try:
             png_bytes, bounds = self._render_to_png(scan, mask_scan=mask_scan)
@@ -576,14 +572,12 @@ class RadarOverlay(QObject):
         self.hide(transient=False)
         self._active = False
         self._hidden = False
-        self._current_scan = None
 
     def hide(self, transient: bool = True):
         """
         Hide the overlay instantly by forcing 0 opacity and pushing a 1x1 transparent PNG.
         """
         self._hidden = True
-        self._current_scan = None
 
         # always force opacity 0 and inject a 1x1 PNG to clear the GPU pipeline
         js = f"""

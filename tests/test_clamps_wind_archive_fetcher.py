@@ -17,8 +17,6 @@ def _write_clamps_wind_netcdf(path, base_time, time_offset, height_km, wspd, wdi
     """Build a minimal file matching the real FRDD/CLAMPS dlvad/dlcsmwinds
     schema, including the undeclared sentinel-fill quirk found in a real
     file (see parse_clamps_wind_netcdf's docstring)."""
-    n_time = len(time_offset)
-    n_height = len(height_km)
     data_vars = {
         "base_time": ((), np.int64(base_time)),
         "time_offset": ("time", np.array(time_offset, dtype="float64")),

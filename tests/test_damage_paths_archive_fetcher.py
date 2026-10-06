@@ -1,5 +1,5 @@
 import threading
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from PyQt6.QtWidgets import QApplication
 

@@ -3,7 +3,7 @@
 from datetime import date
 
 from archive import fofs_index
-from archive.fofs_index import crawl, get_index, vehicle_for_path
+from archive.fofs_index import crawl, vehicle_for_path
 
 _NS = 'xmlns="http://www.unidata.ucar.edu/namespaces/thredds/InvCatalog/v1.0" xmlns:xlink="http://www.w3.org/1999/xlink"'
 

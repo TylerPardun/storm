@@ -682,12 +682,6 @@ def _build_registry() -> list[KnownPlatform]:
 
 ALL_PLATFORMS: list[KnownPlatform] = _build_registry()
 
-def platforms_by_family() -> dict[str, list[KnownPlatform]]:
-    grouped = {}
-    for platform in ALL_PLATFORMS:
-        grouped.setdefault(platform.family, []).append(platform)
-    return grouped
-
 
 def platforms_by_site() -> dict[str, list[KnownPlatform]]:
     """Group by physical vehicle/instrument site rather than by which

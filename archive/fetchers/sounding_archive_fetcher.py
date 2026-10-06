@@ -4,7 +4,6 @@ import threading
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-import requests
 
 from core import package_sources
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -343,80 +342,6 @@ def _parse_open_meteo_archive(
     return sounding, site_elevation
 
 
-
-def _parse_iem_raob(data: dict, station_id: str, lat: float, lon: float, elev: float) -> list:
-    """Parse IEM RAOB JSON response into a list of Sounding objects."""
-    import numpy as np
-
-    soundings = []
-    profiles = data.get("profiles", [data]) if "profiles" in data else [data]
-
-    for profile in profiles:
-        valid_str = profile.get("valid_at") or profile.get("valid")
-        valid_time = _parse_iso(valid_str)
-        if valid_time is None:
-            continue
-
-        levels = profile.get("levels") or profile.get("profile") or []
-        if not levels:
-            continue
-
-        pressures, heights, temps, dewpts, wdir, wspd = [], [], [], [], [], []
-        for lvl in levels:
-            try:
-                p  = float(lvl.get("pressure", lvl.get("pres", 0)))
-                z  = float(lvl.get("height", lvl.get("hght", -9999)))
-                tc = float(lvl.get("tmpc", lvl.get("temperature", lvl.get("tmpf", -9999))))
-                td = float(lvl.get("dwpc", lvl.get("dewpoint", lvl.get("dwpf", -9999))))
-                wd_v = lvl.get("drct") or lvl.get("wind_dir")
-                ws_v = lvl.get("sknt") or lvl.get("wind_speed")
-                wd = float(wd_v) if wd_v is not None else 0.0
-                ws = float(ws_v) if ws_v is not None else 0.0
-                if p > 0 and tc > -999:
-                    pressures.append(p)
-                    heights.append(z if z > -9990 else 0.0)
-                    temps.append(tc)
-                    dewpts.append(td if td > -999 else float("nan"))
-                    wdir.append(wd)
-                    wspd.append(ws)
-            except (TypeError, ValueError):
-                continue
-
-        if len(pressures) < 5:
-            continue
-
-        p  = np.array(pressures, dtype=np.float32)
-        z  = np.array(heights,   dtype=np.float32)
-        tc = np.array(temps,     dtype=np.float32)
-        td = np.array(dewpts,    dtype=np.float32)
-        wd = np.array(wdir,      dtype=np.float32)
-        ws = np.array(wspd,      dtype=np.float32)
-
-        u = -ws * np.sin(np.radians(wd))
-        v = -ws * np.cos(np.radians(wd))
-
-        soundings.append(Sounding(
-            lat=lat,
-            lon=lon,
-            valid_time=valid_time,
-            slot_offset=0,
-            label=valid_time.strftime("%HZ %d %b"),
-            pressure=p,
-            temperature=tc,
-            dewpoint=td,
-            u_wind=u,
-            v_wind=v,
-            height=z,
-        ))
-
-    return soundings
-
-
-
-def _nearest_synoptic_time(t: datetime) -> datetime:
-    """Return the most recent synoptic time (00Z, 06Z, 12Z, 18Z) at or before t."""
-    hour = (t.hour // 6) * 6
-    return t.replace(hour=hour, minute=0, second=0, microsecond=0)
 
 
 def _archive_timestamps_to_query(t: datetime) -> list[str]:

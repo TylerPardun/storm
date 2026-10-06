@@ -508,7 +508,6 @@
     window.stormSetNlcdVisible = _stormNoop;
     window.stormSetNlcdOpacity = _stormNoop;
     window.stormSetSatelliteBasemapVisible = _stormNoop;
-    window.stormSetSatelliteBasemapOpacity = _stormNoop;
     window.stormSetMesoSectors = _stormNoop;
     window.stormSetRadarStations = _stormNoop;
     window.stormSetRadarStationsVisible = _stormNoop;
@@ -4190,13 +4189,6 @@
       };
     });
 
-    window.stormSetScanSectorsVisible = function(visible) {
-      ['scan-sector-fill', 'scan-sector-line', 'scan-sector-point', 'scan-sector-label'].forEach(function(layerId) {
-        if (!map.getLayer(layerId)) return;
-        map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
-      });
-    };
-
     window.stormSetSoundingStations = function(geojsonStr) {
       var src = map.getSource('sounding-stations-src');
       if (!src) return;
@@ -4625,7 +4617,6 @@
     };
 
     var _satBasemapVisible = false;
-    var _satBasemapOpacity = 1.0;
     var SAT_BASEMAP_LYR = 'satellite-basemap';
     // vector fill layers hidden while satellite basemap is active
     var _SAT_HIDE_LYRS = ['landcover', 'landuse'];
@@ -4643,17 +4634,6 @@
         });
       } catch(e) {
         console.warn('[STORM] satellite basemap visibility warning:', e.message || e);
-      }
-    };
-
-    window.stormSetSatelliteBasemapOpacity = function(opacity) {
-      _satBasemapOpacity = Math.max(0, Math.min(1, parseFloat(opacity) || 1.0));
-      try {
-        if (map.getLayer(SAT_BASEMAP_LYR)) {
-          map.setPaintProperty(SAT_BASEMAP_LYR, 'raster-opacity', _satBasemapOpacity);
-        }
-      } catch(e) {
-        console.warn('[STORM] satellite basemap opacity warning:', e.message || e);
       }
     };
 

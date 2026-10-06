@@ -8,7 +8,6 @@ import zipfile
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-import requests
 
 from core import package_sources
 from PyQt6.QtCore import QObject, pyqtSignal

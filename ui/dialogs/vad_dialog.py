@@ -1,7 +1,6 @@
 
 import logging
 import numpy as np
-from datetime import datetime
 from typing import Optional
 
 from PyQt6.QtWidgets import (
@@ -406,8 +405,8 @@ class VADDialog(QDialog):
             if len(self.vad_set) == 0:
                 self._header_line2.setText("VAD data not available via THREDDS")
                 self._header_line2.setStyleSheet(
-                    f"background-color: transparent; color: #FFD166; "
-                    f"font-size: 10px; font-weight: 600;"
+                    "background-color: transparent; color: #FFD166; "
+                    "font-size: 10px; font-weight: 600;"
                 )
                 return
 
@@ -419,8 +418,8 @@ class VADDialog(QDialog):
             log.error(f"Failed to fetch VAD data: {e}", exc_info=True)
             self._header_line2.setText(f"Error: {e}")
             self._header_line2.setStyleSheet(
-                f"background-color: transparent; color: #E53935; "
-                f"font-size: 10px; font-weight: 500;"
+                "background-color: transparent; color: #E53935; "
+                "font-size: 10px; font-weight: 500;"
             )
 
 

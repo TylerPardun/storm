@@ -964,11 +964,6 @@ class StudioPanel(QWidget):
         root.addLayout(bottom)
         self._load_settings_into_ui()
 
-    @staticmethod
-    def _field_label(text: str) -> QLabel:
-        l = label(text)
-        l.setFixedWidth(34)
-        return l
 
     def _spin(self, lo, hi, decimals, suffix, tip) -> QDoubleSpinBox:
         s = QDoubleSpinBox()

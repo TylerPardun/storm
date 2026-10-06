@@ -1,6 +1,5 @@
 """Tests for the CLAMPS .skewT parser."""
 
-import math
 from datetime import datetime, timezone
 
 from data.fetchers.clamps_sounding_fetcher import (

@@ -23,7 +23,7 @@ def _fofs(listed_platform):
 
 def test_registry_unique_and_every_registered_source_has_catalogs():
     assert len({p.platform_id for p in cat.ALL_PLATFORMS}) == len(cat.ALL_PLATFORMS)
-    assert len(cat.platforms_by_family()["FOFS Mobile Mesonet"]) == 17  # 16 vehicles + "other"
+    assert sum(p.family == "FOFS Mobile Mesonet" for p in cat.ALL_PLATFORMS) == 17  # 16 vehicles + "other"
     for platform in cat.ALL_PLATFORMS:
         assert cat.catalogs_for_platform(platform)
 
@@ -171,7 +171,6 @@ def test_non_catalog_response_is_an_error(monkeypatch):
 
 
 def test_scan_prioritizes_recent_sources_without_losing_older_dates(_fofs):
-    by_id = {p.platform_id: p for p in cat.ALL_PLATFORMS}
     platforms = [_fofs('mg1'), _fofs('farfield'), _fofs('probe1'), _fofs('dltruck')]
     calls = []
     def fetch(url, _):
@@ -268,7 +267,6 @@ def test_noxp_scan_reuses_the_same_noxp_instance_so_refreshes_stay_cheap():
 
 
 def test_refresh_updates_recency_hints_from_live_dates_without_skipping_sources(_fofs):
-    by_id = {p.platform_id: p for p in cat.ALL_PLATFORMS}
     platforms = [_fofs('dltruck'), _fofs('mg1')]
     def fetch(url, _):
         spec = next(s for p in platforms for s in cat.catalogs_for_platform(p) if s.url == url)

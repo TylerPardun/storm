@@ -25,7 +25,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 EASINGS = ("smooth", "linear", "ease-in", "ease-out")
-FORMATS = ("mp4", "gif", "png")
 RESOLUTIONS = {                  # label -> (width, height); None = the map's size on screen
     "Map size": None,
     "720p (1280×720)": (1280, 720),
@@ -166,9 +165,6 @@ class Project:
             k.at *= factor
             k.hold *= factor
 
-    def set_duration(self, seconds: float) -> None:
-        if self.duration() > 0:
-            self.retime(max(MIN_SEGMENT_S, seconds) / self.duration())
 
     def plan(self, scan_times: list[datetime] = ()) -> list[tuple[datetime, View]]:
         """One (case time, view) per output frame, at 0, 1/fps, 2/fps, ...,

@@ -4,7 +4,7 @@ from threading import Event
 
 from PyQt6.QtTest import QTest
 
-from archive.catalog import AvailabilityIndex, ALL_PLATFORMS, ScanCanceled
+from archive.catalog import AvailabilityIndex, ScanCanceled
 from ui.launch.availability import AvailabilityWorker
 
 

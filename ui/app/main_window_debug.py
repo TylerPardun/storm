@@ -1,5 +1,4 @@
 
-import os
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont

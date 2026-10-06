@@ -94,9 +94,6 @@ def test_fetch_iem_batch_uses_utc_valid_timestamp():
 def test_fetch_ok_mesonet_uses_configured_api_headers():
     assert sf.OK_API_URL.endswith("/data/mesonet/ok_mesonet.json")
     fetcher = SurfaceFetcher()
-    fetcher._ok_meta = {
-        "acme": {"lat": 34.80833, "lon": -98.02325, "name": "Acme"},
-    }
     captured: dict[str, object] = {}
 
     def _http_get(url, ssl_ctx=None, headers=None):

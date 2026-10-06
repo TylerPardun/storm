@@ -121,20 +121,3 @@ def render_lidar_to_png(rays, when, field='velocity', grid_size=768, *, ray_indi
     }
 
 
-def lidar_site_at(rays, when):
-    """A recent measured position, or a declared fixed site within file coverage."""
-    candidates = rays.rays_at(when, 90)
-    valid = candidates[np.isfinite(rays.latitude[candidates]) & np.isfinite(rays.longitude[candidates])]
-    if not len(valid):
-        if not rays.source.mobile and len(rays.time_epoch) and rays.time_epoch[0] <= when.timestamp() <= rays.time_epoch[-1]:
-            metadata = rays.provenance.get('metadata', {})
-            try:
-                lat, lon = float(metadata['Site_latitude']), float(metadata['Site_longitude'])
-            except (KeyError, TypeError, ValueError):
-                return None
-            if np.isfinite(lat) and np.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180 and (lat, lon) != (0, 0):
-                return {'instrument': rays.source.instrument, 'lat': lat, 'lon': lon}
-        return None
-    i = valid[-1]
-    return {'instrument': rays.source.instrument, 'lat': float(rays.latitude[i]),
-            'lon': float(rays.longitude[i])}

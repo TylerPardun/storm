@@ -23,14 +23,6 @@ def _profile(heights, directions, speeds):
     )
 
 
-def test_direction_interpolation_wraps_through_components():
-    prof = _profile([0, 1000], [350, 10], [10, 10])
-
-    direction, speed = prof.interpolate_to_height(500)
-
-    assert direction == 0.0
-    np.testing.assert_allclose(speed, 9.84807753, rtol=1e-6)
-
 
 def test_bulk_shear_display_units_remain_knots():
     prof = _profile([0, 1000, 3000, 6000], [270, 270, 270, 270], [0, 10, 30, 60])

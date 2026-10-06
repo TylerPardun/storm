@@ -70,7 +70,7 @@ DATE_TIMEOUT_S = 25 * 60
 def tree_rss_mb(pid: int) -> float:
     out = subprocess.run(["ps", "-axo", "pid=,ppid=,rss="], capture_output=True, text=True).stdout
     rows = [tuple(int(x) for x in line.split()) for line in out.splitlines() if line.strip()]
-    family, total, grew = {pid}, 0, True
+    family, grew = {pid}, True
     while grew:
         grew = False
         for p, pp, _ in rows:

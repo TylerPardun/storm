@@ -224,21 +224,6 @@ class ArchiveRadarFetcher(QObject):
             shutil.rmtree(self._tmpdir, ignore_errors=True)
         threading.Thread(target=finish, daemon=True, name="radar-cleanup").start()
 
-    def set_station(self, station: str) -> None:
-        self._station = station.upper()
-        for path in self._raw_cache.values():
-            if path and os.path.exists(path):
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
-        self._raw_cache.clear()
-        self._parsed_cache.clear()
-        self._decoded_cache.clear()
-        self._index = []
-        self._pending_fetches.clear()
-        self._pending_decodes.clear()
-        self.load_index()
 
     def set_product(self, pyart_field: str) -> None:
         """Switch the rendered product and reuse cached raw/decoded volumes."""
@@ -491,8 +476,6 @@ class ArchiveRadarFetcher(QObject):
 
     def _download_scan(self, scan_time: datetime) -> Optional[bytes]:
         """Fetch the raw Level-2 file bytes from AWS S3."""
-        with self._index_lock:
-            idx = self._index
         # find a matching filename in the index for this exact scan time.
         prefix = (
             f"{scan_time.strftime('%Y/%m/%d')}/{self._station}/"

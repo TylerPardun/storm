@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -130,7 +130,6 @@ def noxp_volume_to_scan(volume, sweep_index: int, field_name: str) -> NoxpRadarS
     start = int(volume.sweep_start[sweep_index])
     end = int(volume.sweep_end[sweep_index]) + 1
     az = np.asarray(volume.azimuth_deg[start:end], dtype=np.float64)
-    el = np.asarray(volume.elevation_deg[start:end], dtype=np.float64)
     times = np.asarray(volume.time_epoch[start:end], dtype=np.float64)
     data = volume.fields[field_name]["data"][start:end]
     range_m = volume.range_m[start:end] if np.ndim(volume.range_m) == 2 else volume.range_m

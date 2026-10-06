@@ -150,7 +150,7 @@ def test_the_whole_movie_speeds_up_or_slows_down_together():
     p.retime(0.5)                                             # 2x faster
     assert [k.at for k in p.keyframes] == pytest.approx([0.0, 5.0, 6.5]) and p.keyframes[1].hold == 0.5
     assert p.segment_speed(0) == pytest.approx(120.0)
-    p.set_duration(13.0)
+    p.retime(13.0 / p.duration())                             # fitting the movie to a length
     assert p.duration() == pytest.approx(13.0)
 
 

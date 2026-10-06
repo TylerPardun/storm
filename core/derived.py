@@ -16,7 +16,6 @@ NaN -- the track is never extrapolated.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -145,8 +144,3 @@ def storm_relative(columns, derived, track_points, motion) -> dict[str, np.ndarr
     }
 
 
-def describe_value(key: str, value: float) -> str:
-    q = QUANTITIES[key]
-    if value is None or not math.isfinite(value):
-        return "—"
-    return f"{value:.1f} {q.units}"

@@ -60,7 +60,6 @@ def test_list_catalog_filenames_returns_empty_on_404(monkeypatch):
 def test_fetch_clamps_sonde_soundings_filters_by_date_and_parses(monkeypatch):
     # Two launches on the requested date, one on a different date -- only
     # the matching two should be fetched and parsed.
-    html = _CATALOG_HTML_TEMPLATE.format(f1="202205240036", f2="202205250000")
     monkeypatch.setattr(csf, "_list_catalog_filenames", lambda platform_dir, datastream: [
         "upperair.NSSL_Lidar_sonde.202205240036.skewT.text",
         "upperair.NSSL_Lidar_sonde.202205250000.skewT.text",

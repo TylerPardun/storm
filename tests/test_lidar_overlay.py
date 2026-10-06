@@ -164,14 +164,6 @@ def test_superseded_render_cannot_inject_and_pending_time_is_rendered():
     assert not window._lidar_overlay_render_in_flight
 
 
-def test_instrument_location_expires_across_gaps_and_uses_latest_position():
-    from ui.map.lidar_overlay import lidar_site_at
-    rays = _ppi_rays()
-    rays.latitude[-1] = 35
-    site = lidar_site_at(rays, _WHEN)
-    assert site == {'instrument': 'CLAMPS1', 'lat': 35.0, 'lon': -97.0}
-    assert lidar_site_at(rays, _WHEN + timedelta(minutes=2)) is None
-
 
 def test_sector_and_lidar_projection_share_north_clockwise_bearings():
     from core.scan_sector import _project
@@ -192,13 +184,3 @@ def test_all_native_fields_render_with_their_own_units():
     assert metadata['vmin'] < metadata['vmax']
 
 
-def test_declared_fixed_site_persists_between_scans_but_not_outside_file():
-    from ui.map.lidar_overlay import lidar_site_at
-    rays = _ppi_rays()
-    rays.time_epoch[:-1] -= 600
-    rays.provenance['metadata'] = {'Site_latitude': '34.9822433', 'Site_longitude': '-97.5200901'}
-    site = lidar_site_at(rays, _WHEN - timedelta(minutes=2))
-    assert site['lat'] == pytest.approx(34.9822433)
-    assert lidar_site_at(rays, _WHEN + timedelta(minutes=2)) is None
-    rays.source = _clamps_source(mobile=True)
-    assert lidar_site_at(rays, _WHEN - timedelta(minutes=2)) is None

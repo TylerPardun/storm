@@ -7,7 +7,6 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.request import urlopen, Request
-from urllib.error import HTTPError, URLError
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 

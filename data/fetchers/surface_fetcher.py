@@ -111,7 +111,6 @@ class SurfaceFetcher(QObject):
         self._ne_enabled  = False
         self._sd_enabled  = False
         self._asos_enabled = False
-        self._ok_meta:  dict[str, dict] | None = None
         self._wtm_meta: dict[str, dict] | None = None
         self._co_meta:  dict[str, dict] | None = None
         self._asos_stations: dict[str, dict] | None = None   # stid → {lat, lon, name}
@@ -275,7 +274,6 @@ class SurfaceFetcher(QObject):
     def _fetch_ok_mesonet(self) -> list[dict]:
         # Refetch the CSV every cycle — it provides lat/lon/name AND current MSLP pressure
         meta, mslp_map = self._fetch_ok_metadata()
-        self._ok_meta = meta
 
         raw  = self._http_get(OK_API_URL, headers=self._nssl_api_headers())
         data = self._json_from_bytes(raw, "OK Mesonet data", OK_API_URL)

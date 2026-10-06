@@ -496,7 +496,6 @@ class VehicleTimeseriesDialog(QDialog):
                 'pres' → {vid: pres_str}
         """
         parts = []
-        muted = _MUTED if not values else None
         for vid in self._vehicle_arrays:
             btn_color = self._vehicle_colors.get(vid, _MUTED)
             slot      = self._vehicle_slots.get(vid, 0)

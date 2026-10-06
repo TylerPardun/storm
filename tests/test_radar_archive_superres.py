@@ -5,14 +5,13 @@ import numpy as np
 import pytest
 
 from core.level2_radar_scan import Level2RadarScan
-from ui.map.radar_overlay import _lonlat_to_merc, _merc_to_lonlat, render_scan_to_png
+from ui.map.radar_overlay import _lonlat_to_merc, render_scan_to_png
 from ui.app.radar_superres_cache import RadarSuperresCache
 
 
 def _make_scan(site="KTLX", radar_lat=35.333, radar_lon=-97.278):
     # small synthetic PPI: 8 azimuths x 6 gates, gate spacing ~250m super-res.
     num_az, num_rng = 8, 6
-    az = np.linspace(0.0, 360.0, num_az, endpoint=False)
     gate_width_deg = 0.0025  # crude lon-degree step per gate for a synthetic grid
     lats = np.full((num_az, num_rng), radar_lat, dtype=float)
     lons = np.zeros((num_az, num_rng), dtype=float)

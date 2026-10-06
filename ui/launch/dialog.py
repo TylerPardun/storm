@@ -29,7 +29,8 @@ from ui.launch.styles import (
 )
 from ui.launch.availability import AvailabilityWorker
 from archive.catalog import CAMPAIGN_YEARS, platforms_by_site
-from ui.launch.update_dialogs import _CondaUpdateDialog, _LogViewerDialog, UpdateWorker
+from data.update_checker import UpdateWorker
+from ui.launch.update_dialogs import _CondaUpdateDialog, _LogViewerDialog
 
 
 
@@ -105,7 +106,6 @@ class _CircularProgress(QWidget):
 
     def __init__(self, parent=None, diameter: int = 20):
         super().__init__(parent)
-        self._diameter = diameter
         self.setFixedSize(diameter, diameter)
         self._value = 0
         self._maximum = 0
@@ -1425,7 +1425,6 @@ class LaunchDialog(QDialog):
             self._update_btn.setText("✓   UP TO DATE")
             self._update_btn.setStyleSheet(_UPD_CURRENT)
         else:
-            n = commits_behind
             label = "UPDATE AVAILABLE — CLICK TO UPDATE"
             self._update_btn.setText(label)
             self._update_btn.setStyleSheet(_UPD_AVAILABLE)

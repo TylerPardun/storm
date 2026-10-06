@@ -2,7 +2,6 @@
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout
 
-from data.update_checker import UpdateWorker
 
 
 class _CondaUpdateDialog(QDialog):

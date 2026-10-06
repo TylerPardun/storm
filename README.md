@@ -198,7 +198,7 @@ storm/
 ├── envs/                    # Conda environment specs
 │   └── storm.yml            # Unified environment (all platforms)
 │
-├── scripts/                 # Build and utility scripts
+├── scripts/                 # Build, check and debugging tools (scripts/README.md says what each is for)
 │   ├── create_app.sh        # Builds STORM.app macOS bundle
 │   ├── create_desktop_entry.sh  # Creates Linux desktop entry and launcher
 │   ├── create_app_windows.bat  # Creates STORM desktop shortcut (Windows)
@@ -208,7 +208,7 @@ storm/
 │
 ├── archive/                 # Archive (replay) mode — session config, clock, fetchers
 │   ├── thredds_paths.py     # Every THREDDS host, folder and datastream STORM reads (edit here when THREDDS moves)
-│   ├── session.py           # ArchiveSession dataclass — holds start time, radar station
+│   ├── session.py           # ArchiveSession dataclass and the session's time span
 │   ├── time_controller.py   # Central archive clock (play/pause, speed, scrubber, signals)
 │   └── fetchers/            # Per-layer archive data fetchers (synchronized to clock)
 │       ├── radar_archive_fetcher.py     # Fetches historical NEXRAD Level 3 frames

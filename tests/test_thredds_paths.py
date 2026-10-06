@@ -1,7 +1,6 @@
 """archive/thredds_paths.py (THREDDS) and data/endpoints.py (AWS, web APIs) are\nthe only places STORM's data addresses are written."""
 import ast
 import re
-from datetime import date
 from pathlib import Path
 
 from archive import thredds_paths as paths

@@ -713,6 +713,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             max_workers=1, thread_name_prefix="archive-radar-superres"
         )
         self._archive_superres_cache = RadarSuperresCache(capacity=12)
+        from ui.map.radar_overlay import ARCHIVE_SUPERRES_GRID_SIZE
+        self._archive_superres_size = ARCHIVE_SUPERRES_GRID_SIZE   # steps down on a slow computer
         self._archive_superres_timer = QTimer(self)
         self._archive_superres_timer.setSingleShot(True)
         self._archive_superres_timer.setInterval(500)
@@ -1317,7 +1319,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if gen != self._archive_render_generation or station != self._archive_radar.station:
             return  # station switched since this frame settled — stale
 
-        from ui.map.radar_overlay import ARCHIVE_SUPERRES_GRID_SIZE, ARCHIVE_SUPERRES_CROP_RADIUS_M
+        from ui.map.radar_overlay import ARCHIVE_SUPERRES_CROP_RADIUS_M
         key = self._archive_superres_cache.make_key(
             station, scan.pyart_field, scan.tilt_deg, scan.scan_time,
             getattr(scan, "velocity_processing", "") or "",
@@ -1331,19 +1333,27 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         self._archive_superres_executor.submit(
             self._bg_render_archive_superres, gen, station, scan, key,
-            ARCHIVE_SUPERRES_GRID_SIZE, ARCHIVE_SUPERRES_CROP_RADIUS_M,
+            self._archive_superres_size, ARCHIVE_SUPERRES_CROP_RADIUS_M,
         )
 
     def _bg_render_archive_superres(
         self, gen: int, station: str, scan, key: tuple, grid_size: int, crop_radius_m: float,
     ) -> None:
         """Runs in the archive-superres thread pool — NOT on the main thread."""
-        from ui.map.radar_overlay import render_scan_to_png
+        import time as _time
+        from ui.map.radar_overlay import next_superres_size, render_scan_to_png
+        started = _time.perf_counter()
         try:
             png, bounds, _ = render_scan_to_png(scan, grid_size, crop_radius_m=crop_radius_m)
         except Exception as exc:
             log.error("Archive radar super-res render failed: %s", exc)
             return
+        took = _time.perf_counter() - started
+        smaller = next_superres_size(grid_size, took)
+        if smaller < self._archive_superres_size:
+            self._archive_superres_size = smaller
+            log.info("Archive radar sharp render took %.1f s at %d px; using %d px from now on",
+                     took, grid_size, smaller)
         self._archive_superres_ready.emit({
             "gen": gen, "station": station, "scan": scan, "key": key,
             "png": png, "bounds": bounds,

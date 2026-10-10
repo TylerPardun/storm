@@ -46,6 +46,22 @@ ADAPTIVE_UP_SCANS = 4
 # never feed back into that path.
 ARCHIVE_SUPERRES_GRID_SIZE = 4096       # matches MESO-VIEW's default output_size_px
 ARCHIVE_SUPERRES_CROP_RADIUS_M = 300_000.0  # 300 km half-width; ~146 m/px at 4096px
+# On a slower computer the sharp render steps down a size when one takes
+# longer than ARCHIVE_SUPERRES_SLOW_S, for the rest of the session. Measured
+# on an M2 (KTLX 2013-05-31 23:23, 0.5 deg): 4096 px 1.8 s / +273 MB, 3072
+# px 1.0 s / +99 MB, 2048 px 0.48 s / +47 MB; an i5-7300U Toughbook (about
+# 2.4x slower single-core) would take ~4.3 s at 4096 px. 2048 px (293 m/px)
+# is still close to the super-res gate spacing (250 m).
+ARCHIVE_SUPERRES_SIZES = (4096, 3072, 2048)
+ARCHIVE_SUPERRES_SLOW_S = 2.5
+
+
+def next_superres_size(size: int, seconds: float) -> int:
+    """The size to use after a render of `size` took `seconds`."""
+    if seconds <= ARCHIVE_SUPERRES_SLOW_S:
+        return size
+    smaller = [s for s in ARCHIVE_SUPERRES_SIZES if s < size]
+    return smaller[0] if smaller else size
 
 
 # function to set the render grid size (used on startup)

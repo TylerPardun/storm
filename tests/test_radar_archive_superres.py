@@ -245,3 +245,11 @@ def test_cache_key_separates_raw_and_processed_velocity():
     cache.put(raw, b"raw", [])
     assert raw != dealiased
     assert cache.get(dealiased) is None
+
+
+def test_sharp_render_steps_down_a_size_when_slow():
+    from ui.map.radar_overlay import ARCHIVE_SUPERRES_SLOW_S, next_superres_size
+    assert next_superres_size(4096, 1.8) == 4096                          # fast machine: unchanged
+    assert next_superres_size(4096, ARCHIVE_SUPERRES_SLOW_S + 1) == 3072
+    assert next_superres_size(3072, ARCHIVE_SUPERRES_SLOW_S + 1) == 2048
+    assert next_superres_size(2048, 30.0) == 2048                          # never below 2048

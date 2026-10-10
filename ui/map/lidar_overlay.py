@@ -110,13 +110,23 @@ def render_lidar_to_png(rays, when, field='velocity', grid_size=768, *, ray_indi
     image = Image.new('RGBA', (grid_size, grid_size))
     draw = ImageDraw.Draw(image)
     left, right = pixels
-    for i, j in zip(*np.nonzero(~np.ma.getmaskarray(data))):
-        color = tuple(int(v) for v in colors[i, j])
-        if half == 0:
-            draw.line([(left[0][i,j],left[1][i,j]),(left[0][i,j+1],left[1][i,j+1])], fill=color, width=1)
-        else:
-            draw.polygon([(left[0][i,j],left[1][i,j]),(left[0][i,j+1],left[1][i,j+1]),
-                          (right[0][i,j+1],right[1][i,j+1]),(right[0][i,j],right[1][i,j])], fill=color)
+    # Corner coordinates and colors gathered as arrays and converted to plain
+    # Python numbers once: indexing NumPy scalars cell by cell was most of the
+    # time for a dense sweep (1.5 M cells, ~5 s on an M2). Same drawing order
+    # and coordinates, so the image is unchanged.
+    rows, cols = np.nonzero(~np.ma.getmaskarray(data))
+    fills = list(map(tuple, colors[rows, cols].tolist()))
+    x0, y0 = left[0][rows, cols].tolist(), left[1][rows, cols].tolist()
+    x1, y1 = left[0][rows, cols + 1].tolist(), left[1][rows, cols + 1].tolist()
+    if half == 0:
+        for k, color in enumerate(fills):
+            draw.line([(x0[k], y0[k]), (x1[k], y1[k])], fill=color, width=1)
+    else:
+        x2, y2 = right[0][rows, cols + 1].tolist(), right[1][rows, cols + 1].tolist()
+        x3, y3 = right[0][rows, cols].tolist(), right[1][rows, cols].tolist()
+        polygon = draw.polygon
+        for k, color in enumerate(fills):
+            polygon([(x0[k], y0[k]), (x1[k], y1[k]), (x2[k], y2[k]), (x3[k], y3[k])], fill=color)
     stream = io.BytesIO()
     image.save(stream, format='PNG')
     west, south = inv.transform(xmin, ymin)

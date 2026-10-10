@@ -115,6 +115,17 @@ QMainWindow, QWidget {
     background: transparent;
 }
 
+/* Plain containers, labels and checkboxes in any floating panel show the
+   panel's navy rather than the window's near-black (QWidget above) --
+   drawers not listed by name (TRACK, the VEHICLES trails row, ...) had a
+   blacker box inside the panel. ".QWidget" is exactly QWidget, so buttons,
+   combos and custom-painted widgets keep their own backgrounds. */
+#floatingToolbar .QWidget,
+#floatingToolbar QLabel,
+#floatingToolbar QCheckBox {
+    background: transparent;
+}
+
 #floatingToolbar QComboBox#radarSiteCombo,
 #floatingToolbar QComboBox#radarProductCombo,
 #floatingToolbar QComboBox#lidarCombo,
@@ -1056,6 +1067,13 @@ QDialog#annotationDialog QLineEdit:focus {
 #archiveControls QLabel {
     background: transparent;
     padding: 0;
+}
+
+/* the timeline slider and plain containers show the bar's navy, not a
+   near-black band (the window-wide QWidget background) */
+#archiveControls QSlider,
+#archiveControls .QWidget {
+    background: transparent;
 }
 
 #archiveControls QToolButton {

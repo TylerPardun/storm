@@ -610,8 +610,9 @@ class LaunchDialog(QDialog):
             "QPushButton:hover { color: #5CE1FF; text-decoration: underline; }"
         )
 
-        action_row = QHBoxLayout()
-        action_row.setSpacing(6)
+        # one link per line: side by side they were cut off at this width
+        action_links = QVBoxLayout()
+        action_links.setSpacing(7)
 
         self._surprise_btn = QPushButton("Surprise me")
         self._surprise_btn.setToolTip("Choose a random date with data")
@@ -619,7 +620,6 @@ class LaunchDialog(QDialog):
         self._surprise_btn.setFlat(True)
         self._surprise_btn.setStyleSheet(_link_style)
         self._surprise_btn.clicked.connect(self._on_surprise_me_clicked)
-        action_row.addWidget(self._surprise_btn)
 
         # open a case package (core/case_package.py) straight from here
         self._case_package_path: Path | None = None
@@ -628,7 +628,6 @@ class LaunchDialog(QDialog):
         self._open_case_btn.setFlat(True)
         self._open_case_btn.setStyleSheet(_link_style)
         self._open_case_btn.clicked.connect(self._on_open_case_clicked)
-        action_row.addWidget(self._open_case_btn)
 
         self._date_finder: FindDatesDialog | None = None
         self._find_dates_btn = QPushButton("Find dates…")
@@ -637,8 +636,6 @@ class LaunchDialog(QDialog):
         self._find_dates_btn.setFlat(True)
         self._find_dates_btn.setStyleSheet(_link_style)
         self._find_dates_btn.clicked.connect(self._open_date_finder)
-        action_row.addWidget(self._find_dates_btn)
-        action_row.addStretch()
 
         self._availability_refresh_btn = QPushButton("↻  Refresh data")
         self._availability_refresh_btn.setAccessibleName("Refresh archive availability")
@@ -646,9 +643,12 @@ class LaunchDialog(QDialog):
         self._availability_refresh_btn.setFlat(True)
         self._availability_refresh_btn.setStyleSheet(_link_style)
         self._availability_refresh_btn.clicked.connect(self._refresh_availability)
-        action_row.addWidget(self._availability_refresh_btn)
 
-        av_layout.addLayout(action_row)
+        for btn in (self._find_dates_btn, self._surprise_btn, self._open_case_btn,
+                    self._availability_refresh_btn):
+            action_links.addWidget(btn, 0, Qt.AlignmentFlag.AlignLeft)
+        av_layout.addSpacing(4)
+        av_layout.addLayout(action_links)
 
         case_row = QHBoxLayout()
         case_row.setSpacing(6)

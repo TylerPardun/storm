@@ -354,7 +354,6 @@ class LaunchDialog(QDialog):
         self.destroyed.connect(self._availability.close)
         self._availability_generation = 0
         self._availability_snapshot = None
-        self._availability_refresh = False
         self._availability_timer = QTimer(self)
         self._availability_timer.setSingleShot(True)
         self._availability_timer.setInterval(250)
@@ -637,15 +636,7 @@ class LaunchDialog(QDialog):
         self._find_dates_btn.setStyleSheet(_link_style)
         self._find_dates_btn.clicked.connect(self._open_date_finder)
 
-        self._availability_refresh_btn = QPushButton("↻  Refresh data")
-        self._availability_refresh_btn.setAccessibleName("Refresh archive availability")
-        self._availability_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._availability_refresh_btn.setFlat(True)
-        self._availability_refresh_btn.setStyleSheet(_link_style)
-        self._availability_refresh_btn.clicked.connect(self._refresh_availability)
-
-        for btn in (self._find_dates_btn, self._surprise_btn, self._open_case_btn,
-                    self._availability_refresh_btn):
+        for btn in (self._find_dates_btn, self._surprise_btn, self._open_case_btn):
             action_links.addWidget(btn, 0, Qt.AlignmentFlag.AlignLeft)
         av_layout.addSpacing(4)
         av_layout.addLayout(action_links)
@@ -1105,15 +1096,9 @@ class LaunchDialog(QDialog):
             if self.isVisible():
                 self._availability_timer.start()
 
-    def _refresh_availability(self):
-        self._availability_refresh = True
-        self._availability_snapshot = None
-        self._schedule_availability()
-
     def _request_availability(self):
         if self.isVisible() and self._selected_mode == "archive":
-            self._availability.request(self._availability_generation, self._availability_refresh)
-            self._availability_refresh = False
+            self._availability.request(self._availability_generation)
 
     def _on_availability_updated(self, generation, snapshot):
         if generation != self._availability_generation or self._selected_mode != "archive":

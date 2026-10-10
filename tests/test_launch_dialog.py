@@ -249,7 +249,7 @@ def test_startup_archive_schedules_discovery_and_date_changes_debounce(monkeypat
     dlg._archive_dt_edit.setDate(QDate(2025, 5, 1))
     generation = dlg._availability_generation
     QTest.qWait(350)
-    assert calls == [(generation, False)]
+    assert calls == [(generation,)]
     assert len(canceled) >= 3
     dlg._select_mode("viewer")
     assert not dlg._availability_timer.isActive()
@@ -297,19 +297,6 @@ def test_partial_snapshot_keeps_progress_and_positive_dates():
     _apply(dlg, _snapshot([date(2024, 4, 27)], partial=True))
     assert dlg._archive_scan_progress.isVisibleTo(dlg)
     assert len(dlg._archive_dt_edit.calendarWidget()._known_dates) == 1
-
-
-def test_refresh_clears_old_markers_and_requests_fresh_metadata(monkeypatch):
-    _, dlg = _dialog()
-    _apply(dlg, _snapshot([date(2024, 4, 27)]))
-    calls = []
-    monkeypatch.setattr(dlg._availability, "request", lambda *args: calls.append(args))
-    dlg.show()
-    dlg._availability_refresh_btn.click()
-    assert dlg._availability_snapshot is None
-    assert not dlg._archive_dt_edit.calendarWidget()._known_dates
-    QTest.qWait(350)
-    assert calls[-1] == (dlg._availability_generation, True)
 
 
 def test_small_screen_scrolls_form_without_overlap_and_keeps_launch_visible(monkeypatch):

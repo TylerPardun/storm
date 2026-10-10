@@ -300,6 +300,23 @@ def test_date_cache_shades_immediately_and_avoids_repeat_requests(tmp_path, _fof
     assert len(calls) == 2  # Explicit refresh bypasses the TTL.
 
 
+@pytest.mark.parametrize("stamp, rechecked", [("20260517", True), ("20190517", False)])
+def test_catalogs_with_dates_this_year_are_rechecked_after_an_hour(tmp_path, _fofs, stamp, rechecked):
+    """New field days must appear without a manual refresh; older catalogs keep the day-long cache."""
+    platform = _fofs()
+    path = tmp_path / 'dates.json'
+    calls = []
+    def fetch(url, _):
+        calls.append(url)
+        spec = next(s for s in cat.catalogs_for_platform(platform) if s.url == url)
+        return _page(spec, stamp + ('.txt' if '/raw/' in url else '.nc'))
+    june_2026 = datetime(2026, 6, 1, 12).timestamp()
+    list(cat.AvailabilityIndex([platform], fetch, pace=0, cache_path=path, now=lambda: june_2026).scan(Event()))
+    calls.clear()
+    later = june_2026 + cat._ACTIVE_CACHE_TTL_SECONDS + 60
+    list(cat.AvailabilityIndex([platform], fetch, pace=0, cache_path=path, now=lambda: later).scan(Event()))
+    assert bool(calls) is rechecked
+
 def test_expired_cache_remains_visible_but_failed_refresh_is_not_complete(tmp_path, _fofs):
     platform = _fofs()
     path = tmp_path / 'dates.json'

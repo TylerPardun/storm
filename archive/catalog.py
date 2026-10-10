@@ -102,6 +102,9 @@ _NOXP_CACHE_DIR = Path.home() / ".cache" / "storm" / "noxp"
 _NOXP_SCAN_BUDGET = 2  # Pages per branch, not scientific file downloads.
 _NOXP_STARTUP_BUDGET = 10  # Shared network-request cap across all NOXP roots.
 _CACHE_TTL_SECONDS = 24 * 60 * 60
+# A catalog with dates this year may still be gaining files, so the launch
+# page rechecks it after an hour; older catalogs rarely change.
+_ACTIVE_CACHE_TTL_SECONDS = 60 * 60
 _DATE_CACHE_PATH = Path.home() / '.cache' / 'storm' / 'archive-dates.json'
 log = logging.getLogger(__name__)
 
@@ -373,7 +376,9 @@ class AvailabilityIndex:
                 # UI shows what's already known immediately; just don't
                 # mark it done, so scan() retries it automatically and
                 # makes further progress on its own.
-                if 0 <= age < _CACHE_TTL_SECONDS and not record.get('error') and not record.get('budget_limited'):
+                active = bool(dates) and max(dates).year >= datetime.fromtimestamp(self._clock()).year
+                ttl = _ACTIVE_CACHE_TTL_SECONDS if active else _CACHE_TTL_SECONDS
+                if 0 <= age < ttl and not record.get('error') and not record.get('budget_limited'):
                     self._results[spec] = (dates, record.get('error', ''))
         except (OSError, ValueError, TypeError, KeyError):
             log.warning('Ignoring unreadable archive date cache')

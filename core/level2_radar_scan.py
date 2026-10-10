@@ -99,7 +99,13 @@ class Level2RadarScan(RadarScan):
         available_products: list,
         pyart_field: str,
         az_offset: float = 0.0,
+        gate_geometry=None,
     ):
+        """gate_geometry: (radar_lat, radar_lon, azimuths_deg, ranges_km) --
+        given instead of lats/lons, gate positions are computed only where
+        needed (see RadarScan.first_ring etc.); the full grids only if
+        something asks for scan.lats / scan.lons."""
+        self._geometry = gate_geometry
         super().__init__(
             site=site,
             product=product,
@@ -117,6 +123,52 @@ class Level2RadarScan(RadarScan):
         self.available_tilts = sorted(available_tilts)
         self.available_products = available_products
         self.pyart_field = pyart_field
+
+    # every Nth ray is enough to measure gate spacing (a median over rays)
+    SPACING_RAY_STEP = 10
+
+    def _latlon(self, ray_index, gate_index, dtype=None):
+        """Positions (float32, as the full grids are stored, unless dtype is
+        given) of the given rays x gates, by the same WGS84
+        azimuthal-equidistant placement."""
+        import numpy as np
+        from pyproj import Proj, Transformer
+        radar_lat, radar_lon, azimuths, ranges = self._geometry
+        az = np.deg2rad(np.asarray(azimuths, dtype=np.float64)[ray_index])
+        rng = np.asarray(ranges, dtype=np.float64)[gate_index]
+        x_km, y_km = np.outer(np.sin(az), rng), np.outer(np.cos(az), rng)
+        aeqd = Proj(proj="aeqd", lat_0=radar_lat, lon_0=radar_lon, datum="WGS84", units="km")
+        lons, lats = Transformer.from_proj(aeqd, Proj("epsg:4326"), always_xy=True).transform(x_km, y_km)
+        return lats.astype(dtype or np.float32), lons.astype(dtype or np.float32)
+
+    def _compute_latlon(self):
+        if self._geometry is None:
+            return super()._compute_latlon()
+        return self._latlon(slice(None), slice(None))
+
+    def _lazy(self) -> bool:
+        return self._geometry is not None and self._lats is None
+
+    def first_ring(self):
+        if not self._lazy():
+            return super().first_ring()
+        lats, lons = self._latlon(slice(None), slice(0, 1))
+        return lats[:, 0], lons[:, 0]
+
+    def spacing_rays(self):
+        if not self._lazy():
+            return super().spacing_rays()
+        # full precision: float32 positions (~0.1 m) put a few mm of noise on
+        # the measured gate width, which adds up over a thousand gates
+        import numpy as np
+        return self._latlon(slice(None, None, self.SPACING_RAY_STEP), slice(None), np.float64)
+
+    def extent_points(self):
+        """The first and last gate of every ray: along each ray latitude and
+        longitude change monotonically, so the scan's bounds lie on these."""
+        if not self._lazy():
+            return super().extent_points()
+        return self._latlon(slice(None), [0, -1])
 
     @property
     def label(self) -> str:

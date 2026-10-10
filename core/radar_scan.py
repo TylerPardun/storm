@@ -27,10 +27,10 @@ class RadarScan:
         self.scan_time = scan_time
         # assign data array
         self.data = data
-        # assign latitude grid
-        self.lats = lats
-        # assign longitude grid
-        self.lons = lons
+        # latitude / longitude of every gate (may be None when a subclass
+        # computes them on first use, see _compute_latlon)
+        self._lats = lats
+        self._lons = lons
         # assign display min
         self.vmin = vmin
         # assign display max
@@ -41,6 +41,44 @@ class RadarScan:
         self.colormap = colormap
         # assign azimuth offset
         self.az_offset = az_offset
+
+    # gate positions; computed on first use when not given up front
+    @property
+    def lats(self):
+        if self._lats is None:
+            self._lats, self._lons = self._compute_latlon()
+        return self._lats
+
+    @lats.setter
+    def lats(self, value):
+        self._lats = value
+
+    @property
+    def lons(self):
+        if self._lons is None:
+            self._lats, self._lons = self._compute_latlon()
+        return self._lons
+
+    @lons.setter
+    def lons(self, value):
+        self._lons = value
+
+    def _compute_latlon(self):
+        raise ValueError("this scan has no gate positions")
+
+    # what the renderer needs, without requiring every gate's position:
+    # the first gate of each ray (radar center), rays to measure gate
+    # spacing from, and the gates that bound the scan. A scan holding full
+    # arrays answers from them; one computing positions lazily
+    # (Level2RadarScan from the archive) computes only these.
+    def first_ring(self):
+        return self.lats[:, 0], self.lons[:, 0]
+
+    def spacing_rays(self):
+        return self.lats, self.lons
+
+    def extent_points(self):
+        return self.lats, self.lons
 
     # how many seconds old this scan is
     @property

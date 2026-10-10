@@ -552,7 +552,6 @@ class ArchiveRadarFetcher(QObject):
     def _decode(self, scan_time: datetime, file_bytes: bytes, *, product=None, tilt_idx=None,
                 velocity: Optional[VelocityOptions] = None) -> Optional[Level2RadarScan]:
         """Decode a Level-2 file with MetPy and return a Level2RadarScan."""
-        from pyproj import Proj, Transformer
         from core.mem_probe import peak_rss_mb, log_delta
         import time as _time
         _t0 = _time.perf_counter()
@@ -653,15 +652,11 @@ class ArchiveRadarFetcher(QObject):
         if product in ("velocity", "spectrum_width"):
             data *= 1.94384
 
-        az_rad   = np.deg2rad(np.array(azimuths, dtype=np.float64))
-        # [n_rays, n_gates] east/north offsets in km
-        x_km = np.outer(np.sin(az_rad), ranges)
-        y_km = np.outer(np.cos(az_rad), ranges)
-
-        aeqd = Proj(proj="aeqd", lat_0=radar_lat, lon_0=radar_lon, datum="WGS84", units="km")
-        xform = Transformer.from_proj(aeqd, Proj("epsg:4326"), always_xy=True)
-        lons, lats = xform.transform(x_km, y_km)
-
+        # Gate positions are not computed here: converting all ~1.3 M gates
+        # to lat/lon took ~0.3 s of a 0.8 s decode (M2) and ~10 MB per cached
+        # scan, and the renderer needs only a few rings/rays of them
+        # (Level2RadarScan.first_ring etc.); the full grids are computed on
+        # first use if anything asks for scan.lats / scan.lons.
         meta = L2_PRODUCTS[product]
         log_delta(f"ArchiveRadarFetcher._decode {self._station} {scan_time}",
                    _rss_before, peak_rss_mb(), (_time.perf_counter() - _t0) * 1000.0)
@@ -670,8 +665,9 @@ class ArchiveRadarFetcher(QObject):
             product=meta["label"].split("(")[-1].rstrip(")"),
             scan_time=scan_time,
             data=data,
-            lats=lats.astype(np.float32),
-            lons=lons.astype(np.float32),
+            lats=None,
+            lons=None,
+            gate_geometry=(radar_lat, radar_lon, np.asarray(azimuths, dtype=np.float64), ranges),
             vmin=meta["vmin"],
             vmax=meta["vmax"],
             units=meta["units"],

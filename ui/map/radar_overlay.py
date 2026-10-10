@@ -360,15 +360,18 @@ def _scan_sampler(sample_scan: RadarScan):
     can be sampled a strip at a time."""
     num_az, num_rng = sample_scan.data.shape
 
-    radar_lat = float(sample_scan.lats[:, 0].mean())
-    radar_lon = float(sample_scan.lons[:, 0].mean())
+    ring_lats, ring_lons = sample_scan.first_ring()
+    radar_lat = float(ring_lats.mean())
+    radar_lon = float(ring_lons.mean())
 
     # recover gate-center spacing from the scan's own polar grid (spherical
-    gate_range_m, _ = _haversine_inverse_polar(
-        radar_lat, radar_lon, sample_scan.lats, sample_scan.lons
-    )
+    ray_lats, ray_lons = sample_scan.spacing_rays()
+    gate_range_m, _ = _haversine_inverse_polar(radar_lat, radar_lon, ray_lats, ray_lons)
     gate_centers_m = np.median(gate_range_m, axis=0)
-    first_gate_m   = float(gate_centers_m[0])
+    # the first gate from every ray (first_ring), so a scan that measured
+    # spacing on a subset of rays still places its gates exactly as from
+    # the full grid
+    first_gate_m   = float(np.median(_haversine_inverse_polar(radar_lat, radar_lon, ring_lats, ring_lons)[0]))
     if num_rng > 1:
         gate_width_m = float(np.median(np.diff(gate_centers_m)))
     else:
@@ -461,8 +464,9 @@ def render_scan_to_png(
 
     # build the output PNG grid uniform in Web Mercator so MapLibre's image
     if crop_radius_m is not None:
-        radar_lat = float(scan.lats[:, 0].mean())
-        radar_lon = float(scan.lons[:, 0].mean())
+        ring_lats, ring_lons = scan.first_ring()
+        radar_lat = float(ring_lats.mean())
+        radar_lon = float(ring_lons.mean())
         cx, cy = _lonlat_to_merc(radar_lon, radar_lat)
         cx = float(cx)
         cy = float(cy)
@@ -471,7 +475,8 @@ def render_scan_to_png(
         y_min = cy - crop_radius_m
         y_max = cy + crop_radius_m
     else:
-        all_x, all_y = _lonlat_to_merc(scan.lons, scan.lats)
+        edge_lats, edge_lons = scan.extent_points()
+        all_x, all_y = _lonlat_to_merc(edge_lons, edge_lats)
         x_min = float(np.nanmin(all_x))
         x_max = float(np.nanmax(all_x))
         y_min = float(np.nanmin(all_y))
@@ -673,7 +678,8 @@ class RadarOverlay(QObject):
         )
 
         # build the output grid uniform in Web Mercator (see render_scan_to_png
-        all_x, all_y = _lonlat_to_merc(scan.lons, scan.lats)
+        edge_lats, edge_lons = scan.extent_points()
+        all_x, all_y = _lonlat_to_merc(edge_lons, edge_lats)
         x_min = float(np.nanmin(all_x))
         x_max = float(np.nanmax(all_x))
         y_min = float(np.nanmin(all_y))

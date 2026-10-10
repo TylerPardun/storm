@@ -442,6 +442,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _begin_archive_startup(self):
         """Called once the map is ready in archive mode."""
+        # keep the download caches bounded (raw lidar, NOXP); before this
+        # session downloads anything, so nothing it uses can be removed
+        threading.Thread(target=self._prune_download_caches, daemon=True, name="cache-prune").start()
         from archive.session import ArchiveSession
         from archive.time_controller import TimeController
         from archive.fetchers.radar_archive_fetcher import ArchiveRadarFetcher
@@ -5655,6 +5658,21 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._lidar_overlay_generation += 1
         self._lidar_overlay_key = None
         self._render_lidar_overlay()
+
+    @staticmethod
+    def _prune_download_caches() -> None:
+        from archive.fetchers.noxp_archive_fetcher import (
+            NOXP_CACHE_MAX_BYTES, RAW_LIDAR_CACHE_MAX_BYTES, prune_download_cache,
+        )
+        from archive.fetchers.noxp_radar_archive_fetcher import _NOXP_CACHE_DIR
+        from archive.fetchers.raw_lidar_quicklook_fetcher import _RAW_LIDAR_CACHE_DIR
+        for folder, cap in ((_RAW_LIDAR_CACHE_DIR, RAW_LIDAR_CACHE_MAX_BYTES), (_NOXP_CACHE_DIR, NOXP_CACHE_MAX_BYTES)):
+            try:
+                freed = prune_download_cache(folder, cap)
+                if freed:
+                    log.info("Download cache %s: removed %.0f MB of least recently used files", folder, freed / 1e6)
+            except Exception as exc:  # noqa: BLE001 - a cache is an optimization only
+                log.warning("Download cache %s not pruned: %s", folder, exc)
 
     def _on_lidar_min_intensity_changed(self, value) -> None:
         self._lidar_min_intensity = value

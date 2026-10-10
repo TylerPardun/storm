@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from collections import deque
@@ -490,6 +491,42 @@ def _record_session(url, provenance):
                    sha256=provenance.get("sha256"), size=provenance.get("bytes"))
 
 
+# Size caps for the download caches (raw lidar files, NOXP volumes), applied
+# at the start of each archive session. A lidar CSM day file can be ~350 MB.
+RAW_LIDAR_CACHE_MAX_BYTES = 3 * 1024 ** 3
+NOXP_CACHE_MAX_BYTES = 1 * 1024 ** 3
+
+
+def prune_download_cache(cache_dir, max_bytes: int) -> int:
+    """Delete the least recently used downloads (each file with its .json
+    provenance record) until the folder's downloads fit in max_bytes.
+    Indexes and other files are left alone. Returns the bytes freed."""
+    cache_dir = Path(cache_dir)
+    if not cache_dir.is_dir():
+        return 0
+    entries = []
+    for record in cache_dir.glob('*.json'):
+        data = record.with_suffix('')                   # "<sha>.cdf.json" -> "<sha>.cdf"
+        if data.suffix and data.is_file():
+            try:
+                stat = data.stat()
+                entries.append((stat.st_mtime, stat.st_size + record.stat().st_size, data, record))
+            except OSError:
+                continue
+    total = sum(size for _, size, _, _ in entries)
+    freed = 0
+    for _, size, data, record in sorted(entries, key=lambda e: e[0]):
+        if total - freed <= max_bytes:
+            break
+        try:
+            data.unlink()
+            record.unlink(missing_ok=True)
+            freed += size
+        except OSError:
+            continue
+    return freed
+
+
 def download_asset(url, cache_dir, cancel, filename, max_bytes=512 * 1024 * 1024):
     """Bounded atomic download with a content hash; never cache partial files."""
     import config
@@ -506,6 +543,10 @@ def download_asset(url, cache_dir, cancel, filename, max_bytes=512 * 1024 * 1024
         if valid:
             _check_cancel(cancel)
             _record_session(url, provenance)
+            try:
+                os.utime(path)            # recently used: prune_download_cache keeps it longest
+            except OSError:
+                pass
             return path, provenance
     from core import package_sources
     packaged = package_sources.get(url)       # an opened case package's copy (already hash-checked)

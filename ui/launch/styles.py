@@ -261,6 +261,10 @@ QComboBox {
        the popup matches the calendar month-popup's softer highlight. */
     selection-background-color: #123C50;
     selection-color: #9BE8FF;
+    /* A plain drop-down list below the field. macOS's default popup
+       opens over the field, centered on the current item, leaving blank
+       bands and scroll arrows in a height-capped list. */
+    combobox-popup: 0;
 }
 QComboBox:focus {
     border: 1px solid #00CFFF;

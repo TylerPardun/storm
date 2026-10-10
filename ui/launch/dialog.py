@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QToolButton, QFileDialog, QFrame,
     QApplication, QMessageBox, QSizePolicy, QWidget,
     QDateTimeEdit, QSpinBox, QComboBox, QCheckBox,
-    QCalendarWidget, QListWidget, QListWidgetItem, QScrollArea,
+    QCalendarWidget, QScrollArea,
 )
 from PyQt6.QtCore import (
     Qt, QSettings, QTimer, QSize, QDate, QDateTime, QPointF, QRectF, QObject, QEvent, pyqtSignal,
@@ -28,20 +28,9 @@ from ui.launch.styles import (
     _UPD_CURRENT, _UPD_ERROR, _UPD_SUCCESS, _UPD_WARNING, _YEAR_GRID_STYLE,
 )
 from ui.launch.availability import AvailabilityWorker
-from archive.catalog import CAMPAIGN_YEARS, platforms_by_site
+from ui.launch.date_finder import FindDatesDialog
 from data.update_checker import UpdateWorker
 from ui.launch.update_dialogs import _CondaUpdateDialog, _LogViewerDialog
-
-
-
-# Browse-panel instrument dropdown: how a KnownPlatform.site is labeled.
-# Single-family sites normally show their family for context (e.g. "FOFS
-# Mobile Mesonet" shortened to "Mobile Mesonet" here -- the raw family
-# string is a fetcher name, not something a user picking an instrument
-# needs); these sites already read as a complete name on their own and
-# skip that prefix even though they're single-family.
-_BROWSE_FAMILY_LABEL = {"FOFS Mobile Mesonet": "Mobile Mesonet"}
-_BROWSE_BARE_LABEL_SITES = {"NOXP", "NOXP Scout", "CopterSonde"}
 
 _PBKDF2_ITERATIONS = 600_000
 
@@ -95,13 +84,8 @@ def _calendar_glyph_icon(color: str = "#8E97AB", w: int = 16, h: int = 16) -> QI
 class _CircularProgress(QWidget):
     """Small circular progress ring for the archive catalog scan.
 
-    Originally added alongside a linear bar (_browse_coverage_progress)
-    inside the collapsible "browse" drawer, which starts collapsed -- easy
-    to never see, which reads as "nothing is happening" even though
-    AvailabilityIndex.scan() (archive/catalog.py) is genuinely progressive,
-    most-recent-year first. That bar has since been removed as redundant;
-    this wheel (next to the date picker, visible without expanding
-    anything) is the only progress indicator now.
+    Sits next to the date picker; AvailabilityIndex.scan()
+    (archive/catalog.py) is progressive, most-recent-year first.
     """
 
     def __init__(self, parent=None, diameter: int = 20):
@@ -331,7 +315,7 @@ class LaunchDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         # _post_layout_adjust() re-centers after every content-size change
-        # (switching modes, browse results changing height, ...), which
+        # (switching modes, the case label appearing, ...), which
         # otherwise silently discards a window position the user dragged
         # themselves -- these two flags make _recenter() a one-time "center
         # on first show" instead of "re-center on every layout pass."
@@ -645,6 +629,15 @@ class LaunchDialog(QDialog):
         self._open_case_btn.setStyleSheet(_link_style)
         self._open_case_btn.clicked.connect(self._on_open_case_clicked)
         action_row.addWidget(self._open_case_btn)
+
+        self._date_finder: FindDatesDialog | None = None
+        self._find_dates_btn = QPushButton("Find dates…")
+        self._find_dates_btn.setToolTip("Search archive dates by campaign, years, months and instruments")
+        self._find_dates_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._find_dates_btn.setFlat(True)
+        self._find_dates_btn.setStyleSheet(_link_style)
+        self._find_dates_btn.clicked.connect(self._open_date_finder)
+        action_row.addWidget(self._find_dates_btn)
         action_row.addStretch()
 
         self._availability_refresh_btn = QPushButton("↻  Refresh data")
@@ -674,8 +667,6 @@ class LaunchDialog(QDialog):
         av_layout.addLayout(case_row)
         self._archive_dt_edit.dateTimeChanged.connect(self._on_archive_dt_changed_for_case)
 
-        av_layout.addSpacing(8)
-        self._build_browse_section(av_layout)
 
         self._archive_section.setVisible(False)
         root.addWidget(self._archive_section)
@@ -938,7 +929,7 @@ class LaunchDialog(QDialog):
             self._style_calendar_nav_icons(popup)
 
         self._calendar_popup.setSelectedDate(self._archive_dt_edit.date())
-        self._calendar_popup.set_known_dates(self._filtered_dates())
+        self._calendar_popup.set_known_dates(self._known_dates())
         anchor = self._cal_btn
         pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
         self._calendar_popup.move(pos)
@@ -951,6 +942,19 @@ class LaunchDialog(QDialog):
         self._archive_dt_edit.setDateTime(QDateTime(qdate, current_time))
         if self._calendar_popup is not None:
             self._calendar_popup.hide()
+
+    def _open_date_finder(self):
+        if self._date_finder is None:
+            self._date_finder = FindDatesDialog(self)
+            self._date_finder.date_chosen.connect(self._on_found_date_chosen)
+        self._date_finder.set_snapshot(self._availability_snapshot)
+        self._date_finder.set_current_date(self._archive_dt_edit.date().toPyDate())
+        self._date_finder.show()
+        self._date_finder.raise_()
+        self._date_finder.activateWindow()
+
+    def _on_found_date_chosen(self, picked):
+        self._archive_dt_edit.setDate(QDate(picked.year, picked.month, picked.day))
 
     def _on_open_case_clicked(self):
         """Choose a case package; the date/time moves to the case and Launch
@@ -1000,10 +1004,7 @@ class LaunchDialog(QDialog):
 
     def _on_surprise_me_clicked(self):
         """Jump to a random date that actually has catalog data -- the same
-        pool the calendar shading draws from (AvailabilitySnapshot.dates,
-        unfiltered by the browse section's platform/year/campaign pickers,
-        since "surprise me" should draw from everything, not whatever
-        narrow filter happens to be set)."""
+        pool the calendar shading draws from (AvailabilitySnapshot.dates)."""
         snapshot = self._availability_snapshot
         dates = snapshot.dates if snapshot is not None else frozenset()
         if not dates:
@@ -1056,7 +1057,7 @@ class LaunchDialog(QDialog):
             self._year_grid_popup.hide()
             self._year_grid_popup.deleteLater()
         popup = _YearGridPopup(calendar.yearShown(), parent=self)
-        popup.set_known_years(d.year for d in self._filtered_dates())
+        popup.set_known_years(d.year for d in self._known_dates())
         popup.yearPicked.connect(lambda year, c=calendar: self._on_year_picked(c, year))
         pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
         popup.move(pos)
@@ -1082,119 +1083,6 @@ class LaunchDialog(QDialog):
 
     # -- Archive availability: progressive session metadata, automatic date queries --
 
-    def _build_browse_section(self, parent_layout: QVBoxLayout):
-        self._browse_toggle_btn = QPushButton("▸  BROWSE AVAILABLE CASES")
-        self._browse_toggle_btn.setObjectName("dataToggleBtn")
-        self._browse_toggle_btn.setFixedHeight(18)
-        self._browse_toggle_btn.clicked.connect(self._toggle_browse_section)
-        parent_layout.addWidget(self._browse_toggle_btn)
-        self._browse_section = QWidget()
-        self._browse_section.setMinimumWidth(360)
-        bs = QVBoxLayout(self._browse_section)
-        bs.setContentsMargins(0, 8, 0, 0)
-        bs.setSpacing(6)
-
-        filter_row = QHBoxLayout()
-        self._browse_campaign_combo = QComboBox()
-        self._browse_campaign_combo.addItem("Any Campaign", None)
-        self._browse_campaign_combo.setToolTip("Filter by campaign year; other campaigns may appear.")
-        for name in CAMPAIGN_YEARS:
-            self._browse_campaign_combo.addItem(name, name)
-        self._browse_year_combo = QComboBox()
-        self._populate_browse_year_combo(None)
-        self._browse_platform_combo = QComboBox()
-        self._browse_platform_combo.setMinimumContentsLength(24)
-        self._browse_platform_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        for combo in (self._browse_campaign_combo, self._browse_year_combo, self._browse_platform_combo):
-            combo.setCursor(Qt.CursorShape.PointingHandCursor)
-            # A flat list of 20+ years or sites is unusable as a plain
-            # drop-down -- cap the open popup's height and let it scroll.
-            # setMaxVisibleItems alone doesn't reliably cap a styled
-            # combo's popup (confirmed: it's ignored here even on a bare,
-            # unstyled QComboBox) -- setting the view's own maximum height
-            # is what actually constrains it.
-            combo.setMaxVisibleItems(10)
-            combo.view().setMaximumHeight(260)
-        filter_row.addWidget(self._browse_campaign_combo, 1)
-        filter_row.addWidget(self._browse_year_combo, 1)
-        bs.addLayout(filter_row)
-        self._populate_browse_platform_combo()
-        bs.addWidget(self._browse_platform_combo)
-        self._browse_status_lbl = QLabel()
-        self._browse_status_lbl.setObjectName("hint")
-        self._browse_status_lbl.setWordWrap(True)
-        bs.addWidget(self._browse_status_lbl)
-        self._browse_dates_list = QListWidget()
-        self._browse_dates_list.setObjectName("browseDatesList")
-        self._browse_dates_list.setFixedHeight(140)
-        self._browse_dates_list.itemClicked.connect(self._on_browse_date_chosen)
-        self._browse_dates_list.itemActivated.connect(self._on_browse_date_chosen)
-        bs.addWidget(self._browse_dates_list)
-        note = QLabel("Shaded calendar dates and cyan years mark catalog-listed data matching these filters. "
-                      "Unmarked dates may be unchecked.")
-        note.setObjectName("hint")
-        note.setWordWrap(True)
-        bs.addWidget(note)
-        self._browse_section.hide()
-        parent_layout.addWidget(self._browse_section)
-        self._browse_campaign_combo.currentIndexChanged.connect(self._on_browse_campaign_changed)
-        self._browse_year_combo.currentIndexChanged.connect(self._render_availability)
-        self._browse_platform_combo.currentIndexChanged.connect(self._render_availability)
-
-    def _toggle_browse_section(self):
-        visible = self._browse_section.isHidden()
-        self._browse_section.setVisible(visible)
-        self._browse_toggle_btn.setText("▾  BROWSE AVAILABLE CASES" if visible else "▸  BROWSE AVAILABLE CASES")
-        self._layout_timer.start(0)
-
-    def _populate_browse_year_combo(self, campaign):
-        self._browse_year_combo.blockSignals(True)
-        self._browse_year_combo.clear()
-        self._browse_year_combo.addItem("Any year", None)
-        # No future years -- consistent with the day-grid calendar and
-        # year-grid popup, neither of which can show a day/year that
-        # hasn't happened yet.
-        years = CAMPAIGN_YEARS.get(campaign, ()) if campaign else range(1999, QDate.currentDate().year() + 1)
-        for year in years:
-            self._browse_year_combo.addItem(str(year), year)
-        self._browse_year_combo.blockSignals(False)
-
-    def _on_browse_campaign_changed(self):
-        self._populate_browse_year_combo(self._browse_campaign_combo.currentData())
-        self._render_availability()
-
-    def _populate_browse_platform_combo(self):
-        """(Re)build the instrument dropdown, narrowed to sites with a
-        known date under the current campaign/year filters -- called from
-        _render_availability() so it tracks every trigger that can change
-        those filters or the availability snapshot itself, in whatever
-        order the user clicked them in. With no filter active (or before
-        any snapshot exists to narrow by), every site is listed."""
-        combo = self._browse_platform_combo
-        previous = combo.currentText() if combo.count() else None
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItem("All instruments", None)
-        snapshot = self._availability_snapshot
-        year = self._browse_year_combo.currentData()
-        campaign_years = CAMPAIGN_YEARS.get(self._browse_campaign_combo.currentData())
-        narrowing = snapshot is not None and (year is not None or campaign_years is not None)
-        for site, plats in sorted(platforms_by_site().items()):
-            if narrowing:
-                site_dates = (d for p in plats for d in getattr(snapshot.platforms.get(p.platform_id), 'dates', ()))
-                if not any((year is None or d.year == year)
-                           and (campaign_years is None or d.year in campaign_years) for d in site_dates):
-                    continue
-            families = sorted({p.family for p in plats})
-            label = site if (len(families) > 1 or site in _BROWSE_BARE_LABEL_SITES) \
-                else f"{_BROWSE_FAMILY_LABEL.get(families[0], families[0])} — {site}"
-            index = combo.count()
-            combo.addItem(label, plats)
-            combo.setItemData(index, ", ".join(families), Qt.ItemDataRole.ToolTipRole)
-        restored = combo.findText(previous) if previous else -1
-        combo.setCurrentIndex(restored if restored >= 0 else 0)
-        combo.blockSignals(False)
-
     def showEvent(self, event):
         super().showEvent(event)
         self._schedule_availability()
@@ -1204,6 +1092,8 @@ class LaunchDialog(QDialog):
         self._availability_timer.stop()
         self._layout_timer.stop()
         self._availability.cancel()
+        if self._date_finder is not None:
+            self._date_finder.close()
         super().hideEvent(event)
 
     def _schedule_availability(self):
@@ -1240,50 +1130,25 @@ class LaunchDialog(QDialog):
                 if (pid, error) not in previous_errors:
                     logging.getLogger(__name__).warning("Archive availability [%s]: %s", pid, error)
         self._availability_snapshot = snapshot
+        if self._date_finder is not None:
+            self._date_finder.set_snapshot(snapshot)
         self._render_availability()
 
-    def _filtered_dates(self):
+    def _known_dates(self):
+        # every known date; searching by instrument, campaign or month is
+        # the Find dates window's job (ui/launch/date_finder.py)
         snapshot = self._availability_snapshot
-        if snapshot is None:
-            return frozenset()
-        # currentData() is None ("All instruments") or the list of
-        # KnownPlatform for one vehicle/site -- union every product that
-        # vehicle carries (see platforms_by_site()), not just one.
-        platforms = self._browse_platform_combo.currentData()
-        if platforms:
-            dates = frozenset(
-                d for p in platforms
-                for d in getattr(snapshot.platforms.get(p.platform_id), 'dates', ())
-            )
-        else:
-            dates = snapshot.dates
-        year = self._browse_year_combo.currentData()
-        campaign = self._browse_campaign_combo.currentData()
-        return frozenset(d for d in dates if (year is None or d.year == year)
-                         and (campaign is None or d.year in CAMPAIGN_YEARS[campaign]))
+        return snapshot.dates if snapshot is not None else frozenset()
 
     def _render_availability(self):
         snapshot = self._availability_snapshot
-        target = self._archive_dt_edit.date().toPyDate()
-        # Narrow the instrument list to the current campaign/year filters
-        # before reading the platform selection back out below -- if the
-        # previously-selected site no longer matches, this already fell
-        # back to "All instruments".
-        self._populate_browse_platform_combo()
-        dates = self._filtered_dates()
+        dates = self._known_dates()
         self._archive_dt_edit.calendarWidget().set_known_dates(dates)
         if self._calendar_popup is not None:
             self._calendar_popup.set_known_dates(dates)
         years = {d.year for d in dates}
         if self._year_grid_popup is not None:
             self._year_grid_popup.set_known_years(years)
-        for i in range(1, self._browse_year_combo.count()):
-            year = self._browse_year_combo.itemData(i)
-            self._browse_year_combo.setItemData(i, QColor("#00CFFF" if year in years else "#E8EAF0"), Qt.ItemDataRole.ForegroundRole)
-        self._browse_platform_combo.setToolTip(self._browse_platform_combo.currentText())
-        self._browse_status_lbl.setText(
-            f"{len(dates)} known dates in {len(years)} years — matching dates are shaded on the calendar above."
-        )
         running = snapshot is None or snapshot.checked < snapshot.total
         self._archive_scan_progress.setVisible(running)
         self._archive_scan_progress.setRange(0, snapshot.total if snapshot else 0)
@@ -1291,28 +1156,7 @@ class LaunchDialog(QDialog):
         self._archive_scan_progress.setToolTip(
             f"Finding dates · {snapshot.checked}/{snapshot.total} catalogs" if snapshot else "Finding dates…"
         )
-        # Preserve scroll position and selection when only coverage progress changed.
-        listed = tuple(self._browse_dates_list.item(i).data(Qt.ItemDataRole.UserRole)
-                       for i in range(self._browse_dates_list.count()))
-        ordered = tuple(sorted(dates, reverse=True))
-        if listed != ordered:
-            scroll = self._browse_dates_list.verticalScrollBar().value()
-            self._browse_dates_list.clear()
-            for d in ordered:
-                item = QListWidgetItem(d.isoformat())
-                item.setData(Qt.ItemDataRole.UserRole, d)
-                self._browse_dates_list.addItem(item)
-                if d == target:
-                    self._browse_dates_list.setCurrentItem(item)
-            self._browse_dates_list.verticalScrollBar().setValue(scroll)
-        target_row = ordered.index(target) if target in dates else -1
-        if self._browse_dates_list.currentRow() != target_row:
-            self._browse_dates_list.setCurrentRow(target_row)
         self._layout_timer.start(0)
-
-    def _on_browse_date_chosen(self, item):
-        picked = item.data(Qt.ItemDataRole.UserRole)
-        self._archive_dt_edit.setDate(QDate(picked.year, picked.month, picked.day))
 
     def _set_fields_locked(self, locked: bool):
         self._vid_input.setReadOnly(locked)

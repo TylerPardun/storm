@@ -615,6 +615,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._lidar_awaiting_first_render = False
         self._lidar_overlay = None
         self._lidar_overlay_field = None
+        self._lidar_min_intensity = None      # RAW LIDAR intensity filter; None draws every cell
         self._lidar_sites = {}               # trailer -> recorded site (header of its files)
         self._lidar_files_by = {}            # instrument -> its loaded files (RawLidarRays with .scans)
         self._lidar_large_by = {}            # instrument -> files held back for size (loaded once chosen)
@@ -1758,6 +1759,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.btn_raw_lidar.toggled.connect(self._show_lidar_locations)
             self.raw_lidar_controls.availability_changed.connect(self._on_raw_lidar_availability)
             self.raw_lidar_controls.field_selected.connect(self._on_raw_lidar_field_selected)
+            self.raw_lidar_controls.min_intensity_changed.connect(self._on_lidar_min_intensity_changed)
             self.raw_lidar_controls.data_toggled.connect(self._on_lidar_data_toggled)
             self.raw_lidar_controls.location_requested.connect(self._center_on_lidar_location)
             self.raw_lidar_controls.radar_visible_toggled.connect(self.map_widget.set_radar_visible)
@@ -5652,6 +5654,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._lidar_overlay_key = None
         self._render_lidar_overlay()
 
+    def _on_lidar_min_intensity_changed(self, value) -> None:
+        self._lidar_min_intensity = value
+        self._lidar_overlay_generation += 1
+        self._lidar_overlay_key = None
+        self._render_lidar_overlay()
+
     def _on_time_changed_update_lidar_overlay(self, _t) -> None:
         if not self._lidar_instrument:
             return
@@ -5668,7 +5676,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._maybe_end_lidar_location_loading()
             return
         scan = scan_at(self._lidar_scans, self._time_ctrl.current_time)
-        key = (id(scan) if scan is not None else None, self._lidar_overlay_field or "velocity")
+        key = (id(scan) if scan is not None else None, self._lidar_overlay_field or "velocity",
+               self._lidar_min_intensity)
         if key == self._lidar_overlay_key:
             return
         self._lidar_overlay_generation += 1
@@ -5680,11 +5689,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         threading.Thread(
             target=self._bg_render_lidar_overlay,
             args=(scan, self._time_ctrl.current_time,
-                  self._lidar_overlay_field or "velocity", self._lidar_overlay_generation),
+                  self._lidar_overlay_field or "velocity", self._lidar_overlay_generation,
+                  self._lidar_min_intensity),
             daemon=True,
         ).start()
 
-    def _bg_render_lidar_overlay(self, scan, when, field: str, generation: int) -> None:
+    def _bg_render_lidar_overlay(self, scan, when, field: str, generation: int, min_intensity=None) -> None:
         """Runs in a background thread — NOT on the main thread. Draws one
         PPI / CSM sweep (core/lidar_scans.scan_at), or reports there's none."""
         from ui.map.lidar_overlay import render_lidar_to_png
@@ -5696,7 +5706,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if field not in rays.fields:
             field = "velocity" if "velocity" in rays.fields else next(iter(rays.fields))
         try:
-            png, bounds, metadata = render_lidar_to_png(rays, when, field, RENDER_GRID_SIZE, ray_indices=scan.indices)
+            png, bounds, metadata = render_lidar_to_png(rays, when, field, RENDER_GRID_SIZE, ray_indices=scan.indices,
+                                                        min_intensity=min_intensity)
         except ValueError as exc:
             self._lidar_overlay_render_ready.emit({"error": str(exc), "generation": generation})
             return

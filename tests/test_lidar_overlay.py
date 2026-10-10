@@ -184,3 +184,25 @@ def test_all_native_fields_render_with_their_own_units():
     assert metadata['vmin'] < metadata['vmax']
 
 
+
+
+def test_min_intensity_hides_cells_below_the_threshold():
+    rays = _ppi_rays()
+    n_rays = len(rays.time_epoch)
+    # intensity rises with range: 1.000 at the first gate (noise) to 1.040 at the last
+    rays.fields["intensity"] = {"data": np.tile(np.linspace(1.0, 1.04, 5), (n_rays, 1)).astype(np.float32),
+                                "units": ""}
+    drawn = lambda **kw: (np.asarray(Image.open(BytesIO(render_lidar_to_png(rays, _WHEN, grid_size=256, **kw)[0])))
+                          [:, :, 3] > 0).sum()
+    every, filtered = drawn(), drawn(min_intensity=1.015)
+    assert 0 < filtered < every                       # the near (noise) gates are gone, the rest drawn
+    assert drawn(min_intensity=1.05) == 0             # above every cell: nothing left
+    _, _, metadata = render_lidar_to_png(rays, _WHEN, grid_size=256, min_intensity=1.015)
+    assert metadata["min_intensity"] == 1.015
+
+
+def test_min_intensity_is_ignored_without_an_intensity_field():
+    rays = _ppi_rays()
+    plain = render_lidar_to_png(rays, _WHEN, grid_size=256)
+    with_threshold = render_lidar_to_png(rays, _WHEN, grid_size=256, min_intensity=1.02)
+    assert plain[0] == with_threshold[0] and with_threshold[2]["min_intensity"] is None

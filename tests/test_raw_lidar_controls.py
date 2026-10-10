@@ -92,3 +92,20 @@ def test_show_data_toggles_the_lidar_scans_and_hides_the_radar_switch_when_off()
     assert shown == [False] and not controls.data_is_on() and controls._chk_radar.isHidden()
     controls.set_data_on(True)
     assert shown == [False, True] and not controls._chk_radar.isHidden()
+
+
+def test_intensity_filter_is_off_until_moved_and_needs_an_intensity_field():
+    controls, _, _ = _controls({})
+    sent = []
+    controls.min_intensity_changed.connect(sent.append)
+    assert controls.min_intensity() is None and controls._intensity_value.text() == "off"
+    controls.set_fields({"velocity": "m/s"})
+    assert not controls._intensity_slider.isEnabled()            # nothing to filter by
+    controls.set_fields({"velocity": "m/s", "intensity": ""})
+    assert controls._intensity_slider.isEnabled()
+    controls._intensity_slider.setValue(12)
+    assert controls._intensity_value.text() == "1.012" and controls.min_intensity() == 1.012
+    controls._intensity_timer.timeout.emit()                     # the debounce firing
+    assert sent == [1.012]
+    controls._intensity_slider.setValue(0)
+    assert controls.min_intensity() is None and controls._intensity_value.text() == "off"

@@ -17,8 +17,8 @@ Two kinds of instrument, named plainly:
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QToolButton, QWidget
+from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QSlider, QToolButton, QWidget
 
 INSTRUMENT_NAMES = {
     "DLTRUCK1": "Lidar truck",
@@ -39,6 +39,7 @@ class RawLidarControls(QWidget):
     radar_visible_toggled(bool)  radar under the lidar on/off
     location_requested()         the chosen lidar's button: center the map on it
     availability_changed(bool)   any lidar data for this date
+    min_intensity_changed(object) hide cells below this intensity (SNR + 1); None: show all
     """
 
     field_selected = pyqtSignal(str)
@@ -46,6 +47,12 @@ class RawLidarControls(QWidget):
     radar_visible_toggled = pyqtSignal(bool)
     location_requested = pyqtSignal()
     availability_changed = pyqtSignal(bool)
+    min_intensity_changed = pyqtSignal(object)
+
+    # intensity filter: slider steps of 0.001 above 1.000 (noise sits near
+    # 1.000 +- 0.005; returns are above ~1.01). 0 = off.
+    INTENSITY_STEP = 0.001
+    INTENSITY_MAX_STEPS = 100
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -103,9 +110,51 @@ class RawLidarControls(QWidget):
         self._chk_radar.setToolTip("Show the radar under the lidar")
         self._chk_radar.toggled.connect(self.radar_visible_toggled.emit)
         row.addWidget(self._chk_radar)
+
+        row.addSpacing(10)
+        self._intensity_title = QLabel("Min intensity")
+        self._intensity_title.setObjectName("deployLocsSliderLabel")
+        row.addWidget(self._intensity_title)
+        self._intensity_slider = QSlider(Qt.Orientation.Horizontal)
+        self._intensity_slider.setObjectName("deployLocsSlider")
+        self._intensity_slider.setRange(0, self.INTENSITY_MAX_STEPS)
+        self._intensity_slider.setFixedWidth(130)
+        self._intensity_slider.setToolTip(
+            "Hide cells whose intensity (the file's SNR + 1) is below this value -- the noise beyond the "
+            "aerosol layer. Noise sits near 1.000; about 1.005-1.02 usually clears it. Off (all the way "
+            "left) shows every cell, as recorded.")
+        self._intensity_slider.valueChanged.connect(self._on_intensity_moved)
+        row.addWidget(self._intensity_slider)
+        self._intensity_value = QLabel()
+        self._intensity_value.setObjectName("deployLocsSliderLabel")
+        self._intensity_value.setMinimumWidth(36)
+        row.addWidget(self._intensity_value)
+        # re-render once the slider settles, not on every step of a drag
+        self._intensity_timer = QTimer(self)
+        self._intensity_timer.setSingleShot(True)
+        self._intensity_timer.setInterval(250)
+        self._intensity_timer.timeout.connect(lambda: self.min_intensity_changed.emit(self.min_intensity()))
+        self._on_intensity_moved(0, emit=False)
+        self._set_intensity_available(False)
         row.addStretch()
 
         outer.addWidget(self._drawer)
+
+    # ---- intensity filter -------------------------------------------------
+    def min_intensity(self) -> float | None:
+        steps = self._intensity_slider.value()
+        return round(1.0 + steps * self.INTENSITY_STEP, 3) if steps and self._intensity_slider.isEnabled() else None
+
+    def _on_intensity_moved(self, steps: int, emit: bool = True) -> None:
+        self._intensity_value.setText(f"{1.0 + steps * self.INTENSITY_STEP:.3f}" if steps else "off")
+        if emit:
+            self._intensity_timer.start()
+
+    def _set_intensity_available(self, available: bool) -> None:
+        """Only lidars whose files carry an intensity field can be filtered."""
+        for widget in (self._intensity_title, self._intensity_slider, self._intensity_value):
+            widget.setEnabled(available)
+        self._intensity_title.setToolTip("" if available else "This lidar's files have no intensity field")
 
     def toggle_drawer(self, checked: bool) -> None:
         if checked:
@@ -196,6 +245,7 @@ class RawLidarControls(QWidget):
         self._field_combo.setCurrentIndex(index)
         self._field_combo.blockSignals(False)
         self._field_combo.setEnabled(bool(fields))
+        self._set_intensity_available("intensity" in fields)
         if current != self._field_combo.currentData():
             self._on_field_changed()
 

@@ -7,8 +7,13 @@ from PIL import Image, ImageDraw
 from pyproj import Geod, Transformer
 
 
-def render_lidar_to_png(rays, when, field='velocity', grid_size=768, *, ray_indices=None, style=None):
+def render_lidar_to_png(rays, when, field='velocity', grid_size=768, *, ray_indices=None, style=None,
+                        min_intensity=None):
     """Return PNG, geographic bounds and acquisition metadata.
+
+    min_intensity: hide cells whose intensity (the file's SNR + 1 field) is
+    below it -- the noise floor beyond the aerosol layer. None draws every
+    cell, as the file has it (STORM applies no threshold unless asked).
 
     Azimuth is used as declared in the file, without an additional heading
     rotation. Angular cell widths describe sampling support, not beam width.
@@ -83,6 +88,10 @@ def render_lidar_to_png(rays, when, field='velocity', grid_size=768, *, ray_indi
     xmin, xmax, ymin, ymax = cx-span/2, cx+span/2, cy-span/2, cy+span/2
     pixels = [((x-xmin)/span*(grid_size-1), (ymax-y)/span*(grid_size-1)) for x, y in corners]
     data = np.ma.masked_invalid(rays.fields[field]['data'][idx])
+    if min_intensity is not None and 'intensity' in rays.fields:
+        intensity = np.asarray(rays.fields['intensity']['data'][idx], dtype=np.float32)
+        with np.errstate(invalid='ignore'):
+            data = np.ma.masked_where(~(intensity >= min_intensity), data)   # NaN intensity hidden too
     from ui.map.radar_overlay import NWS_VEL_CMAP
     from matplotlib import colormaps
     from matplotlib.colors import Normalize
@@ -118,6 +127,7 @@ def render_lidar_to_png(rays, when, field='velocity', grid_size=768, *, ray_indi
         'rays': len(idx), 'field': field, 'units': rays.fields[field].get('units',''),
         'vmin': float(lo), 'vmax': float(hi), 'azimuth_reference': 'file-declared north',
         'additional_velocity_motion_correction': False,
+        'min_intensity': min_intensity if 'intensity' in rays.fields else None,
     }
 
 

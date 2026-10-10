@@ -407,6 +407,15 @@ QToolButton#spcDayPopupButton:checked {
     color: #B5BDCC;
     font-size: 10px;
 }
+#floatingToolbar QLabel#deployLocsSliderLabel:disabled {
+    color: #4A5064;
+}
+#floatingToolbar QSlider#deployLocsSlider::sub-page:horizontal:disabled {
+    background: #2E2E4E;
+}
+#floatingToolbar QSlider#deployLocsSlider::handle:horizontal:disabled {
+    background: #4A5064;
+}
 
 #floatingToolbar QWidget#deployLocsSizeRow {
     background: transparent;

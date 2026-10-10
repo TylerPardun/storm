@@ -20,6 +20,7 @@ class MapBridge(QObject):
     sounding_clicked             = pyqtSignal(float, float)
     obs_sounding_station_clicked = pyqtSignal(str, str, float, float, float)  # id, name, lat, lon, elev
     asos_bbox_selected = pyqtSignal(float, float, float, float)
+    asos_box_cancelled = pyqtSignal()
     user_dragged          = pyqtSignal()
     map_pick_for_route    = pyqtSignal(float, float)
     annotation_drag_ended = pyqtSignal(str, float, float)  # id, lat, lon
@@ -161,6 +162,11 @@ class MapBridge(QObject):
             )
         except Exception:
             pass
+
+    @pyqtSlot()
+    def on_asos_box_cancelled(self):
+        """Called from JS when the user backs out of drawing a box (Esc / right-click)."""
+        QTimer.singleShot(0, self.asos_box_cancelled.emit)
 
     @pyqtSlot()
     def on_user_drag(self):

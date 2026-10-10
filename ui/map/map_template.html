@@ -180,6 +180,25 @@
        inline cursor as the mouse crosses features, which fell back to
        MapLibre's grab hand. */
     #map.box-draw-mode .maplibregl-canvas { cursor: crosshair !important; }
+    /* What to do while box-draw mode is on: the toolbar button alone
+       doesn't say a box has to be drawn before anything appears. */
+    #box-draw-hint {
+      display: none;
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 210;
+      padding: 7px 14px;
+      border-radius: 6px;
+      border: 1px solid __ACCENT_COLOR__;
+      background: rgba(10, 10, 20, 0.92);
+      color: #E8EAF0;
+      font: 600 12px -apple-system, "Segoe UI", sans-serif;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    #box-draw-hint .muted { color: #8E97AB; font-weight: 400; }
 
     #damage-path-tooltip {
       display: none;
@@ -452,6 +471,7 @@
 
   <!-- ── Damage Path Hover Readout (EF scale, times, length/width/wind) ── -->
   <div id="damage-path-tooltip"></div>
+  <div id="box-draw-hint"></div>
 
   <!-- ── Storm-Track Edit-Mode Banner ── -->
   <div id="track-edit-banner">TRACK EDIT — click: add (moves the point already at this frame) · drag: move (Alt keeps its time) · right-click: marker · A: add at marker · D: delete · Shift: no snapping · Ctrl+Z: undo</div>
@@ -3841,11 +3861,24 @@
       window._stormAsosActive = false;
       window._stormAsosStart = null;
       map.getContainer().classList.remove('box-draw-mode');
+      var hint = document.getElementById('box-draw-hint');
+      if (hint) hint.style.display = 'none';
       _clearAsosSelectionCanvas();
       _restoreAsosMapInteractions();
     }
 
-    window.stormSetAsosBoxMode = function(active) {
+    // The user backed out of drawing (Esc or right-click): tell Python so
+    // the toolbar button doesn't stay lit with nothing to show.
+    function _userCancelledAsosBox() {
+      _cancelAsosBoxMode();
+      if (bridge && bridge.on_asos_box_cancelled) {
+        setTimeout(function() {
+          try { bridge.on_asos_box_cancelled(); } catch(ex) { console.log('ASOS cancel bridge error', ex); }
+        }, 0);
+      }
+    }
+
+    window.stormSetAsosBoxMode = function(active, hintText) {
       var fc = document.getElementById('front-canvas');
       if (!fc) return;
       var ctx = fc.getContext('2d');
@@ -3871,16 +3904,25 @@
         map.dragPan.disable();
         mc.style.cursor = 'crosshair';
         map.getContainer().classList.add('box-draw-mode');
+        var hint = document.getElementById('box-draw-hint');
+        if (hint && hintText) {
+          hint.textContent = hintText;
+          var muted = document.createElement('span');
+          muted.className = 'muted';
+          muted.textContent = '  ·  Esc or right-click to cancel';
+          hint.appendChild(muted);
+          hint.style.display = 'block';
+        }
 
         window.addEventListener('keydown', window._stormAsosKeyDownDOM = function(ev) {
-          if (ev.key === 'Escape') _cancelAsosBoxMode();
+          if (ev.key === 'Escape') _userCancelledAsosBox();
         });
         window.addEventListener('blur', window._stormAsosBlurDOM = function() {
           _cancelAsosBoxMode();
         });
         mc.addEventListener('contextmenu', window._stormAsosContextMenuDOM = function(ev) {
           ev.preventDefault();
-          _cancelAsosBoxMode();
+          _userCancelledAsosBox();
         });
 
         mc.addEventListener('mousedown', window._stormAsosMouseDownDOM = function(ev) {
@@ -3913,13 +3955,21 @@
           window.addEventListener('mouseup', window._stormAsosMouseUpDOM = function(uev) {
             uev.preventDefault();
             var s  = window._stormAsosStart;
-            _cancelAsosBoxMode();
-            if (!s) return;
+            if (!s) { _cancelAsosBoxMode(); return; }
             var endPx  = { x: uev.clientX - rect.left, y: uev.clientY - rect.top };
             var endLL  = map.unproject([endPx.x, endPx.y]);
             var west   = Math.min(s[0], endLL.lng), east  = Math.max(s[0], endLL.lng);
             var south  = Math.min(s[1], endLL.lat), north = Math.max(s[1], endLL.lat);
-            if (Math.abs(east - west) < 0.01 || Math.abs(north - south) < 0.01) return;
+            if (Math.abs(east - west) < 0.01 || Math.abs(north - south) < 0.01) {
+              // a click, not a box: stay in draw mode and let them try again
+              window.removeEventListener('mousemove', window._stormAsosMouseMoveDOM);
+              window._stormAsosMouseMoveDOM = null;
+              window._stormAsosMouseUpDOM = null;
+              window._stormAsosStart = null;
+              _clear();
+              return;
+            }
+            _cancelAsosBoxMode();
             if (bridge && bridge.on_asos_bbox) {
               setTimeout(function() {
                 try { bridge.on_asos_bbox(west, south, east, north); }

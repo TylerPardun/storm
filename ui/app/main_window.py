@@ -109,6 +109,9 @@ from ui.app.main_window_map_helpers import MainWindowMapHelpersMixin
 log = logging.getLogger(__name__)
 
 SCAN_MOVE_THRESHOLD_KM = 0.1
+# shown at the top of the map while a box is being drawn
+ASOS_BOX_HINT = "Drag a box on the map to load ASOS stations"
+DAMAGE_BOX_HINT = "Drag a box on the map to find NWS damage-survey paths"
 SCAN_MOVE_FIXES_TO_STOP = 3
 LIVE_RADAR_MAX_AGE_MINUTES = 45
 VEHICLE_PANEL_WIDTH = 340
@@ -673,6 +676,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._archive_damage_paths.paths_ready.connect(self._on_archive_damage_paths_ready)
             self._watch_worker_errors(self._archive_damage_paths, self._archive_damage_paths.error, "Damage paths")
             self.map_widget.asos_bbox_selected.connect(self._on_archive_damage_paths_bbox_selected)
+        self.map_widget.asos_box_cancelled.connect(self._on_archive_box_cancelled)
 
         # radar overlay (reuses existing renderer).
         self._radar_overlay = RadarOverlay(self.map_widget)
@@ -3740,6 +3744,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.surface_controls.plots_toggled.connect(self._surface_layer.set_visible)
 
         self.map_widget.asos_bbox_selected.connect(self._on_asos_bbox_selected)
+        self.map_widget.asos_box_cancelled.connect(self._on_live_asos_box_cancelled)
         self._surface_fetcher.observations_updated.connect(self._on_surface_observations_updated)
         self._surface_fetcher.status_updated.connect(self.surface_controls.set_status)
         self._surface_fetcher.diagnostics_updated.connect(self.surface_controls.set_diagnostics)
@@ -5007,7 +5012,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._surface_fetcher.set_asos_enabled(enabled)
         self._set_layer_active("asos", enabled)
         if enabled and self._surface_fetcher._asos_bbox is None:
-            self.map_widget.set_asos_bbox_mode(True)
+            self.map_widget.set_asos_bbox_mode(True, ASOS_BOX_HINT)
         elif not enabled:
             self.map_widget.set_asos_bbox_mode(False)
             self._remove_surface_source_plots("asos")
@@ -5034,7 +5039,13 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._surface_fetcher.set_asos_enabled(True)
             self._set_layer_active("asos", True)
         self.status_msg_label.setText("ASOS: draw a new bounding box")
-        self.map_widget.set_asos_bbox_mode(True)
+        self.map_widget.set_asos_bbox_mode(True, ASOS_BOX_HINT)
+
+    def _on_live_asos_box_cancelled(self):
+        """Esc / right-click while drawing: with no box yet, ASOS has nothing to show, so turn it off."""
+        if self._surface_fetcher._asos_bbox is None and self.surface_controls.asos_enabled():
+            self.surface_controls.set_asos_enabled(False)
+            self.status_msg_label.setText("ASOS: box canceled")
 
     def _on_asos_bbox_selected(self, west: float, south: float, east: float, north: float):
         """Triggered when user finishes an ASOS bbox selection on the map."""
@@ -5743,7 +5754,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if checked:
             if not self._archive_asos_station_ids:
                 self.status_msg_label.setText("ASOS: draw a bounding box")
-                self.map_widget.set_asos_bbox_mode(True)
+                self.map_widget.set_asos_bbox_mode(True, ASOS_BOX_HINT)
             return
         self.map_widget.set_asos_bbox_mode(False)
         self.map_widget.run_js(
@@ -5752,6 +5763,18 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if self._archive_asos is not None:
             self._archive_asos.clear()
         self._clear_archive_asos_plots()
+
+    def _on_archive_box_cancelled(self) -> None:
+        """Esc / right-click while drawing: un-press whichever button was
+        waiting for a box, so it doesn't stay lit with nothing to show."""
+        btn = getattr(self, "btn_archive_asos", None)
+        if btn is not None and btn.isChecked() and not getattr(self, "_archive_asos_station_ids", None):
+            btn.setChecked(False)
+            self.status_msg_label.setText("ASOS: box canceled")
+        btn = getattr(self, "btn_damage_paths", None)
+        if btn is not None and btn.isChecked() and not getattr(self, "_archive_damage_paths_showing", False):
+            btn.setChecked(False)
+            self.status_msg_label.setText("Damage paths: box canceled")
 
     def _clear_archive_asos_plots(self) -> None:
         self._archive_asos_render_generation += 1
@@ -5867,7 +5890,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if checked:
             if not self._archive_damage_paths_showing:
                 self.status_msg_label.setText("Damage paths: draw a bounding box")
-                self.map_widget.set_asos_bbox_mode(True)
+                self.map_widget.set_asos_bbox_mode(True, DAMAGE_BOX_HINT)
             return
         self.map_widget.set_asos_bbox_mode(False)
         self.map_widget.run_js(

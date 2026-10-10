@@ -146,6 +146,7 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
     sounding_clicked             = pyqtSignal(float, float)
     obs_sounding_station_clicked = pyqtSignal(str, str, float, float, float)  # id, name, lat, lon, elev
     asos_bbox_selected    = pyqtSignal(float, float, float, float)  # west, south, east, north
+    asos_box_cancelled    = pyqtSignal()                            # Esc / right-click while drawing
     user_dragged          = pyqtSignal()
     map_pick_for_route    = pyqtSignal(float, float)
     cwa_loaded            = pyqtSignal()
@@ -226,6 +227,7 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         self.bridge.sounding_clicked.connect(self.sounding_clicked)
         self.bridge.obs_sounding_station_clicked.connect(self.obs_sounding_station_clicked)
         self.bridge.asos_bbox_selected.connect(self.asos_bbox_selected)
+        self.bridge.asos_box_cancelled.connect(self.asos_box_cancelled)
         self.bridge.user_dragged.connect(self.user_dragged)
         self.bridge.map_pick_for_route.connect(self.map_pick_for_route)
         self.bridge.track_point_add_requested.connect(self.track_point_add_requested)
@@ -879,10 +881,12 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
             f"{'true' if line else 'false'}, {'true' if points else 'false'});"
         )
 
-    def set_asos_bbox_mode(self, active: bool) -> None:
-        """Toggle JS rectangle-selection mode for ASOS bbox selection."""
+    def set_asos_bbox_mode(self, active: bool, hint: str = "") -> None:
+        """Toggle JS rectangle-selection mode (ASOS / damage-path boxes);
+        `hint` is shown at the top of the map while drawing."""
+        import json as _json
         flag = 'true' if active else 'false'
-        self.run_js(f"if(window.stormSetAsosBoxMode) stormSetAsosBoxMode({flag});")
+        self.run_js(f"if(window.stormSetAsosBoxMode) stormSetAsosBoxMode({flag}, {_json.dumps(hint)});")
 
 
     def add_station_plot(self, vehicle_id: str, lat: float, lon: float, png_bytes: bytes) -> None:

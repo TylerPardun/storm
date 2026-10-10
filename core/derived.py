@@ -28,24 +28,24 @@ class Quantity:
     key: str
     label: str
     units: str
-    colormap: str          # "thermal" (sequential) or "diverging"
+    colormap: str          # a core/trails.py _RAMPS key: the kind of quantity, or "diverging"
     needs_track: bool = False
 
 
 QUANTITIES: dict[str, Quantity] = {q.key: q for q in (
-    Quantity("temperature", "Temperature", "°C", "thermal"),
-    Quantity("dewpoint", "Dewpoint", "°C", "thermal"),
-    Quantity("rh", "Relative humidity", "%", "thermal"),
-    Quantity("pressure", "Pressure", "hPa", "thermal"),
-    Quantity("wind_speed", "Wind speed", "m/s", "thermal"),
-    Quantity("theta", "Potential temperature θ", "K", "thermal"),
-    Quantity("theta_v", "Virtual potential temperature θv", "K", "thermal"),
-    Quantity("theta_e", "Equivalent potential temperature θe", "K", "thermal"),
-    Quantity("theta_w", "Wet-bulb potential temperature θw", "K", "thermal"),
-    Quantity("mixing_ratio", "Mixing ratio", "g/kg", "thermal"),
+    Quantity("temperature", "Temperature", "°C", "temperature"),
+    Quantity("dewpoint", "Dewpoint", "°C", "moisture"),
+    Quantity("rh", "Relative humidity", "%", "moisture"),
+    Quantity("pressure", "Pressure", "hPa", "pressure"),
+    Quantity("wind_speed", "Wind speed", "m/s", "wind"),
+    Quantity("theta", "Potential temperature θ", "K", "temperature"),
+    Quantity("theta_v", "Virtual potential temperature θv", "K", "temperature"),
+    Quantity("theta_e", "Equivalent potential temperature θe", "K", "theta_e"),
+    Quantity("theta_w", "Wet-bulb potential temperature θw", "K", "theta_e"),
+    Quantity("mixing_ratio", "Mixing ratio", "g/kg", "moisture"),
     Quantity("u", "Wind u (east)", "m/s", "diverging"),
     Quantity("v", "Wind v (north)", "m/s", "diverging"),
-    Quantity("sr_wind", "Storm-relative wind speed", "m/s", "thermal", needs_track=True),
+    Quantity("sr_wind", "Storm-relative wind speed", "m/s", "wind", needs_track=True),
     Quantity("radial_wind", "Radial wind (+ out from storm)", "m/s", "diverging", needs_track=True),
     Quantity("tangential_wind", "Tangential wind (+ cyclonic)", "m/s", "diverging", needs_track=True),
 )}

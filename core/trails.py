@@ -25,20 +25,32 @@ from core import derived
 # glow), trunks and unpaved roads brown, the rest dark gray-blue. The previous
 # ColorBrewer scales ran through that orange (#d73027 was OKLab delta E 5.9
 # from the motorway); every step below is >= 15 from every road as drawn.
-# Sequential: one violet hue, dark -> light for low -> high (OKLCH L 0.50 to
-# 0.93, so the low end still clears the dark map at 3:1).
-_SEQUENTIAL = ["#7444b4", "#885cc8", "#9c75da", "#b08eea", "#c5a8f9", "#dac3ff", "#efdeff"]
-# Diverging: blue (negative; hue 262, clear of the cyan glow) <- pale gray
-# (zero) -> magenta (positive). Each arm steps in lightness as well as color,
-# so it holds for color-blind viewers.
-_DIVERGING = ["#4679db", "#7498da", "#a2b5d7", "#dedede", "#d0a6bc", "#ca7ba8", "#c04b94"]
+# Sequential scales, one per kind of quantity so the trail color says what
+# is shown: each is one hue, dark -> light for low -> high (OKLCH L 0.62 to
+# 0.93, >= 4.9:1 against the map background), >= 17 from every road.
+_RAMPS = {
+    # temperature, theta, theta-v: violet (OKLCH hue 305)
+    "temperature": ["#9e66d7", "#ac7ae1", "#ba8eeb", "#c8a1f5", "#d6b5ff", "#e2ccfd", "#eee1ff"],
+    # dewpoint, mixing ratio, RH: green (hue 150)
+    "moisture": ["#03a14a", "#3eaf60", "#5dbe76", "#79cc8b", "#92daa1", "#abe9b7", "#c4f7cd"],
+    # theta-e, theta-w: orchid (hue 335)
+    "theta_e": ["#c158ae", "#ce6dbb", "#da82c8", "#e697d5", "#f2ace2", "#fec0ef", "#fedcf6"],
+    # pressure: olive gold (hue 110)
+    "pressure": ["#8c8c00", "#9b9c22", "#aaac49", "#babc67", "#cacc83", "#dadc9e", "#eaedb9"],
+    # wind speed, storm-relative wind speed: blue (hue 250)
+    "wind": ["#1289e7", "#3e9af0", "#5babf9", "#7abbfe", "#9bcbfe", "#b9dbfe", "#d8eafe"],
+    # signed winds: blue (negative; hue 262, clear of the cyan glow) <- pale
+    # gray (zero) -> magenta (positive). Each arm steps in lightness as well
+    # as color, so it holds for color-blind viewers.
+    "diverging": ["#4679db", "#7498da", "#a2b5d7", "#dedede", "#d0a6bc", "#ca7ba8", "#c04b94"],
+}
 RING_SPACING_KM = 5.0
 RING_MAX_KM = 20.0
 
 
 def color_stops(quantity_key: str, vmin: float, vmax: float) -> list:
     """MapLibre 'interpolate' stops [v0, c0, v1, c1, ...] for the quantity's scale."""
-    colors = _DIVERGING if derived.QUANTITIES[quantity_key].colormap == "diverging" else _SEQUENTIAL
+    colors = _RAMPS[derived.QUANTITIES[quantity_key].colormap]
     if not (math.isfinite(vmin) and math.isfinite(vmax)) or vmax <= vmin:
         vmin, vmax = (vmin - 1, vmin + 1) if math.isfinite(vmin) else (0.0, 1.0)
     stops = []

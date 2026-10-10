@@ -159,6 +159,6 @@ def test_trail_colors_never_look_like_a_road():
         opacity = re.search(r'"line-opacity": ([\d.]+)', layer)
         roads.append(_drawn(color, float(opacity[1]) if opacity else 1.0, background))
     assert len(roads) >= 8
-    for color in trails._SEQUENTIAL + trails._DIVERGING:
+    for color in (c for ramp in trails._RAMPS.values() for c in ramp):
         closest = min(100 * math.dist(_oklab(color), _oklab(road)) for road in roads)
         assert closest >= 15, (color, closest)

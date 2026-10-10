@@ -3,17 +3,18 @@ from collections import OrderedDict
 
 
 # bounded LRU cache for rendered archive-mode super-res radar PNGs, keyed by
-# (station, pyart_field, tilt_deg, scan_time_iso) so two stations/products/
-# tilts/times never collide and a previously-rendered frame can be reused
-# instantly instead of re-paying a ~4096px render.
+# (station, pyart_field, tilt_deg, scan_time_iso, processing) so two
+# stations/products/tilts/times -- or raw vs dealiased/storm-relative
+# velocity of one scan -- never collide, and a previously-rendered frame can
+# be reused instantly instead of re-paying a ~4096px render.
 class RadarSuperresCache:
     def __init__(self, capacity: int = 12):
         self._capacity = max(1, int(capacity))
         self._entries: "OrderedDict[tuple, tuple[bytes, list]]" = OrderedDict()
 
     @staticmethod
-    def make_key(station: str, pyart_field: str, tilt_deg: float, scan_time) -> tuple:
-        return (station, pyart_field, round(float(tilt_deg), 2), scan_time.isoformat())
+    def make_key(station: str, pyart_field: str, tilt_deg: float, scan_time, processing: str = "") -> tuple:
+        return (station, pyart_field, round(float(tilt_deg), 2), scan_time.isoformat(), processing)
 
     def get(self, key: tuple):
         entry = self._entries.get(key)

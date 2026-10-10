@@ -233,3 +233,15 @@ def test_the_kept_parse_is_let_go_when_idle(monkeypatch):
     fetcher._parsed_used = raf._time.monotonic() - raf.PARSED_IDLE_S - 1
     fetcher._release_idle_parse()
     assert not fetcher._parsed_cache                      # idle: let go
+
+
+def test_cache_key_separates_raw_and_processed_velocity():
+    """Dealiased or storm-relative velocity must never be served the raw scan's image."""
+    t = datetime(2013, 5, 31, 23, 23)
+    cache = RadarSuperresCache(capacity=4)
+    raw = RadarSuperresCache.make_key("KTLX", "velocity", 0.5, t)
+    dealiased = RadarSuperresCache.make_key("KTLX", "velocity", 0.5, t,
+                                            "dealiased (Py-ART region-based, Nyquist 28.2 m/s)")
+    cache.put(raw, b"raw", [])
+    assert raw != dealiased
+    assert cache.get(dealiased) is None

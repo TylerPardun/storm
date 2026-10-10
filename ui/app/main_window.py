@@ -1311,7 +1311,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         from ui.map.radar_overlay import ARCHIVE_SUPERRES_GRID_SIZE, ARCHIVE_SUPERRES_CROP_RADIUS_M
         key = self._archive_superres_cache.make_key(
-            station, scan.pyart_field, scan.tilt_deg, scan.scan_time
+            station, scan.pyart_field, scan.tilt_deg, scan.scan_time,
+            getattr(scan, "velocity_processing", "") or "",
         )
         cached = self._archive_superres_cache.get(key)
         if cached is not None:

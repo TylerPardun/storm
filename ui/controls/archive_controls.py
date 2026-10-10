@@ -61,8 +61,11 @@ class _CoverageStrip(QWidget):
 
 class _HourAxis(QWidget):
     """Hour ticks and labels under the time slider (a tick every hour; a
-    label every hour, or every 2 or 3 when the bar is narrow), aligned with
-    the slider's groove."""
+    label every hour, or every 2 or 3 when the bar is narrow), with minor
+    ticks between the hours (every 10, 15 or 30 minutes, whichever stays at
+    least MINOR_MIN_PX apart), aligned with the slider's groove."""
+
+    MINOR_MIN_PX = 6
 
     def __init__(self, controller, parent=None):
         super().__init__(parent)
@@ -84,6 +87,15 @@ class _HourAxis(QWidget):
         per_hour = width * 3600 / total
         room = metrics.horizontalAdvance("00Z") + 12
         step = next((n for n in (1, 2, 3, 6) if per_hour * n >= room), 6)
+        minor = next((m for m in (10, 15, 30) if per_hour * m / 60 >= self.MINOR_MIN_PX), None)
+        if minor:
+            painter.setPen(QColor("#2A3044"))
+            t = start.replace(minute=0, second=0, microsecond=0)
+            while t <= end:
+                if t >= start and t.minute:
+                    x = inset + width * (t - start).total_seconds() / total
+                    painter.drawLine(int(x), 0, int(x), 2)
+                t += timedelta(minutes=minor)
         t = start.replace(minute=0, second=0, microsecond=0)
         if t < start:
             t += timedelta(hours=1)

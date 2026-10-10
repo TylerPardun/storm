@@ -1013,6 +1013,27 @@ QToolTip {
 #floatingToolbar QCheckBox::indicator:checked {
     image: url(static/indicator_on.svg);
 }
+/* unavailable (e.g. storm-relative options before there is a storm track):
+   clearly dimmed, with a dashed empty box */
+#floatingToolbar QCheckBox:disabled {
+    color: #4A5064;
+}
+#floatingToolbar QCheckBox::indicator:disabled {
+    image: url(static/indicator_disabled.svg);
+}
+/* "Needs storm motion: track the storm" links beside those options */
+#floatingToolbar QPushButton#needsTrackLink {
+    background: transparent;
+    border: none;
+    color: #00CFFF;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 0 2px;
+}
+#floatingToolbar QPushButton#needsTrackLink:hover {
+    color: #5CE1FF;
+    text-decoration: underline;
+}
 
 /* ── Separators ───────────────────────────────────────── */
 QFrame[frameShape="4"], QFrame[frameShape="5"] {

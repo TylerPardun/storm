@@ -114,6 +114,7 @@ class RadarControls(QWidget):
     frame_requested = pyqtSignal(int)
     loop_toggled    = pyqtSignal(bool)
     speed_changed   = pyqtSignal(int)      # new interval in ms
+    track_requested = pyqtSignal()         # "track the storm" link: open the TRACK drawer
     vad_requested   = pyqtSignal()         # VAD hodograph dialog requested
     velocity_options_changed = pyqtSignal(bool, bool)  # archive: dealias, storm-relative
 
@@ -292,6 +293,9 @@ class RadarControls(QWidget):
             chk.setFixedHeight(22)
             chk.toggled.connect(self._emit_velocity_options)
             r3.addWidget(chk)
+        from ui.controls.trail_controls import needs_track_link
+        self._needs_track = needs_track_link(self.track_requested.emit)
+        r3.addWidget(self._needs_track)
         r3.addStretch()
         self.set_storm_relative_available(False)
         self._velocity_row.setVisible(False)
@@ -445,6 +449,7 @@ class RadarControls(QWidget):
     def set_storm_relative_available(self, available: bool, motion_text: str = "") -> None:
         """Storm-relative needs a storm motion: the TRACK's mean motion."""
         self._chk_storm_relative.setEnabled(available)
+        self._needs_track.setVisible(not available)
         if available:
             self._chk_storm_relative.setToolTip(
                 f"Subtract the storm track's mean motion ({motion_text}) along each beam")

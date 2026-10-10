@@ -149,6 +149,15 @@ class TrackControls(QWidget):
         self.set_motion(None, None)
         self.set_saved_tracks([])
 
+        # how to start, until there's a storm motion (two points at different times)
+        self._start_hint = QLabel(
+            "To set the storm motion: click the storm's center on the map, move the clock, and click it "
+            "again. Storm-relative velocity, storm-relative trails, time-to-space and storm-relative "
+            "barbs all use it.")
+        self._start_hint.setWordWrap(True)
+        self._start_hint.setStyleSheet("color: #9BE8FF; font-size: 10px;")
+        col.addWidget(self._start_hint)
+
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet("color: #6E7A8F; font-size: 10px;")
@@ -195,6 +204,7 @@ class TrackControls(QWidget):
 
     def set_point_count(self, count: int) -> None:
         self._count_label.setText(f"{count} point" + ("" if count == 1 else "s"))
+        self._start_hint.setVisible(count < 2)
 
     def set_workspaces(self, names: list[str], active: str) -> None:
         self._workspace_combo.blockSignals(True)

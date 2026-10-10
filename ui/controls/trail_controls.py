@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QColor, QLinearGradient, QPainter
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from core.derived import QUANTITIES
 
@@ -16,6 +16,20 @@ _GROUPS = (
     ("Kinematic", ("u", "v", "sr_wind", "radial_wind", "tangential_wind")),
 )
 WINDOWS_MIN = (5, 10, 15, 30, 60)
+NEEDS_TRACK_TEXT = "Needs storm motion: track the storm ▸"
+NEEDS_TRACK_TIP = ("Storm-relative tools use the storm's motion, taken from a storm track. "
+                   "Open TRACK and click the storm's center on the map at two or more times.")
+
+
+def needs_track_link(on_click) -> QPushButton:
+    """The link shown beside storm-relative options while there is no storm motion."""
+    link = QPushButton(NEEDS_TRACK_TEXT)
+    link.setObjectName("needsTrackLink")
+    link.setFlat(True)
+    link.setCursor(Qt.CursorShape.PointingHandCursor)
+    link.setToolTip(NEEDS_TRACK_TIP)
+    link.clicked.connect(on_click)
+    return link
 
 
 class _ColorBar(QWidget):
@@ -45,6 +59,7 @@ class TrailControls(QWidget):
     """settings_changed() -- any option changed; read them with settings()."""
 
     settings_changed = pyqtSignal()
+    track_requested = pyqtSignal()       # "track the storm" link: open the TRACK drawer
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -64,6 +79,8 @@ class TrailControls(QWidget):
         self._chk_show.toggled.connect(self.settings_changed.emit)
         row.addWidget(self._chk_show)
         small = "color: #B5BDCC; font-size: 10px;"
+        # checkboxes dim when unavailable (a plain color here would hide that)
+        small_check = "QCheckBox { color: #B5BDCC; font-size: 10px; } QCheckBox:disabled { color: #4A5064; }"
 
         self._quantity = QComboBox()
         self._quantity.setFixedWidth(250)
@@ -88,20 +105,22 @@ class TrailControls(QWidget):
         self._window.currentIndexChanged.connect(self.settings_changed.emit)
         row.addWidget(self._window)
         self._time_to_space = QCheckBox("Time-to-space")
-        self._time_to_space.setStyleSheet(small)
+        self._time_to_space.setStyleSheet(small_check)
         self._time_to_space.toggled.connect(self.settings_changed.emit)
         row.addWidget(self._time_to_space)
         self._wind_barbs = QCheckBox("Wind barbs")
-        self._wind_barbs.setStyleSheet(small)
+        self._wind_barbs.setStyleSheet(small_check)
         self._wind_barbs.setToolTip("Measured wind along each trail (knots; half barb 5, full 10, flag 50)")
         self._wind_barbs.toggled.connect(self.settings_changed.emit)
         row.addWidget(self._wind_barbs)
         self._sr_barbs = QCheckBox("Storm-relative")
-        self._sr_barbs.setStyleSheet(small)
+        self._sr_barbs.setStyleSheet(small_check)
         self._sr_barbs.setEnabled(False)
         self._sr_barbs.toggled.connect(self.settings_changed.emit)
         self._wind_barbs.toggled.connect(self._update_sr_barbs)
         row.addWidget(self._sr_barbs)
+        self._needs_track = needs_track_link(self.track_requested.emit)
+        row.addWidget(self._needs_track)
         row.addSpacing(8)
 
         self._min_label, self._max_label = QLabel(""), QLabel("")
@@ -142,6 +161,7 @@ class TrailControls(QWidget):
     def set_track_available(self, available: bool) -> None:
         """Storm-relative quantities and time-to-space need a storm track."""
         self._track_available = available
+        self._needs_track.setVisible(not available)
         self._update_sr_barbs()
         self._time_to_space.setEnabled(available)
         self._time_to_space.setToolTip(

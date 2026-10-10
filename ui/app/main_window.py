@@ -1867,6 +1867,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             )
             self.track_controls = TrackControls(self._map_container)
             self.track_controls.setObjectName("floatingToolbar")
+            # the "track the storm" links beside grayed storm-relative options
+            self.radar_controls.track_requested.connect(lambda: self.btn_track.setChecked(True))
             self.btn_track.toggled.connect(self.track_controls.toggle_drawer)
             self.btn_track.toggled.connect(self._start_layout_pulse)
             self.btn_track.toggled.connect(self._on_track_edit_toggled)
@@ -1916,6 +1918,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # the VEHICLES drawer, with a "show trails" switch
             self.trail_controls = TrailControls(self._map_container)
             self.trail_controls.setObjectName("floatingToolbar")
+            if hasattr(self, "btn_track"):
+                self.trail_controls.track_requested.connect(lambda: self.btn_track.setChecked(True))
             self.btn_vehicles.toggled.connect(self.trail_controls.toggle_drawer)
             self.btn_vehicles.toggled.connect(self._start_layout_pulse)
             self.trail_controls.settings_changed.connect(self._schedule_trails)

@@ -300,3 +300,68 @@ class VADSet:
 
         bound = max(float(min_bound), max_radius + float(padding))
         return float(math.ceil(bound / 10.0) * 10.0)
+
+
+@dataclass(frozen=True)
+class TimeHeightGrid:
+    """A VADSet on one height grid, for a time-height plot: one column per
+    profile, arrays (height, time)."""
+    times: list                 # datetime per column
+    heights_m: np.ndarray
+    u_kt: np.ndarray
+    v_kt: np.ndarray
+
+    @property
+    def speed_kt(self) -> np.ndarray:
+        return np.hypot(self.u_kt, self.v_kt)
+
+    def column_edges(self, gap_factor: float = 3.0) -> tuple[np.ndarray, np.ndarray]:
+        """(edges, column) for drawing: edges in epoch seconds; column[k] is
+        the grid column drawn between edges[k] and edges[k+1], or -1 for an
+        empty gap. Each profile covers half the way to its neighbours, at
+        most half the typical spacing on a side, so a lone profile beside a
+        gap stays narrow instead of stretching across it."""
+        t = np.array([x.timestamp() for x in self.times], dtype=float)
+        steps = np.diff(t)
+        half = float(np.median(steps)) / 2 if len(steps) else 60.0
+        half = half if half > 0 else 60.0
+        left = t - np.minimum(np.r_[half, steps / 2], half)
+        right = t + np.minimum(np.r_[steps / 2, half], half)
+        edges, column = [left[0]], []
+        for i in range(len(t)):
+            if i and left[i] > edges[-1] + 1e-6:          # a gap: leave it empty
+                column.append(-1)
+                edges.append(left[i])
+            column.append(i)
+            edges.append(right[i])
+        return np.asarray(edges), np.asarray(column)
+
+
+def time_height_grid(vad_set: VADSet, dz_m: float | None = None) -> TimeHeightGrid | None:
+    """Interpolate each profile's u/v onto a common height grid (linear, no
+    extrapolation beyond a profile's own lowest/highest level)."""
+    profiles = [p for p in vad_set.profiles if len(p.heights_m) >= 2]
+    if not profiles:
+        return None
+    lows = [float(np.nanmin(p.heights_m)) for p in profiles]
+    highs = [float(np.nanmax(p.heights_m)) for p in profiles]
+    if dz_m is None:
+        # the profiles' own spacing (a low-elevation lidar VAD's levels are
+        # under a metre apart), coarsened only to keep at most 500 levels
+        spacing = [float(np.nanmedian(np.diff(np.sort(p.heights_m)))) for p in profiles]
+        dz_m = max(float(np.nanmedian(spacing)), (max(highs) - min(lows)) / 500.0, 0.01)
+    heights = np.arange(min(lows), max(highs) + dz_m / 2, dz_m)
+    columns_u, columns_v = [], []
+    for p in profiles:
+        order = np.argsort(p.heights_m)
+        z = np.asarray(p.heights_m, float)[order]
+        u, v = p.u_component()[order], p.v_component()[order]
+        ok = np.isfinite(z) & np.isfinite(u) & np.isfinite(v)
+        if ok.sum() >= 2:
+            columns_u.append(np.interp(heights, z[ok], u[ok], left=np.nan, right=np.nan))
+            columns_v.append(np.interp(heights, z[ok], v[ok], left=np.nan, right=np.nan))
+        else:
+            columns_u.append(np.full(heights.shape, np.nan))
+            columns_v.append(np.full(heights.shape, np.nan))
+    return TimeHeightGrid([p.timestamp for p in profiles], heights,
+                          np.column_stack(columns_u), np.column_stack(columns_v))

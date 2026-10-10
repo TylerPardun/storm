@@ -103,3 +103,18 @@ def test_the_lidar_trucks_winds_are_not_called_clamps():
     assert wind_source_name("DLTRUCK1-DL1-VAD") == "Lidar truck VAD (DL1)"
     assert wind_source_name("DLTRUCK1-DL2-CSMWINDS") == "Lidar truck CSM winds (DL2)"
     assert wind_source_name("CLAMPS1-VAD") == "CLAMPS1 trailer VAD"
+
+
+def test_parse_clamps_wind_netcdf_drops_failed_fits_with_negative_r_sq(tmp_path):
+    """A real truck DL1 VAD file (2026-05-17) had r_sq in (-100, 0) on cells
+    at ~126 m/s -- under the speed bound, but a fit worse than the mean."""
+    base_time = int(datetime(2026, 5, 17, tzinfo=timezone.utc).timestamp())
+    path = tmp_path / "dltruckdlvadDL1.c1.20260517.000000.cdf"
+    _write_clamps_wind_netcdf(
+        path, base_time=base_time, time_offset=[72000.0],
+        height_km=[0.005, 0.010, 0.015],
+        wspd=[[12.0, 125.8, 13.0]], wdir=[[200.0, 30.0, 205.0]],
+        r_sq=[[0.97, -12.0, 0.96]],
+    )
+    (profile,) = parse_clamps_wind_netcdf(path.read_bytes(), "DLTRUCK1-DL1-VAD")
+    assert list(profile.heights_m) == pytest.approx([5.0, 15.0])

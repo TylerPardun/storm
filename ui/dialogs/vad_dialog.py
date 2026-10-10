@@ -15,7 +15,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 from config import ACCENT_COLOR as _STORM_CYAN
-from core.vad import VADProfile, VADSet, calculate_vad_parameters
+from core.vad import VADProfile, VADSet, calculate_vad_parameters, time_height_grid
 from data.fetchers.vad_fetcher import fetch_recent_vads
 from ui.export_tools import copy_widget_png, save_widget_png
 
@@ -132,16 +132,22 @@ def _lbl(text, color=_TEXT, size=10, bold=False,
 class VADDialog(QDialog):
     """Dialog displaying VAD wind profile hodograph with time scrubber."""
 
-    def __init__(self, site: str, parent=None, preloaded_set: Optional[VADSet] = None):
+    def __init__(self, site: str, parent=None, preloaded_set: Optional[VADSet] = None, start_time=None):
         """`preloaded_set`, when given, is displayed as-is instead of
         fetching live NEXRAD VAD data for `site` -- used for archive-mode
         sources (e.g. CLAMPS) that are fetched by the caller ahead of time
-        for a specific archive date rather than "now"."""
+        for a specific archive date rather than "now". `start_time` (the
+        archive clock) picks the profile shown first: the latest at or
+        before it."""
         super().__init__(parent, Qt.WindowType.Window)
         self.site = site
         self.vad_set: Optional[VADSet] = None
         self._preloaded_set = preloaded_set
+        self._start_time = start_time
         self._cur_idx = 0
+        self._view = "hodograph"          # or "time_height"
+        self._th_ax = None
+        self._th_grid = None
         self._tick_labels: list[QLabel] = []
         self._param_labels: dict[str, QLabel] = {}
         self._hodo_ax = None
@@ -212,6 +218,28 @@ class VADDialog(QDialog):
 
         header_row.addWidget(self._scrubber_widget)
 
+        # hodograph of the chosen profile, or every profile as a time-height plot
+        view_row = QHBoxLayout()
+        view_row.setSpacing(0)
+        self._view_buttons = {}
+        for key, text, tip in (("hodograph", "HODOGRAPH", "The chosen profile's hodograph"),
+                               ("time_height", "TIME–HEIGHT",
+                                "Every profile: wind speed shaded, with barbs. Click to choose a profile.")):
+            btn = QToolButton()
+            btn.setText(text)
+            btn.setToolTip(tip)
+            btn.setCheckable(True)
+            btn.setChecked(key == self._view)
+            btn.setStyleSheet(_EXPORT_BTN_QSS + f"QToolButton:checked {{ border-color: {_STORM_CYAN}; color: {_STORM_CYAN}; }}")
+            btn.setMinimumWidth(btn.fontMetrics().horizontalAdvance(text) + 30)
+            btn.clicked.connect(lambda _checked=False, k=key: self._set_view(k))
+            view_row.addWidget(btn)
+            self._view_buttons[key] = btn
+        self._view_widget = QWidget()
+        self._view_widget.setLayout(view_row)
+        self._view_widget.setVisible(False)          # shown once there are several profiles
+        header_row.addWidget(self._view_widget)
+
         export_row = QHBoxLayout()
         export_row.setSpacing(5)
         export_row.setContentsMargins(0, 0, 0, 0)
@@ -240,6 +268,7 @@ class VADDialog(QDialog):
         )
         self._canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
         self._canvas.mpl_connect("axes_leave_event",    self._on_axes_leave)
+        self._canvas.mpl_connect("button_press_event",  self._on_canvas_click)
         root.addWidget(self._canvas, stretch=1)
 
         self._cursor_label = _lbl("", color=_MUTED, size=10)
@@ -326,6 +355,7 @@ class VADDialog(QDialog):
 
         count = len(self.vad_set)
         self._scrubber_widget.setVisible(count > 1)
+        self._view_widget.setVisible(count > 1)
         self._scrubber.blockSignals(True)
         self._scrubber.setMaximum(count - 1)
         self._scrubber.setValue(self._cur_idx)
@@ -410,7 +440,8 @@ class VADDialog(QDialog):
                 )
                 return
 
-            self._cur_idx = 0
+            self._cur_idx = self._index_at(self._start_time)
+            self._th_grid = None
             self._rebuild_scrubber()
             self._draw()
 
@@ -432,10 +463,95 @@ class VADDialog(QDialog):
         self._fig.clear()
         self._cursor_dot = None
         self._hodo_ax = None
+        self._th_ax = None
 
-        self._draw_hodograph(profile)
+        if self._view == "time_height" and len(self.vad_set) > 1:
+            self._draw_time_height()
+        else:
+            self._draw_hodograph(profile)
         self._update_params(profile)
         self._canvas.draw_idle()
+
+    def _index_at(self, when) -> int:
+        """The latest profile at or before `when` (the first if all are later)."""
+        if when is None or not self.vad_set or len(self.vad_set) == 0:
+            return 0
+        earlier = [i for i, t in enumerate(self.vad_set.timestamps) if t <= when]
+        return earlier[-1] if earlier else 0
+
+    def _set_view(self, view: str) -> None:
+        self._view = view
+        for key, btn in self._view_buttons.items():
+            btn.setChecked(key == view)
+        if view == "time_height" and self.width() < 1000:
+            self.resize(1100, self.height())
+        self._cursor_label.setText("")
+        self._draw()
+
+    def _draw_time_height(self) -> None:
+        """Wind speed shaded (kt) with barbs, every profile; the chosen one marked."""
+        import matplotlib.dates as mdates
+        if self._th_grid is None:
+            self._th_grid = time_height_grid(self.vad_set)
+        grid = self._th_grid
+        ax = self._fig.add_subplot(111)
+        self._th_ax = ax
+        ax.set_facecolor(_AX_BG)
+        if grid is None:
+            ax.text(0.5, 0.5, "No profiles with heights", color=_MUTED, ha="center", transform=ax.transAxes)
+            return
+        from datetime import datetime, timezone
+        times = mdates.date2num(grid.times)
+        heights_km = grid.heights_m / 1000.0
+        edges_s, column = grid.column_edges()
+        x_edges = mdates.date2num([datetime.fromtimestamp(e, timezone.utc) for e in edges_s])
+        dz = (heights_km[1] - heights_km[0]) if len(heights_km) > 1 else 0.01
+        z_edges = np.r_[heights_km - dz / 2, heights_km[-1] + dz / 2]
+        drawn = np.where(column[None, :] >= 0, grid.speed_kt[:, np.maximum(column, 0)], np.nan)
+        fastest = float(np.nanpercentile(grid.speed_kt, 98)) if np.isfinite(grid.speed_kt).any() else 40.0
+        mesh = ax.pcolormesh(x_edges, z_edges, np.ma.masked_invalid(drawn), cmap="viridis",
+                             vmin=0, vmax=max(10.0, fastest))
+        cbar = self._fig.colorbar(mesh, ax=ax, pad=0.01, fraction=0.035)
+        cbar.set_label("Wind speed (kt)", color=_MUTED, fontsize=9)
+        cbar.ax.tick_params(colors=_MUTED, labelsize=8)
+        cbar.outline.set_edgecolor(_BORDER)
+        # barbs, thinned to about 40 columns by 18 levels
+        has_data = np.isfinite(grid.speed_kt).any(axis=1)
+        last = int(np.nonzero(has_data)[0].max()) if has_data.any() else len(heights_km) - 1
+        ti = np.unique(np.linspace(0, len(times) - 1, min(len(times), 40)).astype(int))
+        zi = np.unique(np.linspace(0, last, min(last + 1, 18)).astype(int))
+        tt, zz = np.meshgrid(times[ti], heights_km[zi])
+        ax.barbs(tt, zz, grid.u_kt[np.ix_(zi, ti)], grid.v_kt[np.ix_(zi, ti)],
+                 length=5.2, linewidth=0.6, color="#E8EAF0")
+        chosen = self.vad_set[self._cur_idx].timestamp
+        ax.axvline(mdates.date2num(chosen), color=_STORM_CYAN, linewidth=1.4)
+        top = heights_km[last] + dz / 2
+        ax.set_ylim(z_edges[0], top)
+        ax.set_xlim(x_edges[0], x_edges[-1])
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H%MZ"))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(_BORDER)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(colors=_MUTED, labelsize=8)
+        if top < 1.0:                        # shallow (e.g. a low-elevation lidar VAD): metres read better
+            ax.yaxis.set_major_formatter(lambda y, _pos: f"{y * 1000:.0f}")
+            ax.set_ylabel("Height (m AGL)", color=_MUTED, fontsize=9)
+        else:
+            ax.set_ylabel("Height (km AGL)", color=_MUTED, fontsize=9)
+        ax.set_xlabel("Time (UTC) — click to choose a profile", color=_MUTED, fontsize=9)
+        self._fig.subplots_adjust(left=0.07, right=0.97, top=0.96, bottom=0.10)
+
+    def _on_canvas_click(self, event) -> None:
+        """Time-height: choose the profile nearest the clicked time."""
+        if self._th_ax is None or event.inaxes is not self._th_ax or event.xdata is None:
+            return
+        import matplotlib.dates as mdates
+        clicked = mdates.num2date(event.xdata)
+        stamps = [t.timestamp() for t in self.vad_set.timestamps]
+        idx = int(np.argmin(np.abs(np.asarray(stamps) - clicked.timestamp())))
+        self._scrubber.setValue(idx)
 
     def _draw_hodograph(self, profile: VADProfile):
         ax = self._fig.add_subplot(111)
@@ -519,6 +635,9 @@ class VADDialog(QDialog):
 
 
     def _on_mouse_move(self, event):
+        if self._th_ax is not None and event.inaxes is self._th_ax and self._th_grid is not None:
+            self._show_time_height_value(event)
+            return
         if event.inaxes is not self._hodo_ax or self._current_profile is None:
             return
         if event.xdata is None or event.ydata is None:
@@ -547,6 +666,22 @@ class VADDialog(QDialog):
             self._cursor_dot.set_data([u[idx]], [v[idx]])
             self._cursor_dot.set_alpha(0.9)
             self._canvas.draw_idle()
+
+    def _show_time_height_value(self, event) -> None:
+        import matplotlib.dates as mdates
+        if event.xdata is None or event.ydata is None:
+            return
+        grid = self._th_grid
+        col = int(np.argmin(np.abs(mdates.date2num(grid.times) - event.xdata)))
+        row = int(np.argmin(np.abs(grid.heights_m / 1000.0 - event.ydata)))
+        u, v = grid.u_kt[row, col], grid.v_kt[row, col]
+        when = grid.times[col].strftime("%H:%M:%SZ")
+        if not (np.isfinite(u) and np.isfinite(v)):
+            self._cursor_label.setText(f"{when}  ·  {grid.heights_m[row]:.0f} m  ·  no wind")
+            return
+        direction = (np.degrees(np.arctan2(-u, -v)) + 360.0) % 360.0
+        self._cursor_label.setText(f"{when}  ·  {grid.heights_m[row]:.0f} m  ·  "
+                                   f"Wind {direction:.0f}\u00b0 @ {np.hypot(u, v):.0f} kt")
 
     def _on_axes_leave(self, event):
         self._cursor_label.setText("")

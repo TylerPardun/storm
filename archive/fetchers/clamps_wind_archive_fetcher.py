@@ -127,7 +127,10 @@ def parse_clamps_wind_netcdf(data: bytes, platform_id: str) -> list[VADProfile]:
         relationship to r_sq at all, while a separate ~5% of cells had
         wspd in the 1e9-1e10 range despite a perfectly plausible r_sq.
     So: r_sq (legitimately in roughly [0, 1]) is used as the primary
-    per-cell validity mask when present; isfinite() on the plain fields
+    per-cell validity mask when present -- a negative r_sq is a fit worse
+    than the mean, i.e. a failed fit (a 2026-05-17 truck DL1 VAD file had
+    -999 fills and, separately, r_sq in (-100, 0) cells at ~126 m/s, just
+    under the speed bound; every cell with r_sq >= 0.8 was 5-16 m/s); isfinite() on the plain fields
     is a backstop for files without r_sq; and a physical plausibility
     bound is applied to wspd and rms independently of both, since neither
     r_sq nor isfinite() alone was sufficient on real data.
@@ -167,7 +170,7 @@ def parse_clamps_wind_netcdf(data: bytes, platform_id: str) -> list[VADProfile]:
             & np.isfinite(dir_row) & np.isfinite(height_m)
         )
         if r_sq is not None:
-            valid &= np.isfinite(r_sq[i]) & (r_sq[i] > -100.0)
+            valid &= np.isfinite(r_sq[i]) & (r_sq[i] >= 0.0)
         if not np.any(valid):
             continue
 

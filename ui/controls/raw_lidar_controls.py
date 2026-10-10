@@ -40,6 +40,7 @@ class RawLidarControls(QWidget):
     location_requested()         the chosen lidar's button: center the map on it
     availability_changed(bool)   any lidar data for this date
     min_intensity_changed(object) hide cells below this intensity (SNR + 1); None: show all
+    winds_requested()            open the lidars' wind profiles (VAD / CSM winds)
     """
 
     field_selected = pyqtSignal(str)
@@ -48,6 +49,7 @@ class RawLidarControls(QWidget):
     location_requested = pyqtSignal()
     availability_changed = pyqtSignal(bool)
     min_intensity_changed = pyqtSignal(object)
+    winds_requested = pyqtSignal()
 
     # intensity filter: slider steps of 0.001 above 1.000 (noise sits near
     # 1.000 +- 0.005; returns are above ~1.01). 0 = off.
@@ -110,6 +112,16 @@ class RawLidarControls(QWidget):
         self._chk_radar.setToolTip("Show the radar under the lidar")
         self._chk_radar.toggled.connect(self.radar_visible_toggled.emit)
         row.addWidget(self._chk_radar)
+
+        self._winds_button = QToolButton()
+        self._winds_button.setObjectName("lidarLocationButton")
+        self._winds_button.setText("WINDS")
+        self._winds_button.setFixedHeight(22)
+        self._winds_button.setToolTip("Wind profiles from the lidars' VAD and CSM retrievals: "
+                                      "hodograph and time-height, for this date")
+        self._winds_button.clicked.connect(self.winds_requested.emit)
+        row.addSpacing(6)
+        row.addWidget(self._winds_button)
 
         row.addSpacing(10)
         self._intensity_title = QLabel("Min intensity")

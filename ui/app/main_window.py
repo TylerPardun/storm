@@ -1760,6 +1760,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.raw_lidar_controls.availability_changed.connect(self._on_raw_lidar_availability)
             self.raw_lidar_controls.field_selected.connect(self._on_raw_lidar_field_selected)
             self.raw_lidar_controls.min_intensity_changed.connect(self._on_lidar_min_intensity_changed)
+            self.raw_lidar_controls.winds_requested.connect(self._on_vad_requested)
             self.raw_lidar_controls.data_toggled.connect(self._on_lidar_data_toggled)
             self.raw_lidar_controls.location_requested.connect(self._center_on_lidar_location)
             self.raw_lidar_controls.radar_visible_toggled.connect(self.map_widget.set_radar_visible)
@@ -5193,7 +5194,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             platform_id = names[name]
         self.status_msg_label.setText(f"Lidar wind profiles: {wind_source_name(platform_id)}")
         from ui.dialogs.vad_dialog import VADDialog
-        dlg = VADDialog(wind_source_name(platform_id), parent=self, preloaded_set=sets[platform_id])
+        dlg = VADDialog(wind_source_name(platform_id), parent=self, preloaded_set=sets[platform_id],
+                        start_time=self._time_ctrl.current_time)
         dlg.exec()
 
     # -- NOXP mobile radar (archive) ------------------------------------

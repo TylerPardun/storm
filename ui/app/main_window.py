@@ -82,6 +82,7 @@ from data.fetchers.surface_fetcher import SurfaceFetcher
 from data.radar.radar_decoder import decode_nexrad_l3
 import config
 from data import endpoints
+from core import perf_log
 from core.annotation import Annotation, ANNOTATION_TYPE_MAP
 from core.storm_cone import StormCone, motion_from_fixes
 from core.scan_sector import ScanSector, feature_collection
@@ -442,6 +443,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _begin_archive_startup(self):
         """Called once the map is ready in archive mode."""
+        perf_log.event("archive.start", archive_time=self._archive_time.isoformat(), admin=bool(runtime_flags.FLAGS.admin_mode))
         # keep the download caches bounded (raw lidar, NOXP); before this
         # session downloads anything, so nothing it uses can be removed
         threading.Thread(target=self._prune_download_caches, daemon=True, name="cache-prune").start()
@@ -460,6 +462,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         # time controller — central archive clock.
         self._time_ctrl = TimeController(start_time=self._archive_time, parent=self)
+        self._time_ctrl.playing_changed.connect(self._on_archive_playing_changed)
 
         # archive controls bar at bottom of screen.
         self._archive_controls = ArchiveControls(self._time_ctrl, self._map_container)
@@ -1000,6 +1003,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _on_archive_vehicle_obs_loaded(self, vehicle_ids: set[str]) -> None:
         self._archive_vehicle_obs_loaded = True
+        if perf_log.enabled():
+            perf_log.event("mesonet.loaded", vehicles=len(vehicle_ids),
+                           rows=sum(len(v) for v in (self._archive_vehicle_obs._observations or {}).values()))
         # the lidar truck's track is already here: its lidar files use it too
         from archive.vehicle_aliases import mqtt_vehicle_id
         from archive.fetchers.vehicle_obs_archive_fetcher import remember_dltruck_track
@@ -1291,6 +1297,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 pass  # NOXP is the displayed radar -- WSR-88D keeps decoding warm in the background, just not injected
             else:
                 self._radar_overlay.inject(result["png"], result["bounds"])
+                perf_log.event("radar.shown", scan=scan.scan_time.isoformat(), product=scan.product,
+                               first=not getattr(self, "_perf_radar_shown", False))
+                self._perf_radar_shown = True
                 if hasattr(self, "radar_controls"):
                     self.radar_controls.set_scan_time(scan.scan_time.strftime("%H:%MZ"))
                 if hasattr(self, "_archive_controls"):
@@ -1331,10 +1340,36 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._radar_settled_scan = scan
             return
 
+        if self._sharp_render_would_be_stale(scan):
+            return   # rendered when playback pauses (see _on_archive_playing_changed)
+        self._archive_superres_busy = True
         self._archive_superres_executor.submit(
             self._bg_render_archive_superres, gen, station, scan, key,
             self._archive_superres_size, ARCHIVE_SUPERRES_CROP_RADIUS_M,
         )
+
+    def _sharp_render_would_be_stale(self, scan) -> bool:
+        """While playing: would the next radar scan reach the clock before a
+        sharp render of this one finishes (judged by the last render's time)?
+        Then the result would be thrown away -- at 120x on an M2, 12 of 13
+        were -- and the work only slows decoding of the frames playback needs."""
+        if not self._time_ctrl.is_playing:
+            return False
+        if getattr(self, "_archive_superres_busy", False):
+            return True            # don't queue behind one still rendering
+        last_s = getattr(self, "_archive_superres_wall_s", None)
+        if last_s is None:
+            return False
+        upcoming = self._archive_radar.next_scan_after(scan.scan_time)
+        if upcoming is None:
+            return False
+        wall_left = (upcoming - self._time_ctrl.current_time).total_seconds() / max(self._time_ctrl.speed, 1)
+        return wall_left < last_s
+
+    def _on_archive_playing_changed(self, playing: bool) -> None:
+        """Paused: give the frame on screen its sharp render if playback skipped it."""
+        if not playing and getattr(self, "_archive_superres_pending", None) is not None:
+            self._archive_superres_timer.start()
 
     def _bg_render_archive_superres(
         self, gen: int, station: str, scan, key: tuple, grid_size: int, crop_radius_m: float,
@@ -1342,18 +1377,26 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         """Runs in the archive-superres thread pool — NOT on the main thread."""
         import time as _time
         from ui.map.radar_overlay import next_superres_size, render_scan_to_png
-        started = _time.perf_counter()
+        # this thread's own CPU time, not wall time: while radar scans are
+        # still downloading and decoding, a render waits on them too, and on
+        # an M2 a 4096 px render then took ~4 s of wall time for ~2 s of work
+        started, started_wall = _time.thread_time(), _time.perf_counter()
         try:
             png, bounds, _ = render_scan_to_png(scan, grid_size, crop_radius_m=crop_radius_m)
         except Exception as exc:
             log.error("Archive radar super-res render failed: %s", exc)
             return
-        took = _time.perf_counter() - started
+        finally:
+            self._archive_superres_busy = False
+        took = _time.thread_time() - started
+        self._archive_superres_wall_s = _time.perf_counter() - started_wall   # for _sharp_render_would_be_stale
         smaller = next_superres_size(grid_size, took)
         if smaller < self._archive_superres_size:
             self._archive_superres_size = smaller
-            log.info("Archive radar sharp render took %.1f s at %d px; using %d px from now on",
+            log.info("Archive radar sharp render took %.1f s of CPU at %d px; using %d px from now on",
                      took, grid_size, smaller)
+            perf_log.event("note", what="sharp radar render stepped down", cpu_s=round(took, 2),
+                           from_px=grid_size, to_px=smaller)
         self._archive_superres_ready.emit({
             "gen": gen, "station": station, "scan": scan, "key": key,
             "png": png, "bounds": bounds,
@@ -1374,6 +1417,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
         self._archive_superres_cache.put(result["key"], result["png"], result["bounds"])
         self._radar_overlay.inject(result["png"], result["bounds"])
+        perf_log.event("radar.shown_sharp", scan=result["scan"].scan_time.isoformat())
         self._radar_settled_scan = result["scan"]
 
     def _on_archive_satellite_frame(self, frame) -> None:
@@ -5498,6 +5542,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self._archive_raw_lidar.load_files(instrument, assets)
 
     def _on_lidar_instrument_loaded(self, instrument: str, files: int) -> None:
+        perf_log.event("lidar.instrument_loaded", instrument=instrument, files=files)
         self._lidar_large_loading.discard(instrument)
         self._maybe_end_lidar_location_loading()
         if self._lidar_survey_done:
@@ -5505,6 +5550,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _on_lidar_survey_done(self) -> None:
         self._lidar_survey_done = True
+        perf_log.event("lidar.survey_done")
         self._lidar_activity_end("lidar-survey")
         self._show_lidar_status()
 
@@ -5736,8 +5782,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if field not in rays.fields:
             field = "velocity" if "velocity" in rays.fields else next(iter(rays.fields))
         try:
-            png, bounds, metadata = render_lidar_to_png(rays, when, field, RENDER_GRID_SIZE, ray_indices=scan.indices,
-                                                        min_intensity=min_intensity)
+            with perf_log.timed("lidar.render", rays=len(scan.indices), field=field, min_intensity=min_intensity):
+                png, bounds, metadata = render_lidar_to_png(rays, when, field, RENDER_GRID_SIZE,
+                                                            ray_indices=scan.indices, min_intensity=min_intensity)
         except ValueError as exc:
             self._lidar_overlay_render_ready.emit({"error": str(exc), "generation": generation})
             return

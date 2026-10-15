@@ -20,6 +20,7 @@ import numpy as np
 import requests
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from core import perf_log
 from core.level2_radar_scan import Level2RadarScan, L2_PRODUCTS, DEFAULT_L2_PRODUCT
 
 from data import endpoints
@@ -142,6 +143,7 @@ class ArchiveRadarFetcher(QObject):
         self._decoded_cache: dict[tuple, Level2RadarScan] = {}
         # sorted list of all known scan times for the date.
         self._index: list[datetime] = []
+        self._index_keys: dict[datetime, str] = {}   # scan time -> its S3 object name
         self.index_loading = False          # True from load_index() until the listing is in (or failed)
         self._index_lock = threading.Lock()
 
@@ -342,10 +344,19 @@ class ArchiveRadarFetcher(QObject):
                 dt = _parse_l2_filename_time(fname, self._station)
                 if dt:
                     times.append(dt)
+                    self._index_keys[dt] = key     # the exact object name, for _download_scan
         except Exception as exc:
             log.warning("ArchiveRadarFetcher: S3 parse error: %s", exc)
         return times
 
+
+    def next_scan_after(self, t: datetime) -> Optional[datetime]:
+        """The first indexed scan time after t, if any."""
+        with self._index_lock:
+            idx = self._index
+        import bisect
+        i = bisect.bisect_right(idx, t)
+        return idx[i] if i < len(idx) else None
 
     def _nearest_scan_before(self, t: datetime) -> Optional[datetime]:
         """Return the latest scan_time <= t from the index."""
@@ -485,15 +496,19 @@ class ArchiveRadarFetcher(QObject):
         # store objects gzip-compressed with a ".gz" suffix on the key, so
         # also try gzip-suffixed variants of each.
         suffixes = ("_V06", "_V03", "", "_V06.gz", "_V03.gz", ".gz")
+        # the bucket listing's exact name first: guessing cost up to three
+        # failed requests per scan (each a round trip -- slow on cellular)
+        listed = self._index_keys.get(scan_time)
+        urls = [f"{_S3_BASE}/{listed}"] if listed else []
+        urls += [u for u in (f"{_S3_BASE}/{prefix}{suffix}" for suffix in suffixes) if u not in urls]
         from core import package_sources
-        for suffix in suffixes:               # an opened case package's copy first, no network
-            data = package_sources.get(f"{_S3_BASE}/{prefix}{suffix}")
+        for url in urls:                      # an opened case package's copy first, no network
+            data = package_sources.get(url)
             if data is not None:
                 return gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data
-        for suffix in suffixes:
+        for attempt, url in enumerate(urls, 1):
             if self._closed.is_set():
                 return None
-            url = f"{_S3_BASE}/{prefix}{suffix}"
             t0 = _time.perf_counter()
             try:
                 resp = requests.get(url, timeout=60, stream=True)
@@ -510,6 +525,8 @@ class ArchiveRadarFetcher(QObject):
                         "ArchiveRadarFetcher: download %s %.1f MB in %.0f ms",
                         url.split("/")[-1], len(data) / 1e6, (_time.perf_counter() - t0) * 1000,
                     )
+                    perf_log.event("radar.download", file=url.split("/")[-1], mb=round(len(resp.content) / 1e6, 2),
+                                   ms=round((_time.perf_counter() - t0) * 1000), attempt=attempt)
                     return data
             except Exception:
                 continue
@@ -660,6 +677,10 @@ class ArchiveRadarFetcher(QObject):
         meta = L2_PRODUCTS[product]
         log_delta(f"ArchiveRadarFetcher._decode {self._station} {scan_time}",
                    _rss_before, peak_rss_mb(), (_time.perf_counter() - _t0) * 1000.0)
+        perf_log.event("radar.decode", station=self._station, scan=scan_time.isoformat(), product=product,
+                       tilt=tilt_idx, ms=round((_time.perf_counter() - _t0) * 1000.0),
+                       rays=int(data.shape[0]), gates=int(data.shape[1]),
+                       processing="; ".join(processing), peak_mb=round(peak_rss_mb()))
         scan = Level2RadarScan(
             site=self._station,
             product=meta["label"].split("(")[-1].rstrip(")"),

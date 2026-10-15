@@ -63,3 +63,6 @@ data/studio/
 
 # Linux launcher: generated per machine by scripts/create_desktop_entry.sh
 scripts/launch_storm_linux.sh
+
+# performance logs and benchmark downloads (scripts/collect_perf_logs.py zips them)
+perf_logs/

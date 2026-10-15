@@ -331,9 +331,14 @@ def load_raw_lidar(asset: LidarAsset, cache_dir, *, cancel=None, track_loader=No
     from archive.catalog import _check_cancel
     from archive.fetchers.vehicle_obs_archive_fetcher import load_dltruck_track
     cancel = cancel or Event()
-    path, provenance = download_asset(asset.url, cache_dir, cancel, asset.filename)
+    from core import perf_log
+    with perf_log.timed("lidar.fetch", file=asset.filename) as info:
+        path, provenance = download_asset(asset.url, cache_dir, cancel, asset.filename)
+        info.update(mb=round(path.stat().st_size / 1e6, 1), source=provenance.get("source", "network/cache"))
     _check_cancel(cancel)
-    result = parse_raw_lidar(path, asset.source)
+    with perf_log.timed("lidar.parse", file=asset.filename) as info:
+        result = parse_raw_lidar(path, asset.source)
+        info.update(rays=int(result.time_epoch.size))
     result.provenance.update(provenance, catalog_url=asset.catalog_url)
     if asset.source.mobile:
         tracks, day_obs = {}, {}

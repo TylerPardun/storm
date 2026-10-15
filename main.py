@@ -87,6 +87,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # run in debug mode 
     parser.add_argument("--debug", action="store_true", help="enable debug logging and in-app debug panel")
 
+    # performance log for testing on field laptops (core/perf_log.py)
+    parser.add_argument(
+        "--perf-log", action="store_true",
+        help="write timings, memory and UI responsiveness to perf_logs/ (also: STORM_PERF_LOG=1)",
+    )
+
     parser.add_argument(
         "--log-level",
         default="WARNING",
@@ -266,6 +272,61 @@ def _configure_logging(level_name: str) -> None:
         logging.getLogger("matplotlib").setLevel(logging.WARNING)
         logging.getLogger("metpy").setLevel(logging.WARNING)
 
+def _start_perf_log(requested: bool) -> None:
+    """--perf-log / STORM_PERF_LOG=1: start core/perf_log.py, and copy
+    STORM's warnings and errors into it so one file holds everything."""
+    from core import perf_log
+    if not (requested or perf_log.requested()):
+        return
+    log_file = perf_log.start()
+    if log_file is None:
+        return
+    import atexit
+    atexit.register(perf_log.stop)
+
+    class _ToPerfLog(logging.Handler):
+        def emit(self, record):
+            perf_log.event("log", level=record.levelname, logger=record.name, msg=record.getMessage()[:500])
+
+    handler = _ToPerfLog(level=logging.WARNING)
+    logging.getLogger().addHandler(handler)
+    print(f"[STORM] performance log: {log_file}", flush=True)
+
+
+_perf_heartbeat = None
+
+
+def _perf_log_screen(app) -> None:
+    """Log the screen, and start the UI heartbeat: a 200 ms timer that runs
+    late by however long the window was too busy to respond."""
+    global _perf_heartbeat
+    from core import perf_log
+    if not perf_log.enabled():
+        return
+    import time
+    from PyQt6.QtCore import QTimer
+    interval_ms = 200
+    last = [time.perf_counter()]
+
+    def beat():
+        now = time.perf_counter()
+        perf_log.note_ui_lag(max(0.0, (now - last[0]) * 1000.0 - interval_ms))
+        last[0] = now
+
+    _perf_heartbeat = QTimer()
+    _perf_heartbeat.setInterval(interval_ms)
+    _perf_heartbeat.timeout.connect(beat)
+    _perf_heartbeat.start()
+    try:
+        screen = app.primaryScreen()
+        size = screen.size()
+        perf_log.event("screen", width=size.width(), height=size.height(),
+                       scale=screen.devicePixelRatio(), dpi=round(screen.logicalDotsPerInch()),
+                       screens=len(app.screens()))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # function to check for missing required files and show user-visible warnings
 def _warn_missing_files() -> None:
     """Show QMessageBox warnings for any missing required files.
@@ -361,6 +422,7 @@ def main() -> None:
     # configure logging
     log_level = "DEBUG" if args.debug else args.log_level
     _configure_logging(log_level)
+    _start_perf_log(args.perf_log)
 
     # set the vehicle ID
     config.VEHICLE_ID = _normalize_vehicle_id(config.VEHICLE_ID)
@@ -382,6 +444,7 @@ def main() -> None:
 
     # create the application
     app = QApplication(sys.argv)
+    _perf_log_screen(app)
 
     # set application properties
     app.setApplicationName("STORM")

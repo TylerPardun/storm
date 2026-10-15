@@ -67,25 +67,67 @@ DATE_TIMEOUT_S = 25 * 60
 # =============================================================================================
 # the parent: one child process per date, memory watchdog, report
 # =============================================================================================
+WINDOWS = sys.platform == "win32"
+# Windows: no console window flashing up for each process listing
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _processes() -> list[tuple[int, int, int, str]]:
+    """(pid, parent pid, resident KB, command line) for every process.
+    macOS/Linux: ps. Windows: PowerShell's process list (about a second per
+    call, so the Windows watchdogs sample less often)."""
+    if WINDOWS:
+        command = ("Get-CimInstance Win32_Process | ForEach-Object { "
+                   "\"$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.WorkingSetSize)`t$($_.CommandLine)\" }")
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                             capture_output=True, text=True, timeout=60, creationflags=_NO_WINDOW).stdout
+        rows = []
+        for line in out.splitlines():
+            parts = line.split("\t", 3)
+            if len(parts) >= 3 and parts[0].isdigit():
+                rows.append((int(parts[0]), int(parts[1] or 0), int(parts[2] or 0) // 1024,
+                             parts[3] if len(parts) > 3 else ""))
+        return rows
+    out = subprocess.run(["ps", "-axo", "pid=,ppid=,rss=,args="], capture_output=True, text=True).stdout
+    rows = []
+    for line in out.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) >= 3:
+            rows.append((int(parts[0]), int(parts[1]), int(parts[2]), parts[3] if len(parts) > 3 else ""))
+    return rows
+
+
 def tree_rss_mb(pid: int) -> float:
-    out = subprocess.run(["ps", "-axo", "pid=,ppid=,rss="], capture_output=True, text=True).stdout
-    rows = [tuple(int(x) for x in line.split()) for line in out.splitlines() if line.strip()]
+    rows = _processes()
     family, grew = {pid}, True
     while grew:
         grew = False
-        for p, pp, _ in rows:
+        for p, pp, _, _ in rows:
             if pp in family and p not in family:
                 family.add(p); grew = True
-    return sum(r for p, _, r in rows if p in family) / 1024
+    return sum(r for p, _, r, _ in rows if p in family) / 1024
 
 
 def storm_running() -> bool:
     """A Python process running STORM's main.py (not a shell whose command
     line merely mentions it)."""
     import re
-    out = subprocess.run(["ps", "-axo", "args="], capture_output=True, text=True).stdout
-    storm = re.compile(r"^\S*python[\d.]*\s+(?:-\S+\s+)*\S*\bmain\.py(?:\s|$)")
-    return any(storm.match(line.strip()) for line in out.splitlines())
+    if WINDOWS:
+        storm = re.compile(r'^"?[^"]*\\pythonw?(?:\.exe)?"?\s+(?:-\S+\s+)*"?[^"]*\bmain\.py"?(?:\s|$)', re.I)
+    else:
+        storm = re.compile(r"^\S*python[\d.]*\s+(?:-\S+\s+)*\S*\bmain\.py(?:\s|$)")
+    return any(storm.match(cmd.strip()) for _, _, _, cmd in _processes())
+
+
+def kill_tree(child: subprocess.Popen) -> None:
+    """Stop a date's process and everything it started (on Windows, killing
+    a process leaves its children -- the map's web-view processes -- running)."""
+    if WINDOWS:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(child.pid)], capture_output=True,
+                       creationflags=_NO_WINDOW)
+    else:
+        child.kill()
+    child.wait()
 
 
 def run_parent(dates: list[tuple[str, str]], out: Path, mem_limit: float, redo: bool) -> int:
@@ -105,7 +147,7 @@ def run_parent(dates: list[tuple[str, str]], out: Path, mem_limit: float, redo: 
                                  cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
         t0, peak, stopped = time.time(), 0.0, ""
         while child.poll() is None:
-            time.sleep(2)
+            time.sleep(5 if WINDOWS else 2)
             mb = tree_rss_mb(child.pid)
             peak = max(peak, mb)
             if mb > mem_limit:
@@ -113,8 +155,7 @@ def run_parent(dates: list[tuple[str, str]], out: Path, mem_limit: float, redo: 
             elif time.time() - t0 > DATE_TIMEOUT_S:
                 stopped = f"took longer than {DATE_TIMEOUT_S // 60} min"
             if stopped:
-                child.kill()
-                child.wait()
+                kill_tree(child)
                 break
         log.close()
         data = json.loads(result.read_text()) if result.exists() else {"date": day, "phases": {}}
@@ -165,6 +206,8 @@ def run_child(day: str, out: Path, mem_limit: float) -> int:
     faulthandler.enable(all_threads=True)
     sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
     os.chdir(ROOT)
+    from core import perf_log
+    perf_log.start(argv=[__file__, "--child", day])     # per-step timings for this date, in perf_logs/
     rec = Recorder(out, day)
 
     class Collect(logging.Handler):
@@ -176,6 +219,9 @@ def run_child(day: str, out: Path, mem_limit: float) -> int:
     logging.getLogger().setLevel(logging.INFO)
 
     def own_rss_mb():
+        if WINDOWS:                    # this process only; the parent watches the whole tree
+            from core.mem_probe import current_rss_mb
+            return current_rss_mb()
         return tree_rss_mb(os.getpid())
 
     def watchdog():                                   # leave cleanly before the parent has to kill us

@@ -285,7 +285,59 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         for script in self._js_queue:
             self.map_page().runJavaScript(_no_result(script))
         self._js_queue.clear()
+        self._start_perf_log_probe()
         self.map_ready.emit()
+
+    # --perf-log only (core/perf_log.py): the GPU the map draws with, and
+    # how smoothly the page renders -- frame times from requestAnimationFrame,
+    # read every 5 s. The web view's renderer process is invisible to Python.
+    _PERF_JS_START = """(function(){
+      var c = document.createElement('canvas');
+      var gl = c.getContext('webgl2') || c.getContext('webgl');
+      var info = {webgl: gl ? (gl instanceof WebGL2RenderingContext ? 2 : 1) : 0};
+      if (gl) {
+        var d = gl.getExtension('WEBGL_debug_renderer_info');
+        info.renderer = d ? gl.getParameter(d.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+        info.vendor = d ? gl.getParameter(d.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
+        info.max_texture = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+      }
+      info.device_pixel_ratio = window.devicePixelRatio;
+      if (!window._stormPerf) {
+        window._stormPerf = {frames: 0, worst: 0, slow: 0, last: performance.now()};
+        (function tick(now) {
+          var p = window._stormPerf, dt = now - p.last;
+          p.last = now; p.frames++; if (dt > p.worst) p.worst = dt; if (dt > 50) p.slow++;
+          requestAnimationFrame(tick);
+        })(performance.now());
+      }
+      return JSON.stringify(info);
+    })()"""
+    _PERF_JS_READ = """(function(){
+      var p = window._stormPerf; if (!p) return null;
+      var out = JSON.stringify({frames: p.frames, worst_ms: Math.round(p.worst), slow_frames: p.slow,
+                                heap_mb: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null});
+      p.frames = 0; p.worst = 0; p.slow = 0; return out;
+    })()"""
+
+    def _start_perf_log_probe(self) -> None:
+        from core import perf_log
+        if not perf_log.enabled() or getattr(self, "_perf_timer", None) is not None:
+            return
+        import json as _json
+
+        def logged(kind):
+            def callback(result):
+                try:
+                    if result:
+                        perf_log.event(kind, **_json.loads(result))
+                except Exception:  # noqa: BLE001
+                    pass
+            return callback
+        self.map_page().runJavaScript(self._PERF_JS_START, logged("gpu"))
+        self._perf_timer = QTimer(self)
+        self._perf_timer.setInterval(5000)
+        self._perf_timer.timeout.connect(lambda: self.map_page().runJavaScript(self._PERF_JS_READ, logged("map.frames")))
+        self._perf_timer.start()
 
     def _mark_map_ready_if_bridge_stalled(self):
         """Allow Python startup to continue if the JS map-ready callback stalls."""
@@ -294,6 +346,7 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         log.warning("Map page loaded but JS map-ready callback did not fire; continuing startup")
         self._map_ready = True
         self._js_queue.clear()
+        self._start_perf_log_probe()
         self.map_ready.emit()
 
     def map_page(self):

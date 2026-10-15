@@ -14,6 +14,7 @@ import matplotlib.image as mimg
 from scipy.ndimage import map_coordinates
 
 from core.radar_scan import RadarScan
+from core import perf_log
 from core.mem_probe import peak_rss_mb, log_delta
 
 log = logging.getLogger(__name__)
@@ -524,6 +525,8 @@ def render_scan_to_png(
         f"t={getattr(scan, 'scan_time', '?')}",
         rss_before, peak_rss_mb(), elapsed_ms,
     )
+    perf_log.event("radar.render", size=IMG, cropped=crop_radius_m is not None, ms=round(elapsed_ms),
+                   product=getattr(scan, "product", None), kb=round(len(png_bytes) / 1024))
 
     lon_w, lat_s = _merc_to_lonlat(np.array(x_min), np.array(y_min))
     lon_e, lat_n = _merc_to_lonlat(np.array(x_max), np.array(y_max))
@@ -718,6 +721,7 @@ class RadarOverlay(QObject):
         png_bytes = buf.getvalue()
 
         elapsed_ms = (perf_counter() - t0) * 1000.0
+        perf_log.event("radar.render_live", size=IMG, ms=round(elapsed_ms), product=getattr(scan, "product", None))
         self._maybe_adjust_grid(elapsed_ms)
         log.debug(
             "render complete: %.0f KB PNG in %.1f ms (grid=%d)",

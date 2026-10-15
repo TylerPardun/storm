@@ -1,6 +1,7 @@
 @echo off
 REM scripts/launch_storm.bat — activates the storm conda environment and launches STORM.
 REM This file is called by the desktop shortcut created by create_app_windows.bat.
+REM Any options given to this file are passed on to main.py (e.g. --perf-log).
 
 REM Resolve project root (one level above scripts/)
 FOR %%I IN ("%~dp0..") DO SET "PROJECT_DIR=%%~fI"
@@ -73,4 +74,4 @@ IF NOT EXIST "%CONDA_PREFIX%\pythonw.exe" (
     EXIT /B 1
 )
 REM Use START with /B to prevent a new console window from appearing
-START "" /B "%CONDA_PREFIX%\pythonw.exe" "%PROJECT_DIR%\main.py"
+START "" /B "%CONDA_PREFIX%\pythonw.exe" "%PROJECT_DIR%\main.py" %*

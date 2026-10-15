@@ -4,6 +4,8 @@ from datetime import datetime, timezone, timedelta
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
+from core import perf_log
+
 log = logging.getLogger(__name__)
 
 # how often the internal timer fires (wall-clock milliseconds).
@@ -111,6 +113,7 @@ class TimeController(QObject):
         self._timer.start()
         self.playing_changed.emit(True)
         log.debug("Archive play started at speed=%dx", self.speed)
+        perf_log.event("playback", playing=True, speed=self.speed)
 
     def pause(self) -> None:
         if not self._playing:
@@ -118,6 +121,7 @@ class TimeController(QObject):
         self._playing = False
         self._timer.stop()
         self.playing_changed.emit(False)
+        perf_log.event("playback", playing=False, speed=self.speed)
 
     def toggle_play(self) -> None:
         if self._playing:
@@ -136,9 +140,11 @@ class TimeController(QObject):
                 key=lambda i: abs(SPEED_OPTIONS[i] - multiplier),
             )
         log.debug("Archive speed set to %dx", self.speed)
+        perf_log.event("playback", playing=self._playing, speed=self.speed)
 
     def set_speed_by_index(self, idx: int) -> None:
         self._speed_idx = max(0, min(len(SPEED_OPTIONS) - 1, idx))
+        perf_log.event("playback", playing=self._playing, speed=self.speed)
 
     def set_precision_playback(self, enabled: bool) -> None:
         """Configure exact one-second ticks for dense observation playback."""

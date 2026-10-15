@@ -1,9 +1,11 @@
 """One cancellable catalog worker for the launch dialog; no widgets off-thread."""
 import threading
+import time
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from archive.catalog import AvailabilityIndex, ScanCanceled
+from core import perf_log
 
 
 class AvailabilityWorker(QObject):
@@ -56,10 +58,19 @@ class AvailabilityWorker(QObject):
                 cancel = self._cancel = threading.Event()
             if refresh:
                 self._index.clear()
+            started, snapshot, outcome = time.perf_counter(), None, "done"
             try:
                 for snapshot in self._index.scan(cancel):
                     if cancel.is_set():
+                        outcome = "canceled"
                         break
                     self.updated.emit(generation, snapshot)
             except ScanCanceled:
-                pass
+                outcome = "canceled"
+            except Exception as exc:  # noqa: BLE001 - recorded, then as before
+                outcome = f"failed: {exc}"
+                raise
+            finally:
+                perf_log.event("catalog.scan", ms=round((time.perf_counter() - started) * 1000), outcome=outcome,
+                               checked=getattr(snapshot, "checked", None), total=getattr(snapshot, "total", None),
+                               dates=len(snapshot.dates) if snapshot is not None else None)

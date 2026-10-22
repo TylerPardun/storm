@@ -162,3 +162,13 @@ def test_a_keyframe_switches_the_radar_from_there_on(tmp_path):
     assert p.radar_at(12.0)["station"] == "KOAX"
     q = Project.load(p.save(tmp_path / "radar.json"))
     assert q.radar_at(12.0) == {"station": "KOAX", "product": "velocity", "tilt": 1}
+
+
+def test_export_name_comes_from_the_first_frame_until_one_is_given():
+    p = Project()
+    p.add(Keyframe(4.0, datetime(2024, 4, 27, 22, 10, tzinfo=timezone.utc), A))
+    p.add(Keyframe(0.0, datetime(2024, 4, 27, 21, 5, 40, tzinfo=timezone.utc), B))
+    assert p.file_stem() == "STORM_archive_20240427_2105"      # the movie's first frame, UTC
+    p.name = "el reno approach"
+    assert p.file_stem() == "el reno approach"
+    assert Project().file_stem() == "movie"                     # nothing to name it from yet

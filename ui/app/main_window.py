@@ -2668,9 +2668,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             path = QFileDialog.getExistingDirectory(self, "Folder for the PNG frames", str(folder))
             if not path:
                 return
-            path = Path(path) / project.name
+            path = Path(path) / project.file_stem()
         else:
-            path, _ = QFileDialog.getSaveFileName(self, "Export Video", str(folder / f"{project.name}{ext}"),
+            path, _ = QFileDialog.getSaveFileName(self, "Export Video", str(folder / f"{project.file_stem()}{ext}"),
                                                   f"{project.format.upper()} (*{ext})")
             if not path:
                 return
@@ -2687,7 +2687,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 self.status_msg_label.setText(f"Video saved: {message}")
                 if self._studio_open():
                     self._studio.flash(f"Saved {message}", 10)
-                self._notify_saved(path, "Video saved", f"{message}\n\nFolder: {path.parent}")
+                self._notify_saved(path, "Video saved", message)
             elif message != "Export canceled":
                 from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "Export Video", message)
@@ -2833,8 +2833,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                   + (f"; {manifest['data_changed_since_viewed']} file(s) changed upstream since viewed"
                      if manifest.get("data_changed_since_viewed") else "") + ".")
         self.status_msg_label.setText(f"Case package saved: {path.name}")
-        self._notify_saved(path, "Case package saved",
-                           f"{detail}\n\nFolder: {path.parent}")
+        self._notify_saved(path, "Case package saved", detail)
 
     def _open_case_package(self) -> None:
         folder = CASE_PACKAGES_ROOT
@@ -2903,8 +2902,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             package_sources.activate(path, manifest["data"])
         n = len(imported)
         frame = manifest.get("time_frame")
-        summary = (f"{n} storm track{'s' if n != 1 else ''} imported into "
-                   f"'{self._track_workspace().name}'." if n and hasattr(self, "_track_points") else "")
+        summary = (f"{n} storm track{'s' if n != 1 else ''} imported into your "
+                   f"'{self._track_workspace().name}' workspace:\n{Path(imported[0]).parent}"
+                   if n and hasattr(self, "_track_points") else "")
         if frame:
             summary += (" " if summary else "") + (
                 f"Data packed for {frame['start'][11:16]}–{frame['end'][11:16]}Z; "
@@ -6296,12 +6296,12 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         from core.workspace import workspaces_root
         path = Path(path)
         self._notify_saved(path, f"Storm track {what}",
-                           f"Folder: {path.parent}\n\nAll storm tracks are kept in STORM's track folder\n"
+                           f"All storm tracks are kept in STORM's track folder\n"
                            f"{workspaces_root()}\n(one folder per workspace). "
                            "Further edits save to this same file automatically.")
 
     def _notify_saved(self, path, title: str, detail: str) -> None:
-        """Non-blocking notice naming the saved file, with an Open Folder button."""
+        """Non-blocking notice giving the file's full path, with an Open Folder button."""
         from PyQt6.QtCore import QUrl
         from PyQt6.QtGui import QDesktopServices
         from PyQt6.QtWidgets import QMessageBox
@@ -6309,7 +6309,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
         box.setWindowTitle(title)
-        box.setText(f"{title}:\n{path.name}")
+        box.setText(f"{title}:\n{path}")           # the full location, every time
         box.setInformativeText(detail)
         open_btn = box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
         box.addButton(QMessageBox.StandardButton.Ok)

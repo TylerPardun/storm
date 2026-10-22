@@ -94,6 +94,18 @@ class Project:
     def sorted(self) -> list[Keyframe]:
         return sorted(self.keyframes, key=lambda k: k.at)
 
+    def file_stem(self) -> str:
+        """The export's file name (no extension): the name given in the
+        studio, or STORM_archive_<yyyymmdd>_<HHMM> from the movie's first
+        frame (UTC) while it still has the default name."""
+        if self.name.strip() and self.name.strip() != "movie" or not self.keyframes:
+            return self.name.strip() or "movie"
+        first = self.sorted()[0].time
+        if first.tzinfo is not None:
+            from datetime import timezone
+            first = first.astimezone(timezone.utc)
+        return f"STORM_archive_{first:%Y%m%d_%H%M}"
+
     def duration(self) -> float:
         ks = self.sorted()
         return ks[-1].leaves if ks else 0.0

@@ -285,6 +285,9 @@ class HazardControls(QWidget):
         button = self._btn("DAMAGE PATHS")
         button.setToolTip("Draw a box for NWS damage-survey paths")
         self._hazard_row.insertWidget(self._hazard_row.count() - 1, button)
+        from ui.controls.drawer_hint import drawer_hint
+        self._drawer.layout().addWidget(drawer_hint(
+            "Damage paths: click DAMAGE PATHS, then drag a box on the map to find NWS damage surveys inside it."))
         return button
 
     def _btn(self, label: str) -> QToolButton:

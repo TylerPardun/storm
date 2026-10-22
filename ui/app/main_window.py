@@ -1811,7 +1811,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
 
     def _init_toolbar(self):
         self._floating_toolbar = QWidget(self._map_container)
-        self._floating_toolbar.setObjectName("floatingToolbar")
+        self._set_floating_toolbar(self._floating_toolbar)
 
         tb = QHBoxLayout(self._floating_toolbar)
         tb.setContentsMargins(8, 4, 8, 4)
@@ -1820,7 +1820,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.btn_radar = self._toolbar_toggle("RADAR", "", tb)
         # radar controls drop down below the toolbar as a separate floating pill
         self.radar_controls = RadarControls(self._map_container)
-        self.radar_controls.setObjectName("floatingToolbar")
+        self._set_floating_toolbar(self.radar_controls)
         self.btn_radar.toggled.connect(self.radar_controls.toggle_drawer)
         self.btn_radar.toggled.connect(
             lambda on: self._set_radar_station_picker_visible(False) if not on else None
@@ -1837,7 +1837,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.btn_raw_lidar.setEnabled(False)
             self.btn_raw_lidar.setToolTip("Looking for lidar data for this date…")
             self.raw_lidar_controls = RawLidarControls(self._map_container)
-            self.raw_lidar_controls.setObjectName("floatingToolbar")
+            self._set_floating_toolbar(self.raw_lidar_controls)
             from archive.fetchers.raw_lidar_archive_fetcher import KNOWN_RAW_LIDAR_SOURCES
             self.raw_lidar_controls.set_sources(KNOWN_RAW_LIDAR_SOURCES)
             self.btn_raw_lidar.toggled.connect(self.raw_lidar_controls.toggle_drawer)
@@ -1862,7 +1862,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             "PREV LOCS", "Previous deployments", tb
         )
         self.deploy_locs_controls = DeployLocsControls(self._map_container)
-        self.deploy_locs_controls.setObjectName("floatingToolbar")
+        self._set_floating_toolbar(self.deploy_locs_controls)
         self.btn_prev_locs.toggled.connect(self.deploy_locs_controls.toggle_drawer)
         self.btn_prev_locs.toggled.connect(self._start_layout_pulse)
         self.deploy_locs_controls.content_resized.connect(self._start_layout_pulse)
@@ -1873,7 +1873,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             "HAZARDS", "SPC and NWS hazards", tb
         )
         self.hazard_controls = HazardControls(self._map_container)
-        self.hazard_controls.setObjectName("floatingToolbar")
+        self._set_floating_toolbar(self.hazard_controls)
         self.btn_hazards.toggled.connect(self.hazard_controls.toggle_drawer)
         self.btn_hazards.toggled.connect(self._start_layout_pulse)
         self.hazard_controls.content_resized.connect(self._start_layout_pulse)
@@ -1894,7 +1894,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             "SATELLITE", "GOES satellite imagery", tb
         )
         self.satellite_controls = SatelliteControls(self._map_container)
-        self.satellite_controls.setObjectName("floatingToolbar")
+        self._set_floating_toolbar(self.satellite_controls)
         self.btn_satellite.toggled.connect(self.satellite_controls.toggle_drawer)
         self.btn_satellite.toggled.connect(self._start_layout_pulse)
         self.btn_satellite.toggled.connect(self._on_satellite_toggled)
@@ -1907,7 +1907,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 "MESO", "Satsquatch mesoanalysis", tb
             )
             self.mesoanalysis_controls = MesoanalysisControls(self._map_container)
-            self.mesoanalysis_controls.setObjectName("floatingToolbar")
+            self._set_floating_toolbar(self.mesoanalysis_controls)
             self.btn_mesoanalysis.toggled.connect(self.mesoanalysis_controls.toggle_drawer)
             self.btn_mesoanalysis.toggled.connect(self._start_layout_pulse)
             self.btn_mesoanalysis.toggled.connect(self._on_mesoanalysis_drawer_toggled)
@@ -1917,7 +1917,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 "SFCOA", "SFCOA mesoanalysis", tb
             )
             self.sfcoa_controls = SfcoaControls(self._map_container)
-            self.sfcoa_controls.setObjectName("floatingToolbar")
+            self._set_floating_toolbar(self.sfcoa_controls)
             self.btn_sfcoa.toggled.connect(self.sfcoa_controls.toggle_drawer)
             self.btn_sfcoa.toggled.connect(self._start_layout_pulse)
             self.btn_sfcoa.toggled.connect(self._on_sfcoa_drawer_toggled)
@@ -1955,7 +1955,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 "TRACK", "Subjectively track the mesocyclone", tb
             )
             self.track_controls = TrackControls(self._map_container)
-            self.track_controls.setObjectName("floatingToolbar")
+            self._set_floating_toolbar(self.track_controls)
             # the "track the storm" links beside grayed storm-relative options
             self.radar_controls.track_requested.connect(lambda: self.btn_track.setChecked(True))
             self.btn_track.toggled.connect(self.track_controls.toggle_drawer)
@@ -2006,11 +2006,11 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # trails are the vehicles' own observations: their controls are
             # the VEHICLES drawer, with a "show trails" switch
             self.trail_controls = TrailControls(self._map_container)
-            self.trail_controls.setObjectName("floatingToolbar")
+            self._set_floating_toolbar(self.trail_controls)
             if hasattr(self, "btn_track"):
                 self.trail_controls.track_requested.connect(lambda: self.btn_track.setChecked(True))
-            self.btn_vehicles.toggled.connect(self.trail_controls.toggle_drawer)
-            self.btn_vehicles.toggled.connect(self._start_layout_pulse)
+            # one panel with the vehicle list: _init_vehicle_panel puts this
+            # row at its bottom, so it opens and closes with it
             self.trail_controls.settings_changed.connect(self._schedule_trails)
             from core.trails import TrailBuilder
             self._trail_builder = TrailBuilder()
@@ -2023,16 +2023,23 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # archive mode's surface stations: ASOS, by drawing a box (live
             # mode's SURFACE drawer, below, is hidden in archive mode)
             self._add_separator(tb)
-            self.btn_archive_asos = self._toolbar_toggle(
-                "SURFACE", "Draw a box for ASOS stations", tb
+            self.btn_archive_surface = self._toolbar_toggle(
+                "SURFACE", "Historical ASOS stations (draw a box)", tb
             )
+            from ui.controls.archive_surface_controls import ArchiveSurfaceControls
+            self.archive_surface_controls = ArchiveSurfaceControls(self._map_container)
+            self._set_floating_toolbar(self.archive_surface_controls)
+            self.btn_archive_surface.toggled.connect(self.archive_surface_controls.toggle_drawer)
+            self.btn_archive_surface.toggled.connect(self._start_layout_pulse)
+            # the drawer's ASOS button: checking it starts the box
+            self.btn_archive_asos = self.archive_surface_controls.asos_button
             self.btn_archive_asos.toggled.connect(self._on_archive_asos_toggled)
 
         self.btn_surface = self._toolbar_toggle(
             "SURFACE", "", tb
         )
         self.surface_controls = SurfaceControls(self._map_container)
-        self.surface_controls.setObjectName("floatingToolbar")
+        self._set_floating_toolbar(self.surface_controls)
         self.btn_surface.toggled.connect(self.surface_controls.toggle_drawer)
         self.btn_surface.toggled.connect(self._start_layout_pulse)
         self.surface_controls.content_resized.connect(self._start_layout_pulse)
@@ -2046,7 +2053,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if self._archive:
             self.sounding_controls._btn_copter.show()
             self.sounding_controls.coptersonde_selected.connect(self._on_sounding_ready)
-        self.sounding_controls.setObjectName("floatingToolbar")
+        self._set_floating_toolbar(self.sounding_controls)
         self.btn_sounding.toggled.connect(self.sounding_controls.toggle_drawer)
         self.btn_sounding.toggled.connect(self._start_layout_pulse)
         self.btn_sounding.toggled.connect(self._on_sounding_mode_toggled)
@@ -2058,7 +2065,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         )
         # annotation tools drop down below the toolbar as a separate floating pill
         self.annotation_tools = AnnotationTools(self._map_container)
-        self.annotation_tools.setObjectName("floatingToolbar")
+        self._set_floating_toolbar(self.annotation_tools)
         self.btn_annotate.toggled.connect(self.annotation_tools.toggle_drawer)
         self.btn_annotate.toggled.connect(self._start_layout_pulse)
 
@@ -2076,7 +2083,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             satellite_available=satellite_available,
             parent=self._map_container,
         )
-        self.map_controls.setObjectName("floatingToolbar")
+        self._set_floating_toolbar(self.map_controls)
         self.btn_map.toggled.connect(self.map_controls.toggle_drawer)
         self.btn_map.toggled.connect(self._start_layout_pulse)
 
@@ -2087,7 +2094,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.btn_satellite_basemap = self.map_controls.btn_satellite_basemap
 
         self.routing_controls = RoutingControls(self._map_container)
-        self.routing_controls.setObjectName("floatingToolbar")
+        self._set_floating_toolbar(self.routing_controls)
         self.btn_route.toggled.connect(self.routing_controls.toggle_drawer)
         self.btn_route.toggled.connect(self._start_layout_pulse)
         self.routing_controls.enter_pick_mode.connect(
@@ -2113,7 +2120,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         )
         if nlcd_available:
             self.landcover_controls = LandcoverControls(self._map_container)
-            self.landcover_controls.setObjectName("floatingToolbar")
+            self._set_floating_toolbar(self.landcover_controls)
             self.btn_nlcd.toggled.connect(self.landcover_controls.toggle_drawer)
             self.btn_nlcd.toggled.connect(self._start_layout_pulse)
             self.btn_nlcd.toggled.connect(self._on_nlcd_toggled)
@@ -2456,8 +2463,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self.map_widget.set_trails(fc, stops, units, QUANTITIES[quantity].label)
         self.trail_controls.set_scale(stops, vmin, vmax, units)
         if n:
-            mode = " · time-to-space" if time_to_space and motion is not None else ""
-            self.trail_controls.set_status(f"{n} segments over the last {minutes} min{mode}")
+            self.trail_controls.set_status("")       # trails on the map say enough; explain only an empty one
         elif time_to_space and motion is not None:
             self.trail_controls.set_status("No observations within the storm track's time span")
         else:
@@ -3119,10 +3125,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 _stack(self.raw_lidar_controls)
             if hasattr(self, "track_controls") and self.btn_track.isChecked():
                 _stack(self.track_controls)
-            if hasattr(self, "trail_controls") and self.btn_vehicles.isChecked():
-                _stack(self.trail_controls)
             if hasattr(self, "surface_controls") and self.btn_surface.isChecked():
                 _stack(self.surface_controls)
+            if hasattr(self, "archive_surface_controls") and self.btn_archive_surface.isChecked():
+                _stack(self.archive_surface_controls)
             if hasattr(self, "sounding_controls") and self.btn_sounding.isChecked():
                 _stack(self.sounding_controls)
             if hasattr(self, "annotation_tools") and self.btn_annotate.isChecked():
@@ -3421,6 +3427,19 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             )
 
 
+    @staticmethod
+    def _set_floating_toolbar(widget) -> None:
+        """Name a drawer "floatingToolbar" and re-apply the theme inside it.
+        Qt doesn't restyle widgets when an ancestor is renamed: anything
+        polished before (e.g. a button hidden or shown while the drawer was
+        built) kept the plain style -- COPTERSONDE showed a black box when
+        selected, and "track the storm" a button instead of a link."""
+        widget.setObjectName("floatingToolbar")
+        style = widget.style()
+        for child in [widget, *widget.findChildren(QWidget)]:
+            style.unpolish(child)
+            style.polish(child)
+
     def _init_vehicle_panel(self):
         self.vehicle_panel = QWidget(self._map_container)
         self.vehicle_panel.setObjectName("vehiclePill")
@@ -3475,6 +3494,21 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         self._vehicle_rows_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self._vehicle_rows_widget.setVisible(False)
         layout.addWidget(self._vehicle_rows_widget)
+
+        # archive: the trail controls are the bottom of this same panel
+        if hasattr(self, "trail_controls"):
+            divider = QFrame()
+            divider.setFrameShape(QFrame.Shape.HLine)
+            divider.setFixedHeight(1)
+            divider.setStyleSheet("background-color: rgba(74, 83, 108, 0.45); border: none;")
+            layout.addSpacing(2)
+            layout.addWidget(divider)
+            self.trail_controls.setParent(self.vehicle_panel)
+            # keep its floatingToolbar control styles, without a second box
+            self.trail_controls.setStyleSheet("#floatingToolbar { background: transparent; border: none; }")
+            self.trail_controls.layout().setContentsMargins(0, 2, 0, 0)
+            self.trail_controls.setMaximumHeight(16777215)
+            layout.addWidget(self.trail_controls)
 
         # no stretch so the pill shrink-wraps to content
 

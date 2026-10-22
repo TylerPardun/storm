@@ -20,43 +20,106 @@ import numpy as np
 
 from core import derived
 
-# Trails are drawn on the roads the vehicles drove, so no step may look like
-# a road: the base map's motorways are orange (#CC5528, with a faint cyan
-# glow), trunks and unpaved roads brown, the rest dark gray-blue. The previous
-# ColorBrewer scales ran through that orange (#d73027 was OKLab delta E 5.9
-# from the motorway); every step below is >= 15 from every road as drawn.
-# Sequential scales, one per kind of quantity so the trail color says what
-# is shown: each is one hue, dark -> light for low -> high (OKLCH L 0.62 to
-# 0.93, >= 4.9:1 against the map background), >= 17 from every road.
-_RAMPS = {
-    # temperature, theta, theta-v: violet (OKLCH hue 305)
-    "temperature": ["#9e66d7", "#ac7ae1", "#ba8eeb", "#c8a1f5", "#d6b5ff", "#e2ccfd", "#eee1ff"],
-    # dewpoint, mixing ratio, RH: green (hue 150)
-    "moisture": ["#03a14a", "#3eaf60", "#5dbe76", "#79cc8b", "#92daa1", "#abe9b7", "#c4f7cd"],
-    # theta-e, theta-w: orchid (hue 335)
-    "theta_e": ["#c158ae", "#ce6dbb", "#da82c8", "#e697d5", "#f2ace2", "#fec0ef", "#fedcf6"],
-    # pressure: olive gold (hue 110)
-    "pressure": ["#8c8c00", "#9b9c22", "#aaac49", "#babc67", "#cacc83", "#dadc9e", "#eaedb9"],
-    # wind speed, storm-relative wind speed: blue (hue 250)
-    "wind": ["#1289e7", "#3e9af0", "#5babf9", "#7abbfe", "#9bcbfe", "#b9dbfe", "#d8eafe"],
-    # signed winds: blue (negative; hue 262, clear of the cyan glow) <- pale
-    # gray (zero) -> magenta (positive). Each arm steps in lightness as well
-    # as color, so it holds for color-blind viewers.
-    "diverging": ["#4679db", "#7498da", "#a2b5d7", "#dedede", "#d0a6bc", "#ca7ba8", "#c04b94"],
+# Color scales. Each kind of quantity uses an established colormap that
+# changes hue as well as lightness, evenly (perceptually uniform where one
+# exists: Smith & van der Walt's viridis family; ColorBrewer for the
+# blue-to-red ones), so neighboring values are told apart -- the earlier
+# one-hue ramps made gradients hard to read. Values are shown in bands with
+# round-number edges (BIN_TARGET or so per view), like shaded contours, and
+# the colorbar labels each edge. Every color keeps >= 3:1 contrast with the
+# dark map (the darkest end of each colormap is left out), and the trails
+# get a dark outline (map_template.html, obs-trails-casing) so they stand
+# apart from roads and radar whatever their hue.
+#   kind of quantity: (matplotlib colormap, which end(s) are too dark to use)
+PALETTES = {
+    "temperature": ("plasma", "low"),          # T, theta, theta-v: purple -> orange -> yellow
+    "moisture": ("viridis", "low"),            # Td, RH, mixing ratio: blue -> green -> yellow (as MESO-VIEW)
+    "theta_e": ("RdYlBu_r", "both"),           # theta-e, theta-w: blue (cold pool) -> red (inflow)
+    "pressure": ("cividis", "low"),            # blue -> yellow, made for color-blind viewers
+    "wind": ("magma", "low"),                  # wind speed, storm-relative speed
+    "diverging": ("RdBu_r", "both"),           # signed winds: blue < 0 < red (MESO-VIEW's perturbations)
 }
+MAP_BACKGROUND = "#0D0D14"
+MIN_CONTRAST = 3.0
+BIN_TARGET = 10
 RING_SPACING_KM = 5.0
 RING_MAX_KM = 20.0
+_palette_cache: dict = {}
+
+
+def _luminance(rgb) -> float:
+    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def contrast(hex_a: str, hex_b: str) -> float:
+    a, b = (_luminance([int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]) for h in (hex_a, hex_b))
+    lo, hi = sorted((a, b))
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def palette(kind: str):
+    """f(fraction 0..1) -> '#rrggbb' for a kind of quantity, its darkest
+    end trimmed so every color keeps MIN_CONTRAST against the map."""
+    if kind not in _palette_cache:
+        from matplotlib import colormaps
+        from matplotlib.colors import to_hex
+        name, dark_ends = PALETTES[kind]
+        cmap = colormaps[name]
+
+        def readable(f):
+            return contrast(to_hex(cmap(f)), MAP_BACKGROUND) >= MIN_CONTRAST
+        # start (and, for blue-to-red maps, end) where the colors become
+        # readable on the map; trimmed equally at both ends so zero stays central
+        lo = next(f / 100 for f in range(0, 60) if readable(f / 100) and (dark_ends == "low" or readable(1 - f / 100)))
+        hi = 1.0 - lo if dark_ends == "both" else 1.0
+        _palette_cache[kind] = lambda x, c=cmap, a=lo, b=hi: to_hex(c(a + (b - a) * min(max(x, 0.0), 1.0)))
+    return _palette_cache[kind]
+
+
+def _nice_step(span: float, target: int) -> float:
+    raw = span / max(target, 1)
+    magnitude = 10 ** math.floor(math.log10(raw))
+    return next((m * magnitude for m in (1, 2, 2.5, 5, 10) if m * magnitude >= raw), 10 * magnitude)
+
+
+def bin_edges(vmin: float, vmax: float, diverging: bool = False, target: int = BIN_TARGET) -> list[float]:
+    """Round-number band edges covering [vmin, vmax]. Diverging: symmetric,
+    with a band centered on zero."""
+    if not (math.isfinite(vmin) and math.isfinite(vmax)) or vmax <= vmin:
+        vmin, vmax = (vmin - 1, vmin + 1) if math.isfinite(vmin) else (0.0, 1.0)
+    if diverging:
+        edge = max(abs(vmin), abs(vmax))
+        step = _nice_step(2 * edge, target)
+        n = math.ceil(edge / step - 0.5)               # bands each side of the zero band
+        return [round((k + 0.5) * step, 10) for k in range(-n - 1, n + 1)]
+    step = _nice_step(vmax - vmin, target)
+    first, last = math.floor(vmin / step) * step, math.ceil(vmax / step) * step
+    count = max(1, round((last - first) / step))
+    return [round(first + k * step, 10) for k in range(count + 1)]
 
 
 def color_stops(quantity_key: str, vmin: float, vmax: float) -> list:
-    """MapLibre 'interpolate' stops [v0, c0, v1, c1, ...] for the quantity's scale."""
-    colors = _RAMPS[derived.QUANTITIES[quantity_key].colormap]
-    if not (math.isfinite(vmin) and math.isfinite(vmax)) or vmax <= vmin:
-        vmin, vmax = (vmin - 1, vmin + 1) if math.isfinite(vmin) else (0.0, 1.0)
+    """MapLibre 'interpolate' stops [v0, c0, v1, c1, ...] drawing the
+    quantity's scale as bands: each band's color is given at both of its
+    edges, so the ramp between bands is a hard step (the drawer's colorbar
+    reads the same list)."""
+    kind = derived.QUANTITIES[quantity_key].colormap
+    edges = bin_edges(vmin, vmax, diverging=kind == "diverging")
+    color = palette(kind)
+    bands = len(edges) - 1
+    gap = (edges[-1] - edges[0]) * 1e-6
     stops = []
-    for i, color in enumerate(colors):
-        stops += [vmin + (vmax - vmin) * i / (len(colors) - 1), color]
+    for i in range(bands):
+        c = color((i + 0.5) / bands)
+        stops += [edges[i] + (gap if i else 0.0), c, edges[i + 1], c]
     return stops
+
+
+def band_edges(stops: list) -> list[float]:
+    """The band edges a color_stops list was made from."""
+    values = stops[0::2]
+    return [values[0]] + [values[i] for i in range(1, len(values), 2)]
 
 
 def value_range(quantity_key: str, values: np.ndarray) -> tuple[float, float]:

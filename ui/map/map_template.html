@@ -1334,6 +1334,15 @@
         filter: ['==', ['get', 'kind'], 'ring'],
         paint: {'line-color': '#E3E8F2', 'line-width': 1, 'line-opacity': 0.45, 'line-dasharray': [3, 3]}
       });
+      // a dark outline under each trail, so its colors stand apart from
+      // roads and radar whatever their hue (core/trails.py PALETTES)
+      map.addLayer({
+        id: 'obs-trails-casing', type: 'line', source: 'obs-trails',
+        filter: ['==', ['get', 'kind'], 'trail'],
+        layout: {'line-cap': 'round', 'line-join': 'round'},
+        paint: {'line-color': '#05060A', 'line-opacity': 0.85,
+                'line-width': ['interpolate', ['linear'], ['zoom'], 6, 5, 12, 8.5]}
+      });
       map.addLayer({
         id: 'obs-trails-line', type: 'line', source: 'obs-trails',
         filter: ['==', ['get', 'kind'], 'trail'],

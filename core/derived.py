@@ -28,7 +28,7 @@ class Quantity:
     key: str
     label: str
     units: str
-    colormap: str          # a core/trails.py _RAMPS key: the kind of quantity, or "diverging"
+    colormap: str          # a core/trails.py PALETTES key: the kind of quantity, or "diverging"
     needs_track: bool = False
 
 

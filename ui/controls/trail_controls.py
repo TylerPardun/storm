@@ -33,26 +33,55 @@ def needs_track_link(on_click) -> QPushButton:
 
 
 class _ColorBar(QWidget):
+    """The trail scale: its color bands, with each band edge labeled below."""
+
+    BAR_H = 9
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._stops: list = []
-        self.setFixedHeight(10)
+        self._edges: list = []
+        self.setFixedHeight(self.BAR_H + 14)
 
     def set_stops(self, stops: list) -> None:
+        from core.trails import band_edges
         self._stops = stops
+        self._edges = band_edges(stops) if len(stops) >= 4 else []
         self.update()
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
+        bar = self.rect().adjusted(0, 0, 0, -(self.height() - self.BAR_H))
         if len(self._stops) < 4:
-            painter.fillRect(self.rect(), QColor("#2A2B45"))
+            painter.fillRect(bar, QColor("#2A2B45"))
             return
         values, colors = self._stops[0::2], self._stops[1::2]
         lo, hi = values[0], values[-1]
         gradient = QLinearGradient(0, 0, self.width(), 0)
         for value, color in zip(values, colors):
             gradient.setColorAt((value - lo) / (hi - lo) if hi > lo else 0, QColor(color))
-        painter.fillRect(self.rect(), gradient)
+        painter.fillRect(bar, gradient)
+        # edge labels: as many as fit without touching (always the two ends)
+        font = painter.font()
+        font.setPixelSize(9)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        step = abs(self._edges[1] - self._edges[0]) if len(self._edges) > 1 else 1.0
+        decimals = 0 if step >= 1 else (1 if step >= 0.1 else 2)
+        texts = [f"{e:.{decimals}f}" for e in self._edges]
+        width = self.width()
+        xs = [(e - lo) / (hi - lo) * width if hi > lo else 0 for e in self._edges]
+        widest = max(metrics.horizontalAdvance(t) for t in texts) + 6
+        every = 1
+        while every < len(texts) and width / max(1, (len(texts) - 1) / every) < widest:
+            every += 1
+        painter.setPen(QColor("#9BA3B2"))
+        for i, (x, text) in enumerate(zip(xs, texts)):
+            if i % every and i != len(texts) - 1:
+                continue
+            w = metrics.horizontalAdvance(text)
+            painter.drawText(int(min(max(0, x - w / 2), width - w)), self.height() - 2, text)
+            painter.drawLine(int(min(x, width - 1)), self.BAR_H, int(min(x, width - 1)), self.BAR_H + 2)
 
 
 class TrailControls(QWidget):
@@ -127,7 +156,7 @@ class TrailControls(QWidget):
         for lbl in (self._min_label, self._max_label):
             lbl.setStyleSheet(small)
         self._bar = _ColorBar()
-        self._bar.setFixedWidth(150)
+        self._bar.setFixedWidth(260)
         row.addWidget(self._min_label)
         row.addWidget(self._bar)
         row.addWidget(self._max_label)
@@ -176,10 +205,10 @@ class TrailControls(QWidget):
             self._quantity.setCurrentIndex(self._quantity.findData("theta_e"))
 
     def set_scale(self, stops: list, vmin: float, vmax: float, units: str) -> None:
+        """The bar labels its own band edges; the units go after it."""
         self._bar.set_stops(stops)
-        ok = vmin == vmin and vmax == vmax      # not NaN
-        self._min_label.setText(f"{vmin:.1f} {units}" if ok else "")
-        self._max_label.setText(f"{vmax:.1f} {units}" if ok else "")
+        self._min_label.setText("")
+        self._max_label.setText(units if stops else "")
 
     def set_status(self, text: str) -> None:
         self._status.setText(text)

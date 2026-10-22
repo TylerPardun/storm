@@ -71,7 +71,10 @@ def test_time_to_space_collapses_a_platform_moving_with_the_storm():
 
 def test_color_scale_is_symmetric_for_signed_winds():
     stops = color_stops("radial_wind", -4, 4)
-    assert stops[0] == -4 and stops[-2] == 4 and stops[len(stops) // 2 - 1] == 0
+    values = stops[0::2]
+    assert values[0] == -values[-1] and values[0] <= -4            # symmetric, covering the range
+    middle = len(values) // 2                                      # an odd number of bands: one is centered on 0
+    assert values[middle - 1] < 0 < values[middle]
 
 
 def test_sea_level_pressure_platforms_get_no_pressure_based_values():
@@ -142,23 +145,29 @@ def _drawn(color, opacity, background):
     return "#" + "".join(f"{c:02x}" for c in mix)
 
 
-def test_trail_colors_never_look_like_a_road():
-    """Trails sit on the roads the vehicles drove: every color-scale step stays
-    at least OKLab delta E 15 from every road color in the base map style."""
-    import math
-    import re
+def test_trail_colors_are_readable_on_the_map_and_outlined():
+    """Every band color keeps 3:1 contrast with the dark map, and a dark
+    outline is drawn under the trails (so their hues needn't avoid roads)."""
     from pathlib import Path
     from core import trails
-    import config
+    for kind in trails.PALETTES:
+        color = trails.palette(kind)
+        for i in range(11):
+            assert trails.contrast(color(i / 10), trails.MAP_BACKGROUND) >= trails.MIN_CONTRAST, (kind, i)
     html = (Path(__file__).resolve().parents[1] / "ui" / "map" / "map_template.html").read_text()
-    html = html.replace("__ACCENT_COLOR__", config.ACCENT_COLOR)
-    background = re.search(r'"background-color": "(#[0-9A-Fa-f]{6})"', html)[1]
-    roads = []
-    for layer in re.findall(r'(id: "road-(?!label|hover)[^"]+".*?\n        \})', html, re.S):
-        color = re.search(r'"line-color": "(#[0-9A-Fa-f]{6})"', layer)[1]
-        opacity = re.search(r'"line-opacity": ([\d.]+)', layer)
-        roads.append(_drawn(color, float(opacity[1]) if opacity else 1.0, background))
-    assert len(roads) >= 8
-    for color in (c for ramp in trails._RAMPS.values() for c in ramp):
-        closest = min(100 * math.dist(_oklab(color), _oklab(road)) for road in roads)
-        assert closest >= 15, (color, closest)
+    assert html.index("id: 'obs-trails-casing'") < html.index("id: 'obs-trails-line'")
+
+
+def test_bands_have_round_edges_and_a_zero_band_for_signed_winds():
+    from core.trails import band_edges, bin_edges, color_stops
+    edges = bin_edges(331.3, 349.6)
+    assert edges[0] <= 331.3 and edges[-1] >= 349.6 and 6 <= len(edges) - 1 <= 14
+    assert all(abs(e * 2 - round(e * 2)) < 1e-9 for e in edges)          # round numbers
+    signed = bin_edges(-7.3, 7.3, diverging=True)
+    assert signed == [-x for x in reversed(signed)]                      # symmetric
+    assert any(a < 0 < b for a, b in zip(signed, signed[1:]))            # a band straddles zero
+    stops = color_stops("theta_e", 331.3, 349.6)
+    assert band_edges(stops) == edges
+    values = stops[0::2]
+    assert all(b > a for a, b in zip(values, values[1:]))                # strictly increasing for MapLibre
+    assert stops[1] == stops[3] and stops[3] != stops[5]                 # hard steps between bands

@@ -141,7 +141,12 @@ class TrackControls(QWidget):
         self._chk_line.setChecked(True)
         self._chk_points = QCheckBox("Points")
         self._chk_points.setChecked(True)
-        for chk in (self._chk_line, self._chk_points):
+        # the date's saved track loads when the session opens (its storm
+        # motion is used everywhere) but is drawn only while TRACK is open,
+        # unless this is on
+        self._chk_keep = QCheckBox("Keep on map")
+        self._chk_keep.setToolTip("Keep drawing the track after TRACK is closed")
+        for chk in (self._chk_line, self._chk_points, self._chk_keep):
             chk.setStyleSheet(small)
             chk.toggled.connect(self._emit_layers)
             info.addWidget(chk)
@@ -187,6 +192,9 @@ class TrackControls(QWidget):
             anim.finished.connect(lambda: self.setMaximumHeight(16777215))
         anim.start()
         self._animation = anim
+
+    def keep_on_map(self) -> bool:
+        return self._chk_keep.isChecked()
 
     def _emit_layers(self, _checked: bool = False) -> None:
         self.layers_changed.emit(self._chk_line.isChecked(), self._chk_points.isChecked())

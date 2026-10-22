@@ -25,6 +25,7 @@ _METHODS = [
     "_switch_track_workspace", "_new_track_workspace", "_open_track",
     "_open_track_table", "_apply_track_table", "_jump_to_track_point",
     "_on_track_edit_toggled", "_session_tracks", "_open_session_track",
+    "_apply_track_visibility", "_open_session_track_at_start",
 ]
 
 _MESO_VIEW_CSV = """point_id,time,lat,lon,source,case_id,track_file_kind,edited_at
@@ -59,6 +60,9 @@ class _MarkerMap(_Map):
 
     def set_track_marker(self, marker):
         self.marker = None if marker is None else dict(marker)
+
+    def set_track_layers_visible(self, line, points):
+        self.track_layers = (line, points)
 
 
 class _Clock:
@@ -507,3 +511,33 @@ def test_track_points_carry_their_time_for_the_hover_label(tmp_path, monkeypatch
     assert [p["time"] for p in props] == ["2024-04-27 20:00:00 UTC", "2024-04-27 20:02:00 UTC"]
     assert [p["order"] for p in props] == ["Point 1 of 2", "Point 2 of 2"]
     assert props[0]["radar"] == "KTLX Reflectivity 0.5°"
+
+
+class _Toggle:
+    def __init__(self, checked=False):
+        self.checked = checked
+
+    def isChecked(self):
+        return self.checked
+
+
+def test_the_dates_track_loads_when_the_session_opens_but_stays_hidden(tmp_path, monkeypatch):
+    """Storm motion is there from the start; the track is drawn only while
+    TRACK is open, or always with Keep on map."""
+    track = _shared_track(tmp_path, "storm_20240427_1940_track.csv", "2024-04-27 19:40:00", "2024-04-27 20:30:00")
+    w = _window(tmp_path, monkeypatch)
+    w.btn_track = _Toggle(False)
+    w.track_controls.layers_changed.connect(lambda *_: w._apply_track_visibility())
+    w._open_session_track_at_start()
+    assert w._track_loaded_path == track and w.track_storm_motion() is not None
+    assert w.map_widget.track_layers == (False, False)               # loaded, not drawn
+    assert "open TRACK to see it" in w.status_msg_label.text
+    w.btn_track.checked = True
+    w._on_track_edit_toggled(True)
+    assert w.map_widget.track_layers == (True, True)
+    assert w._track_loaded_path == track                              # not opened a second time
+    w.btn_track.checked = False
+    w._on_track_edit_toggled(False)
+    assert w.map_widget.track_layers == (False, False)
+    w.track_controls._chk_keep.setChecked(True)
+    assert w.map_widget.track_layers == (True, True)                  # kept on the map with TRACK closed

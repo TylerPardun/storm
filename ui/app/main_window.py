@@ -739,6 +739,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # already built the TRACK tab -- the time_changed connection has
             # to wait until here, once _time_ctrl is actually constructed.
             self._time_ctrl.time_changed.connect(self._on_time_changed_update_track_highlight)
+            QTimer.singleShot(0, self._open_session_track_at_start)
         if hasattr(self, "trail_controls"):
             self._time_ctrl.time_changed.connect(self._schedule_trails)
 
@@ -1967,7 +1968,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             self.track_controls.reset_requested.connect(self._reset_track_to_original)
             self.track_controls.undo_requested.connect(self._undo_track_edit)
             self.track_controls.redo_requested.connect(self._redo_track_edit)
-            self.track_controls.layers_changed.connect(self.map_widget.set_track_layers_visible)
+            self.track_controls.layers_changed.connect(lambda *_: self._apply_track_visibility())
             self.track_controls.table_requested.connect(self._open_track_table)
             self.track_controls.open_folder_requested.connect(self._open_track_folder)
             self.track_controls.workspace_selected.connect(self._switch_track_workspace)
@@ -6106,6 +6107,32 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if checked and not self._track_session_opened:
             self._track_session_opened = True
             self._open_session_track()
+        self._apply_track_visibility()
+
+    def _apply_track_visibility(self) -> None:
+        """The track is drawn while TRACK is open (Line / Points as chosen),
+        or always with Keep on map; otherwise it stays loaded but hidden."""
+        if not hasattr(self, "track_controls"):
+            return
+        shown = self.btn_track.isChecked() or self.track_controls.keep_on_map()
+        line, points = self.track_controls._chk_line.isChecked(), self.track_controls._chk_points.isChecked()
+        self.map_widget.set_track_layers_visible(line and shown, points and shown)
+
+    def _open_session_track_at_start(self) -> None:
+        """Load the date's saved track when the session opens, so storm
+        motion (storm-relative velocity, time-to-space, ...) is there without
+        opening TRACK first; it stays hidden until TRACK is opened."""
+        if not hasattr(self, "track_controls") or self._track_session_opened:
+            return
+        self._track_session_opened = True
+        self._apply_track_visibility()
+        self._open_session_track()
+        if self._track_points:
+            mean = self.track_storm_motion()
+            self.status_msg_label.setText(
+                f"Storm track loaded ({len(self._track_points)} points"
+                + (f", motion {mean.short()}" if mean else "") + ") — open TRACK to see it")
+            perf_log.event("note", what="session track loaded at start", points=len(self._track_points))
 
     def _session_tracks(self) -> list[dict]:
         """The date's tracks from every workspace, the active one's first, in

@@ -238,6 +238,8 @@ def test_a_failed_dealias_falls_back_to_raw_and_says_so(monkeypatch):
 
 
 def test_a_seek_drops_stale_queued_downloads_and_fetches_the_new_scan_first(monkeypatch):
+    """After a seek only the new scan downloads -- its neighbors would split a
+    slow link -- and once it has arrived they follow, nearest first."""
     import threading, time
     from datetime import timedelta
     fetcher = _fetcher()
@@ -249,23 +251,24 @@ def test_a_seek_drops_stale_queued_downloads_and_fetches_the_new_scan_first(monk
         with lock:
             started.append(scan_time)
         gate.wait(5)
-        return None
+        return b"raw level-2 bytes"
     monkeypatch.setattr(fetcher, "_download_scan", slow_download)
+    monkeypatch.setattr(fetcher, "_decode_and_cache", lambda *args: None)
 
-    fetcher.on_time_changed(times[2])                 # queues scan 2 and its buffer
+    fetcher.on_time_changed(times[2])                 # scan 2 alone: no neighbors until it's in
     deadline = time.time() + 2
-    while len(started) < 2 and time.time() < deadline:
+    while not started and time.time() < deadline:
         time.sleep(0.01)
-    busy = list(started)                              # both workers now blocked
+    assert started == [times[2]]
     fetcher.on_time_changed(times[30] + timedelta(seconds=10))
-    waiting = [key[1] for key, future in fetcher._queued.items() if not future.running()]
-    assert waiting and all(t >= times[26] for t in waiting)   # nothing waiting for the old position
+    queued = {key[1] for key in fetcher._queued}
+    assert times[30] in queued and queued <= {times[2], times[30]}   # nothing else for either position
     gate.set()
     deadline = time.time() + 5
-    while len(started) < len(busy) + 9 and time.time() < deadline:
+    while len(started) < 1 + 9 and time.time() < deadline:
         time.sleep(0.01)
-    after = started[len(busy):]
+    after = started[1:]
     assert after[0] == times[30]
     assert after[1:5] == [times[31], times[29], times[32], times[28]]   # nearest first, ahead first
-    assert not set(after) & set(times[:26])           # the old position's scans were dropped
+    assert not set(after) & set(times[:26])           # the old position's neighbors never fetched
     fetcher.shutdown()

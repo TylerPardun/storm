@@ -135,7 +135,12 @@ def env_exists(conda):
 def create_env(conda):
     """Create the storm conda environment from the unified yml."""
     if env_exists(conda):
-        print("storm environment already exists — skipping creation.")
+        # an environment made from an older envs/storm.yml lacks packages
+        # added since (e.g. arm_pyart, for dealiasing): add them. No
+        # --prune, so nothing someone installed by hand is removed.
+        print("storm environment already exists — updating it from envs/storm.yml...")
+        subprocess.check_call([conda, "env", "update", "-n", "storm", "-f", ENV_YML])
+        print("storm environment updated.")
         return
     print("Creating storm conda environment (this may take a few minutes)...")
     subprocess.check_call([conda, "env", "create", "-f", ENV_YML])

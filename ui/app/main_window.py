@@ -110,6 +110,9 @@ from ui.app.main_window_map_helpers import MainWindowMapHelpersMixin
 log = logging.getLogger(__name__)
 
 SCAN_MOVE_THRESHOLD_KM = 0.1
+# archive: how long radar waits for vehicle positions (to pick the nearest
+# radar) before starting from home; it moves when the vehicles arrive
+RADAR_WAIT_FOR_VEHICLES_MS = 10_000
 # shown at the top of the map while a box is being drawn
 ASOS_BOX_HINT = "Drag a box on the map to load ASOS stations"
 DAMAGE_BOX_HINT = "Drag a box on the map to find NWS damage-survey paths"
@@ -1059,6 +1062,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         """
         if not hasattr(self, "_archive_mqtt"):
             return
+        if getattr(self, "_package_radar_station", None):     # an opened case package names it: no waiting
+            self._apply_radar_station(None)
+            return
         positions = self._archive_mqtt.vehicle_positions_near(self._archive_time)
         if positions:
             self._finish_radar_station_selection(positions, "MQTT")
@@ -1071,6 +1077,10 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             # call this again once it's ready, instead of this falling
             # back to home immediately.
             self._radar_station_awaiting_dense_obs = True
+            # On a slow connection the one-second archive took ~100 s to load
+            # (or time out) on a field laptop, with no radar at all meanwhile.
+            # After a short wait, start from home; switch once vehicles arrive.
+            QTimer.singleShot(RADAR_WAIT_FOR_VEHICLES_MS, self._radar_wait_for_vehicles_timed_out)
             return
         if dense is not None:
             positions = dense.vehicle_positions_near(self._archive_time)
@@ -1078,6 +1088,9 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
                 self._finish_radar_station_selection(positions, "1-second archive")
                 return
 
+        if getattr(self, "_radar_station_provisional", False):
+            self._radar_station_provisional = False   # already running from home
+            return
         log.info(
             "Archive: no vehicle positions from any source — falling back to "
             "home location (%.3f, %.3f) for radar station selection",
@@ -1085,9 +1098,25 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         )
         self._apply_radar_station(self._nearest_nexrad(config.HOME_LAT, config.HOME_LON, archive=True))
 
+    def _radar_wait_for_vehicles_timed_out(self) -> None:
+        if not self._radar_station_awaiting_dense_obs or self._archive_radar is not None:
+            return
+        log.info("Archive: vehicle positions not loaded after %d s; starting radar from home for now",
+                 RADAR_WAIT_FOR_VEHICLES_MS // 1000)
+        perf_log.event("note", what="radar started from home while vehicles load")
+        self._radar_station_provisional = True
+        self._apply_radar_station(self._nearest_nexrad(config.HOME_LAT, config.HOME_LON, archive=True))
+
     def _finish_radar_station_selection(self, positions, source: str) -> None:
         vehicle_id, lat, lon = positions[0]
         site = self._nearest_nexrad(lat, lon, archive=True)
+        if getattr(self, "_radar_station_provisional", False):
+            # radar started from home while vehicles loaded: move only if
+            # the vehicles were near another radar and nobody picked one since
+            self._radar_station_provisional = False
+            if getattr(self, "_radar_station_user_picked", False) or (
+                    self._archive_radar is not None and self._archive_radar.station == site):
+                return
         log.info(
             "Archive: radar station selected from %s (%s) at (%.4f, %.4f) "
             "(nearest reported position to the requested %s start time) -> %s",
@@ -6658,6 +6687,7 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             if self._noxp_active:
                 self._deactivate_noxp_radar()
             # in archive mode, start fetching from the selected station.
+            self._radar_station_user_picked = True
             self._start_archive_radar(site)
             return
         self._site_change_from_map_click = True

@@ -17,7 +17,7 @@ class UpdateWorker(QObject):
     """Runs git fetch / pull on daemon threads and signals results.
 
     Signals:
-        check_done(int):         commits behind origin/main.
+        check_done(int):         commits behind the tracked branch (origin/main normally).
                                  -1 = network/git error
                                  -2 = dev build (dirty working tree or local commits)
         pull_done(bool, bool):   (success, deps_changed)
@@ -55,18 +55,26 @@ class UpdateWorker(QObject):
             self.check_done.emit(-3)   # not a git install — zip download
             return
         try:
+            # a field laptop's slow link needed more than 10 s; this runs in
+            # the background, so waiting longer costs nothing
             subprocess.run(
                 ["git", "fetch", "--quiet"],
-                cwd=self._root, timeout=10,
+                cwd=self._root, timeout=30,
                 capture_output=True, check=True, **_HIDE_WINDOW,
             )
+            # compare with the branch this checkout tracks (origin/main for a
+            # normal install; a test branch for field testing), else main
+            tracked = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                cwd=self._root, timeout=5, capture_output=True, text=True, **_HIDE_WINDOW,
+            ).stdout.strip() or "origin/main"
             dirty = subprocess.run(
                 ["git", "status", "--porcelain"],
                 cwd=self._root, timeout=5,
                 capture_output=True, text=True, check=True, **_HIDE_WINDOW,
             ).stdout.strip()
             ahead = subprocess.run(
-                ["git", "rev-list", "origin/main..HEAD", "--count"],
+                ["git", "rev-list", f"{tracked}..HEAD", "--count"],
                 cwd=self._root, timeout=5,
                 capture_output=True, text=True, check=True, **_HIDE_WINDOW,
             ).stdout.strip()
@@ -74,7 +82,7 @@ class UpdateWorker(QObject):
                 self.check_done.emit(-2)   # dev build — don't offer update
                 return
             r = subprocess.run(
-                ["git", "rev-list", "HEAD..origin/main", "--count"],
+                ["git", "rev-list", f"HEAD..{tracked}", "--count"],
                 cwd=self._root, timeout=5,
                 capture_output=True, text=True, check=True, **_HIDE_WINDOW,
             )

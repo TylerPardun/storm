@@ -420,6 +420,8 @@ class ArchiveRadarFetcher(QObject):
             with open(path, "wb") as fh:
                 fh.write(file_bytes)
             self._raw_cache[scan_time] = path
+            if scan_time == self._target_scan:
+                self._maintain_buffer(scan_time)    # the scan on screen is in: now its neighbors
 
             with self._fetch_lock:
                 if cache_key in self._decoded_cache or cache_key in self._pending_decodes:
@@ -721,6 +723,12 @@ class ArchiveRadarFetcher(QObject):
         with self._index_lock:
             idx = self._index
         if not idx or current_scan_time not in idx:
+            return
+        if self._raw_cache.get(current_scan_time) is None:
+            # the scan on screen first: on a field laptop's slow link, a
+            # neighbor downloading alongside it halved its speed (two 18 MB
+            # volumes took 63 and 76 s); _fetch_raw_then_decode calls back
+            # here once it has arrived
             return
         pos = idx.index(current_scan_time)
         lo = max(0, pos - BUFFER_BEFORE)

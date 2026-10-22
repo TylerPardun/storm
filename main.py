@@ -271,6 +271,9 @@ def _configure_logging(level_name: str) -> None:
     if level > logging.DEBUG:
         logging.getLogger("matplotlib").setLevel(logging.WARNING)
         logging.getLogger("metpy").setLevel(logging.WARNING)
+        # newer radar volumes carry message types MetPy doesn't decode and
+        # STORM doesn't need ("Unknown message: 32", dozens per session)
+        logging.getLogger("metpy.io.nexrad").setLevel(logging.ERROR)
 
 def _start_perf_log(requested: bool) -> None:
     """--perf-log / STORM_PERF_LOG=1: start core/perf_log.py, and copy

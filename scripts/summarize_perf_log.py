@@ -138,10 +138,17 @@ def summarize(records: list[dict]) -> str:
         out.append(f"- Window froze {len(stalls)} times for ≥ 0.3 s; worst {stalls and max(stalls) / 1000:.1f} s; "
                    f"{sum(stalls) / 1000:.0f} s frozen in total ({100 * sum(stalls) / 1000 / max(duration, 1):.1f} % of the session)")
         long_ones = sorted((r for r in by_kind["ui_stall"] if r["ms"] >= 1000), key=lambda r: -r["ms"])[:5]
+        stacks = by_kind.get("ui_stall_stack", [])
         for r in long_ones:
             near = [x.get("kind") for x in records if abs(x.get("t", 0) - r["t"]) < 3 and x.get("kind") not in
-                    ("sample", "ui_stall", "map.frames")]
+                    ("sample", "ui_stall", "map.frames", "ui_stall_stack")]
             out.append(f"  - {r['ms'] / 1000:.1f} s at t={r['t']:.0f} s; around it: {', '.join(sorted(set(near))) or 'nothing logged'}")
+            # stacks captured during this freeze (it ended at r['t'], began r['ms'] earlier)
+            during = [x for x in stacks if r["t"] - r["ms"] / 1000 - 0.5 <= x["t"] <= r["t"] + 0.5]
+            if during:
+                deepest = during[-1]
+                out.append(f"    main thread after {deepest['frozen_s']} s: "
+                           + " ← ".join(reversed([line for line in deepest['stack'] if '/' in line or '.py' in line][-6:])))
     else:
         out.append("- No window freezes of 0.3 s or more.")
     frames = by_kind.get("map.frames", [])

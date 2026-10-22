@@ -355,10 +355,23 @@ class MapWidget(QWidget if SAFE_MAP_MODE else QWebEngineView):
         this view's own page() is a blank placeholder."""
         return getattr(self, "_map_page", None) or self.page()
 
+    _BIG_JS_BYTES = 200_000     # --perf-log: log calls this large (see core/perf_log.py)
+
     def run_js(self, script: str):
         if SAFE_MAP_MODE:
             return
         if self._map_ready:
+            if len(script) >= self._BIG_JS_BYTES:
+                from core import perf_log
+                if perf_log.enabled():
+                    import re as _re
+                    import time as _time
+                    started = _time.perf_counter()
+                    self.map_page().runJavaScript(_no_result(script))
+                    names = _re.findall(r"storm[A-Z]\w+", script[:400])
+                    perf_log.event("map.big_js", kb=round(len(script) / 1024), call=names[0] if names else script[:60],
+                                   queue_ms=round((_time.perf_counter() - started) * 1000))
+                    return
             self.map_page().runJavaScript(_no_result(script))
         else:
             self._js_queue.append(script)

@@ -13,6 +13,8 @@ Lines (every one has "t", seconds since the log started, and "kind"):
   sample      every SAMPLE_S: memory (process, peak, system free), CPU use,
               threads, and the longest UI freeze since the last sample
   ui_stall    the window didn't respond for at least STALL_MS
+  ui_stall_stack  what the main thread was running, captured while a freeze
+              was still going on (after STACK_AFTER_S, and again later)
   <step>      a timed step (radar.decode, radar.render, lidar.render, ...)
               with "ms" and what was done
   note        anything else worth knowing (e.g. the radar render stepping
@@ -35,6 +37,7 @@ from pathlib import Path
 
 SAMPLE_S = 5.0
 STALL_MS = 300.0
+STACK_AFTER_S = (1.0, 4.0, 12.0)   # capture the main thread's stack at these points of a freeze
 
 _lock = threading.Lock()
 _stream = None
@@ -42,6 +45,7 @@ _path: Path | None = None
 _t0 = time.perf_counter()
 _ui_lag_max_ms = 0.0
 _ui_stalls = 0
+_last_beat: float | None = None
 
 
 def enabled() -> bool:
@@ -91,9 +95,10 @@ def timed(kind: str, **fields):
 
 def note_ui_lag(lag_ms: float) -> None:
     """From the UI heartbeat: how late the main thread ran a timer."""
-    global _ui_lag_max_ms, _ui_stalls
+    global _ui_lag_max_ms, _ui_stalls, _last_beat
     if _stream is None:
         return
+    _last_beat = time.perf_counter()
     _ui_lag_max_ms = max(_ui_lag_max_ms, lag_ms)
     if lag_ms >= STALL_MS:
         _ui_stalls += 1
@@ -204,6 +209,42 @@ def _cpu_seconds() -> float:
     return times.user + times.system
 
 
+def _main_thread_stack(limit: int = 14) -> list[str]:
+    """The main thread's current call stack, innermost last, as
+    'file:line function' -- STORM's own frames plus the library call it is in."""
+    import traceback
+    frame = sys._current_frames().get(threading.main_thread().ident)
+    if frame is None:
+        return []
+    root = str(Path(__file__).resolve().parents[1])
+    lines = []
+    for entry in traceback.extract_stack(frame):
+        filename = entry.filename
+        short = filename[len(root) + 1:] if filename.startswith(root) else Path(filename).name
+        lines.append(f"{short}:{entry.lineno} {entry.name}")
+    return lines[-limit:]
+
+
+def _stall_watcher() -> None:
+    """While the heartbeat is late, record what the main thread is doing."""
+    captured_for, captured = None, set()
+    while _stream is not None:
+        time.sleep(0.2)
+        beat = _last_beat
+        if beat is None:
+            continue
+        frozen = time.perf_counter() - beat
+        if beat != captured_for:
+            captured_for, captured = beat, set()
+        for at in STACK_AFTER_S:
+            if frozen >= at and at not in captured:
+                captured.add(at)
+                try:
+                    event("ui_stall_stack", frozen_s=round(frozen, 1), stack=_main_thread_stack())
+                except Exception:  # noqa: BLE001
+                    pass
+
+
 # ---- start / stop -------------------------------------------------------------------
 
 def requested(argv=None) -> bool:
@@ -229,6 +270,7 @@ def start(root: Path | None = None, argv=None) -> Path | None:
         return None
     _write(_system_record(root, argv if argv is not None else sys.argv))
     threading.Thread(target=_sampler, name="perf-log-sampler", daemon=True).start()
+    threading.Thread(target=_stall_watcher, name="perf-log-stall-watcher", daemon=True).start()
     return _path
 
 

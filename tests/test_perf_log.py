@@ -73,3 +73,18 @@ def test_a_log_cut_off_by_a_crash_still_summarizes(tmp_path):
     log.write_text('{"t":0,"kind":"system","computer":"TB"}\n{"t":1,"kind":"radar.decode","ms":900}\n{"t":2,"kin')
     report = summarize(_load(log))
     assert "Radar decode" in report and "no end line" in report
+
+
+def test_a_freeze_records_what_the_main_thread_was_running(log_dir):
+    import time
+    path = perf_log.start(root=log_dir)
+    perf_log.note_ui_lag(0)                       # a heartbeat, then the main thread is busy
+
+    def slow_main_thread_work():
+        time.sleep(1.4)
+    slow_main_thread_work()
+    perf_log.stop()
+    stacks = [json.loads(line) for line in path.read_text().splitlines()
+              if '"ui_stall_stack"' in line]
+    assert stacks and stacks[0]["frozen_s"] >= 1.0
+    assert any("slow_main_thread_work" in frame for frame in stacks[0]["stack"])

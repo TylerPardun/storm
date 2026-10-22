@@ -588,10 +588,16 @@ class ArchiveRadarFetcher(QObject):
             raise RuntimeError("No valid sweeps in Level-2 file")
         available_tilts = []
         sweep_products = []
+        # the scan strategy's (VCP) intended angle for each cut: the first
+        # ray's measured angle wobbles (0.6/0.5 for the two 0.48 deg cuts),
+        # which showed up as near-duplicate entries in the tilt list
+        cuts = getattr(getattr(f, "vcp_info", None), "els", None) or []
         for sweep in sweeps:
             rad0 = sweep[0]
             hdr = rad0.header if hasattr(rad0, "header") else rad0[0]
-            available_tilts.append(round(float(hdr.el_angle), 1))
+            cut = getattr(hdr, "el_num", 0)
+            angle = cuts[cut - 1].el_angle if 0 < cut <= len(cuts) else hdr.el_angle
+            available_tilts.append(round(float(angle), 1))
             present = set()
             for rad in sweep:
                 moments = rad.moments if hasattr(rad, "moments") else rad[1]

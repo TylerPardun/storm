@@ -174,6 +174,7 @@ class RadarControls(QWidget):
         self._product_combo.currentIndexChanged.connect(self._on_product_changed)
         r1.addWidget(self._product_combo)
 
+        self._sweep_angles: list[float] = []      # every sweep's elevation (set_archive_tilts)
         self._tilt_combo = QComboBox()
         self._tilt_combo.setFixedHeight(22)
         self._tilt_combo.setFixedWidth(74)
@@ -314,7 +315,22 @@ class RadarControls(QWidget):
         return self._product
 
     def current_tilt_index(self) -> int:
-        return self._tilt_combo.currentIndex()
+        """The chosen sweep's index in the volume (each angle is listed once;
+        see set_archive_tilts), or -1."""
+        data = self._tilt_combo.currentData()
+        return int(data) if data is not None else self._tilt_combo.currentIndex()
+
+    def select_tilt(self, sweep_index: int) -> None:
+        """Select the entry for this sweep (or its angle), emitting tilt_changed."""
+        for i in range(self._tilt_combo.count()):
+            if self._tilt_combo.itemData(i) == sweep_index:
+                self._tilt_combo.setCurrentIndex(i)
+                return
+        angle = self._sweep_angles[sweep_index] if 0 <= sweep_index < len(self._sweep_angles) else None
+        for i in range(self._tilt_combo.count()):
+            if angle is not None and self._sweep_angles[self._tilt_combo.itemData(i)] == angle:
+                self._tilt_combo.setCurrentIndex(i)
+                return
 
     def set_current_product(self, code: str) -> None:
         """Select `code` in the product combo as if the user had clicked it,
@@ -474,14 +490,25 @@ class RadarControls(QWidget):
         self._set_product_items(products, preserve_code=current or products[0][0])
 
     def set_archive_tilts(self, tilts: list[float], current_index: int | None = None) -> None:
+        """tilts: every sweep's elevation, in volume order. Each angle is
+        listed once (split cuts and SAILS rescans repeat 0.5 deg etc.), as
+        its first sweep; the decoder then uses the sweep at that angle that
+        carries the chosen product (surveillance or Doppler cut)."""
+        self._sweep_angles = [round(float(deg), 1) for deg in tilts]
+        first_sweep = {}
+        for i, deg in enumerate(self._sweep_angles):
+            first_sweep.setdefault(deg, i)
         self._tilt_combo.blockSignals(True)
         self._tilt_combo.clear()
-        for deg in tilts:
-            self._tilt_combo.addItem(f"{deg:.1f}°")
+        for deg, sweep in sorted(first_sweep.items()):
+            self._tilt_combo.addItem(f"{deg:.1f}°", sweep)
         if self._tilt_combo.count():
-            idx = current_index if current_index is not None else 0
-            idx = max(0, min(idx, self._tilt_combo.count() - 1))
-            self._tilt_combo.setCurrentIndex(idx)
+            current = current_index if current_index is not None else 0
+            current = max(0, min(current, len(self._sweep_angles) - 1))
+            angle = self._sweep_angles[current] if self._sweep_angles else None
+            row = next((i for i in range(self._tilt_combo.count())
+                        if self._sweep_angles[self._tilt_combo.itemData(i)] == angle), 0)
+            self._tilt_combo.setCurrentIndex(row)
         self._tilt_combo.blockSignals(False)
         self._tilt_combo.setVisible(self._archive_mode and self._tilt_combo.count() > 0)
 
@@ -600,7 +627,8 @@ class RadarControls(QWidget):
 
     def _on_tilt_changed(self, index: int):
         if index >= 0:
-            self.tilt_changed.emit(index)
+            data = self._tilt_combo.itemData(index)
+            self.tilt_changed.emit(int(data) if data is not None else index)
 
     def _on_slider_released(self):
         # emit frame_requested only when user releases the slider handle

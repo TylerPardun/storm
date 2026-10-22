@@ -1250,8 +1250,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
         if view.get("product"):
             self.radar_controls.set_current_product(view["product"])
         tilt = view.get("tilt_index")
-        if tilt is not None and 0 <= tilt < self.radar_controls._tilt_combo.count():
-            self.radar_controls._tilt_combo.setCurrentIndex(tilt)
+        if tilt is not None:
+            self.radar_controls.select_tilt(tilt)
 
     def _on_archive_radar_scan(self, scan) -> None:
         """Handle a newly decoded Level-2 scan from the archive fetcher.
@@ -2537,9 +2537,8 @@ class MainWindow(MainWindowMapHelpersMixin, MainWindowDebugMixin, QMainWindow):
             return
         if product and product != current.get("product"):
             self.radar_controls.set_current_product(product)
-        if tilt is not None and tilt != self.radar_controls.current_tilt_index() \
-                and 0 <= tilt < self.radar_controls._tilt_combo.count():
-            self.radar_controls._tilt_combo.setCurrentIndex(tilt)
+        if tilt is not None and tilt != self.radar_controls.current_tilt_index():
+            self.radar_controls.select_tilt(tilt)
 
     # ---- menu bar -----------------------------------------------------------
     def _init_menu_bar(self) -> None:

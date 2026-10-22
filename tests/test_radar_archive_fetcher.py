@@ -272,3 +272,36 @@ def test_a_seek_drops_stale_queued_downloads_and_fetches_the_new_scan_first(monk
     assert after[1:5] == [times[31], times[29], times[32], times[28]]   # nearest first, ahead first
     assert not set(after) & set(times[:26])           # the old position's neighbors never fetched
     fetcher.shutdown()
+
+
+def test_tilt_list_shows_each_angle_once_and_answers_with_sweep_indices():
+    from PyQt6.QtWidgets import QApplication
+    QApplication.instance()
+    from ui.controls.radar_controls import RadarControls
+    controls = RadarControls()
+    controls.configure_for_archive(True)
+    # KTLX 2013-05-31: split cuts repeat 0.5, 0.9 and 1.3 deg (VCP 12 angles)
+    angles = [0.5, 0.5, 0.9, 0.9, 1.3, 1.3, 1.8, 2.4, 3.1]
+    controls.set_archive_tilts(angles, current_index=1)
+    shown = [controls._tilt_combo.itemText(i) for i in range(controls._tilt_combo.count())]
+    assert shown == ["0.5°", "0.9°", "1.3°", "1.8°", "2.4°", "3.1°"]
+    assert controls.current_tilt_index() == 0                 # sweep 1 is 0.5 deg: its entry, sweep 0
+    picked = []
+    controls.tilt_changed.connect(picked.append)
+    controls._tilt_combo.setCurrentIndex(2)                   # 1.3 deg
+    assert picked == [4]                                      # the first 1.3 deg sweep
+    controls.select_tilt(3)                                   # sweep 3 is 0.9 deg
+    assert controls._tilt_combo.currentText() == "0.9°" and picked[-1] == 2
+
+
+def test_decoded_tilts_use_the_scan_strategy_angles():
+    from pathlib import Path
+    import pytest
+    sample = Path(__file__).resolve().parents[1] / "perf_logs" / "bench_cache" / "KTLX20130531_232345_V06.gz"
+    if not sample.exists():
+        pytest.skip("benchmark radar volume not downloaded (scripts/benchmark_hardware.py)")
+    fetcher = _fetcher()
+    scan = fetcher._decode(_SCAN_TIME, sample.read_bytes(), product="reflectivity", tilt_idx=0)
+    assert scan.available_tilts[:6] == [0.5, 0.5, 0.9, 0.9, 1.3, 1.3]
+    assert scan.tilt_deg == 0.5
+    fetcher.shutdown()
